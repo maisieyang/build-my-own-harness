@@ -30,8 +30,10 @@ The project is staged in 7 phases (see [ARCHITECTURE.md](./ARCHITECTURE.md)):
 | 6 | One Advanced module (sub-agents / Docker sandbox / full compaction) | ⏸ |
 | 7 | Polish + publish to PyPI | ⏸ |
 
-The reverse-engineered reference spec is in [SPEC.md](./SPEC.md). Per-decision trade-offs and
-rationale live under [`decisions/`](./decisions). Per-module retrospectives live under
+The project specification (objective / commands / structure / style / testing / boundaries) lives
+in [SPEC.md](./SPEC.md). The reverse-engineered OpenHarness reference (the project we draw
+inspiration from) is in [REFERENCE.md](./REFERENCE.md). Per-decision trade-offs and rationale
+live under [`decisions/`](./decisions). Per-module retrospectives live under
 [`learnings/`](./learnings).
 
 ---
@@ -80,12 +82,16 @@ uv run pre-commit run --all-files
 
 ```
 .
-├── ARCHITECTURE.md           # Phase 0 — learning map (tiers, dependency graph, scope)
-├── SPEC.md                   # Reverse-engineered reference (read-only)
+├── SPEC.md                   # Project specification (objective / commands / structure / style / testing / boundaries)
+├── ARCHITECTURE.md           # Multi-phase strategy (tiers, dependency graph, phase ordering)
+├── REFERENCE.md              # Reverse-engineered OpenHarness reference (study source, read-only)
 ├── pyproject.toml            # Single source of truth: deps, ruff, mypy, pytest
 ├── decisions/                # Decision records: trade-offs + rationale per module
 ├── learnings/                # Per-module retrospectives (Python patterns + product decisions)
-├── tasks/                    # phase-N-plan.md / phase-N-todo.md
+├── tasks/plan.md             # Current phase plan
+├── tasks/todo.md             # Running task list
+├── docs/ideas/               # Blog drafts and ideation outputs
+├── docs/learning/            # Living learning resources (book lists, etc.)
 ├── src/openharness/          # Source (src layout)
 │   ├── __init__.py
 │   ├── __main__.py           # `python -m openharness` entry
