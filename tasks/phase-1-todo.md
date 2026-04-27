@@ -4,7 +4,7 @@
 
 ## Module 1: 项目脚手架
 
-**状态**：🟡 进行中（决策已确定，见 [decisions/01-scaffolding.md](../decisions/01-scaffolding.md)）
+**状态**：✅ 完成（CI 绿 / 复盘见 [learnings/01-scaffolding.md](../learnings/01-scaffolding.md) / 决策见 [decisions/01-scaffolding.md](../decisions/01-scaffolding.md)）
 
 | # | 任务 | 验收 | 状态 |
 |---|------|------|------|
@@ -24,7 +24,22 @@
 
 ## Module 2: 协议与数据模型
 
-**状态**：⏸ 暂未进入
+**状态**：🟡 进行中（决策已确定，见 [decisions/02-protocols.md](../decisions/02-protocols.md)）
+
+| # | 任务 | 验收 | 状态 |
+|---|------|------|------|
+| T1 | 加 `pydantic>=2.5` 依赖 + 配 `[tool.mypy] plugins = ["pydantic.mypy"]` + `[tool.pydantic-mypy]` 严格选项 | `uv sync` 通过 | 🟡 |
+| T2 | 建 `src/openharness/protocols/` 目录 + 占位 `__init__.py` | `import openharness.protocols` 不报错 | 🟡 |
+| T3 | `content.py`：`TextBlock` / `ImageBlock` / `ToolUseBlock` / `ToolResultBlock` + 顶层 `ContentBlock` discriminated union | mypy strict 过 | ⏸ |
+| T4 | `messages.py`：`ConversationMessage`（role + content list） | mypy strict 过 | ⏸ |
+| T5 | `usage.py`：`UsageSnapshot`（input/output tokens + total） | mypy strict 过 | ⏸ |
+| T6 | `requests.py`：`ApiMessageRequest`（model / max_tokens / system / tools / messages） | mypy strict 过 | ⏸ |
+| T7 | `stream_events.py`：`ApiStreamEvent` 层级（`TextDelta` / `MessageComplete` / `Retry`） | mypy strict 过 | ⏸ |
+| T8 | `__init__.py` re-export 顶层 API | 短 import 路径可用 | ⏸ |
+| T9 | 测试：roundtrip JSON / discriminator dispatch / Anthropic 真实 JSON fixture / 错误情况 | `uv run pytest` 全绿，覆盖率 ≥ 90% | ⏸ |
+| T10 | 本地 + CI 全绿 | GitHub Actions 绿 | ⏸ |
+
+**总估时**：~5h（2-3 天含学习节奏）
 
 ## Module 3: API Provider 抽象 + Anthropic 客户端 + 流式事件
 
