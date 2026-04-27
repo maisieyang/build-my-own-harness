@@ -1,0 +1,130 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "openharness"
+version = "0.0.1"
+description = "A production-grade Python harness for LLM agents — built from scratch as a learning project"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "yangxiyue", email = "yangxiyuebupt@gmail.com" },
+]
+keywords = ["llm", "agent", "harness", "ai", "claude", "openai"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    # Phase 1 will add: anthropic, httpx, pydantic, typer, rich
+]
+
+[project.scripts]
+oh = "openharness.cli:main"
+openharness = "openharness.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/maisieyang/build-my-own-harness"
+Documentation = "https://github.com/maisieyang/build-my-own-harness/blob/main/ARCHITECTURE.md"
+Issues = "https://github.com/maisieyang/build-my-own-harness/issues"
+
+# PEP 735 dependency groups — recognized by uv natively
+[dependency-groups]
+dev = [
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "pre-commit>=3.7",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/openharness"]
+
+# ---------------------------------------------------------------------------
+# Ruff — lint + format (replaces flake8 + black + isort + pyupgrade)
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade (auto-modernize syntax)
+    "ARG",  # flake8-unused-arguments
+    "SIM",  # flake8-simplify
+    "TID",  # flake8-tidy-imports
+    "TCH",  # flake8-type-checking
+    "RUF",  # ruff-specific rules
+]
+ignore = [
+    "E501",  # line too long — handled by formatter
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "ARG",  # fixtures often look unused but aren't
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ---------------------------------------------------------------------------
+# Mypy — strict type checking
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unreachable = true
+warn_unused_ignores = true
+show_error_codes = true
+show_column_numbers = true
+pretty = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_decorators = false
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "-ra",
+    "--cov=openharness",
+    "--cov-report=term-missing",
+    "--cov-report=xml",
+]
+
+[tool.coverage.run]
+source = ["src/openharness"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]

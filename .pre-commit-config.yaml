@@ -1,0 +1,22 @@
+# Decision D1.3: 只跑快的 — ruff 秒级、文件级 hygiene 毫秒级。
+# Mypy 和 pytest 留给 CI（commit 不能慢 → 影响迭代）。
+# 升级版本：`uv run pre-commit autoupdate`
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=500]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.7.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
