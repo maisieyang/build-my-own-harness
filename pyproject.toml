@@ -24,7 +24,8 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
-    # Phase 1 will add: anthropic, httpx, pydantic, typer, rich
+    "pydantic>=2.5",
+    # Phase 1 will add: anthropic, httpx, typer, rich
 ]
 
 [project.scripts]
@@ -82,6 +83,15 @@ ignore = [
     "ARG",  # fixtures often look unused but aren't
 ]
 
+# Pydantic v2 evaluates type annotations at runtime to build schemas, so type-only
+# imports referenced in fields must NOT be moved into ``if TYPE_CHECKING:`` blocks.
+# Listing the base classes here teaches the TCH rule to leave their subclasses alone.
+[tool.ruff.lint.flake8-type-checking]
+runtime-evaluated-base-classes = [
+    "pydantic.BaseModel",
+    "openharness.protocols._base.StrictModel",
+]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
@@ -97,10 +107,17 @@ warn_unused_ignores = true
 show_error_codes = true
 show_column_numbers = true
 pretty = true
+plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_decorators = false
+
+# Pydantic mypy plugin — enforce stricter Pydantic patterns
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
 
 # ---------------------------------------------------------------------------
 # Pytest
