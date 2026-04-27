@@ -16,4 +16,5 @@ class ApiMessageRequest(StrictModel):
 
     model: str
     max_tokens: int
+    system: str | None = None
     messages: list[ConversationMessage]
