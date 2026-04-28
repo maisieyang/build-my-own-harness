@@ -140,6 +140,10 @@ source = ["src/openharness"]
 branch = true
 
 [tool.coverage.report]
+# Phase 1 DoD: total project coverage ≥ 70% (per SPEC §6)
+# protocols/ and api/ have stricter per-package gates (90%) enforced manually
+# at module-completion checkpoints, not via this global setting.
+fail_under = 70
 exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",
