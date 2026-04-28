@@ -38,7 +38,8 @@ Done. See [learnings/01-scaffolding.md](../learnings/01-scaffolding.md).
 |---|---------|--------|
 | 3a | Error hierarchy (OpenHarnessApiError + 3 subclasses) + 19 tests | ✅ `f681ce6` |
 | 3b | Retry policy (exp backoff + jitter, injectable sleep) + 22 tests | ✅ `fa9af30` |
-| **3c** | **`OpenAICompatibleApiClient` + Anthropic↔OpenAI wire translation + happy-path streaming with mocked SDK + tests** | 🟡 **NEXT** |
+| 3c.1 | Wire translation pure functions (`to_openai_request` + `_StreamAssembler`) + 22 tests | ✅ `e2332b3` |
+| **3c.2** | **`OpenAICompatibleApiClient` orchestration: `openai` SDK + `with_retry` + emit `ApiRetryEvent` + tests** | 🟡 **NEXT** |
 | 3d | Retry integration with rate-limited responses + tests | ⏸ |
 | 3e | `__init__.py` re-exports + cross-module integration tests | ⏸ |
 
