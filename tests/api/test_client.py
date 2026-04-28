@@ -21,13 +21,15 @@ import httpx
 import openai
 import pytest
 
-from openharness.api.client import OpenAICompatibleApiClient
-from openharness.api.errors import (
+# Imports from the package root (rather than submodules) — this also
+# verifies the public API surface defined in api/__init__.py.
+from openharness.api import (
     AuthenticationFailure,
+    OpenAICompatibleApiClient,
     RateLimitFailure,
     RequestFailure,
+    RetryPolicy,
 )
-from openharness.api.retry import RetryPolicy
 from openharness.protocols.content import TextBlock, ToolUseBlock
 from openharness.protocols.messages import ConversationMessage
 from openharness.protocols.requests import ApiMessageRequest
