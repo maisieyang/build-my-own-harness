@@ -30,13 +30,15 @@ Done. See [learnings/01-scaffolding.md](../learnings/01-scaffolding.md).
 
 ---
 
-## P1-T3: Anthropic API client + retries (mocked) 🟡 **NEXT**
+## P1-T3: OpenAI-compatible API client + retries (mocked) 🟡 **NEXT**
+
+**Strategy**: [decisions/03-api-client-strategy.md](../decisions/03-api-client-strategy.md) — Qwen via DashScope as the Phase 1 test target.
 
 | # | Sub-unit | Status |
 |---|---------|--------|
 | 3a | Error hierarchy + tests | ⏸ |
 | 3b | Retry policy (exponential backoff + jitter) + tests | ⏸ |
-| 3c | `AnthropicApiClient` happy-path streaming with mocked SSE + tests | ⏸ |
+| 3c | `OpenAICompatibleApiClient` + Anthropic↔OpenAI wire translation + happy-path streaming with mocked SDK + tests | ⏸ |
 | 3d | Retry integration with rate-limited responses + tests | ⏸ |
 | 3e | `__init__.py` re-exports + cross-module integration tests | ⏸ |
 
