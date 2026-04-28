@@ -25,7 +25,11 @@ classifiers = [
 ]
 dependencies = [
     "pydantic>=2.5",
-    # Phase 1 will add: anthropic, httpx, typer, rich
+    # P1-T3 sub-unit 3c.2 — openai SDK powers OpenAICompatibleApiClient
+    # against any OpenAI-compatible endpoint (Qwen via DashScope is the
+    # Phase 1 test target). See decisions/03-api-client-strategy.md.
+    "openai>=1.50,<2.0",
+    # Phase 1 will add: typer, rich
 ]
 
 [project.scripts]
