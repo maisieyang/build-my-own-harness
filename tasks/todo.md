@@ -10,7 +10,7 @@ Done. See [learnings/01-scaffolding.md](../learnings/01-scaffolding.md).
 
 ---
 
-## P1-T2: Wire-level protocol types 🟡
+## P1-T2: Wire-level protocol types ✅
 
 **Decisions**: [decisions/02-protocols.md](../decisions/02-protocols.md)
 
@@ -24,13 +24,13 @@ Done. See [learnings/01-scaffolding.md](../learnings/01-scaffolding.md).
 | 2e-2 | ApiMessageRequest + system | ✅ over-split | `f6a7975` |
 | 2e | Complete ApiMessageRequest + ToolSpec (stream / tools / max_tokens validation) + 14 tests | ✅ | `7f96f06` |
 | 2f | ApiStreamEvent hierarchy (TextDelta / MessageComplete / Retry) + 18 tests | ✅ | `5b3741f` |
-| **2g** | **`__init__.py` re-exports + integration tests + coverage gate ≥ 90%** | 🟡 **NEXT** | — |
+| 2g | `__init__.py` re-exports + integration tests + coverage gate | ✅ | `84b3c42`+`a53eaae`+`05e01ff` |
 
 **Acceptance**: Module 2 complete when `from openharness.protocols import *` exposes the public API and `pytest --cov=openharness.protocols --cov-fail-under=90` passes.
 
 ---
 
-## P1-T3: Anthropic API client + retries (mocked) ⏸
+## P1-T3: Anthropic API client + retries (mocked) 🟡 **NEXT**
 
 | # | Sub-unit | Status |
 |---|---------|--------|
