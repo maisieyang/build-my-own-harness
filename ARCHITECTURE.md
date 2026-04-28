@@ -143,13 +143,13 @@ REFERENCE.md 是 OpenHarness v0.1.7 的完整逆向规格——**36 模块 / 43+
 ## 4. 推荐 Phase 顺序（垂直切片，每 Phase 完成后项目都可运行）
 
 ### Phase 1（1-2 周）：Foundation + Hello LLM
-**交付物**：`oh ask "hi"` → 接 Anthropic API → 流式打印响应
+**交付物**：`oh ask "hi"` → 接 OpenAI 兼容 LLM（Qwen via DashScope）→ 流式打印响应
 
-**包含模块**：项目脚手架 / 协议数据模型 / Anthropic 客户端 / 流式事件 / 最小 CLI / Print 模式
+**包含模块**：项目脚手架 / 协议数据模型 / OpenAI 兼容客户端（含 Anthropic↔OpenAI wire 翻译层）/ 流式事件 / 最小 CLI / Print 模式
 
-**学到**：Python 工程基线、`async/AsyncIterator`、Pydantic v2、`Protocol`、CLI 模式
+**学到**：Python 工程基线、`async/AsyncIterator`、Pydantic v2、`Protocol`、CLI 模式、anti-corruption layer 实战
 
-**关键产品决策点**：流式事件层级怎么设计？（参考 REFERENCE + LangChain + Vercel AI SDK，trade-off 表后你选）
+**关键产品决策点**：流式事件层级怎么设计？（参考 REFERENCE + LangChain + Vercel AI SDK，trade-off 表后你选）。**首个 Provider 的选型**：见 [decisions/03-api-client-strategy.md](./decisions/03-api-client-strategy.md)——选 Qwen via DashScope 作为 OpenAI-compatible 的首测目标，让 anti-corruption layer 第一天就被压力测试
 
 ---
 

@@ -24,8 +24,9 @@ Build a **production-grade Python harness for LLM agents** from scratch as a
 deliberate learning project, with two co-equal goals:
 
 1. **Production deliverable** — a Python CLI that streams real responses from
-   Anthropic, with mypy strict / ruff / pytest / CI / pre-commit / coverage
-   gates
+   an OpenAI-compatible LLM (Qwen via DashScope as the primary Phase 1 test
+   target — see [decisions/03-api-client-strategy.md](./decisions/03-api-client-strategy.md)),
+   with mypy strict / ruff / pytest / CI / pre-commit / coverage gates
    - Modeled after Claude Code's harness pattern (Tool-Loop, `stop_reason`-driven)
    - Time horizon: 2-3 months across 7 phases (see
      [ARCHITECTURE.md](./ARCHITECTURE.md))
@@ -58,8 +59,8 @@ phases add subcommands.
 ### Phase 1 (current target)
 
 ```bash
-oh ask "<prompt>"                              # Stream a single Anthropic response
-oh ask --model claude-3-5-sonnet "<prompt>"    # Override default model
+oh ask "<prompt>"                              # Stream a single LLM response (default: qwen-max via DashScope)
+oh ask --model qwen-plus "<prompt>"            # Override default model (any model the configured Provider supports)
 oh --version
 oh --help
 ```
@@ -86,8 +87,11 @@ oh config edit                                 # open ~/.config/openharness/conf
 
 ### Auth
 
-API key via env var (`ANTHROPIC_API_KEY`) for v0.1; later phases may add
-keyring-backed profile management
+API key via env var for v0.1. Phase 1 target is **Qwen via DashScope**, so
+the env var is `DASHSCOPE_API_KEY`. Adding other Providers (OpenAI, Anthropic,
+DeepSeek, etc.) is a Provider-specific env-var pattern — see
+[decisions/03-api-client-strategy.md](./decisions/03-api-client-strategy.md).
+Later phases may add keyring-backed profile management
 (see [ARCHITECTURE.md Tier 0 — Auth](./ARCHITECTURE.md)).
 
 ---
@@ -341,8 +345,12 @@ explicit "always do / ask first / never do" list — this section codifies it.
 
 ### External integrations
 
-- Anthropic SDK pinned (`anthropic>=0.40,<1.0`) — major-version upgrades
-  require an explicit decision document
+- **OpenAI SDK pinned** (`openai>=1.50,<2.0`) — major-version upgrades require
+  an explicit decision document. Used for all OpenAI-compatible providers
+  (Qwen via DashScope is the Phase 1 target; OpenAI cloud, DeepSeek, etc.
+  share the same client with different `base_url`)
+- Anthropic SDK pinning deferred — added when (and if) we ship an
+  `AnthropicApiClient` (Phase 5+ candidate)
 - MCP integration (Phase 5) starts with stdio transport only; HTTP / WS
   deferred
 - All third-party services interact through a typed `Protocol` interface
@@ -353,6 +361,10 @@ explicit "always do / ask first / never do" list — this section codifies it.
 
 ## Modification log
 
+- **2026-04-28** — Pivoted Phase 1 test target from Anthropic-native to
+  Qwen via DashScope (OpenAI-compatible). Updated §1 deliverable, §2 commands +
+  auth, §7 external integrations to reflect `openai` SDK + `DASHSCOPE_API_KEY`.
+  Anchored to [decisions/03-api-client-strategy.md](./decisions/03-api-client-strategy.md).
 - **2026-04-27 (b)** — Added §4 Development Workflow (data flow diagram +
   layer roles + workflow loop). Renumbered §4-§6 to §5-§7 accordingly.
 - **2026-04-27 (a)** — Initial creation. Renamed previous `SPEC.md`

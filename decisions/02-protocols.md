@@ -65,3 +65,8 @@ src/openharness/protocols/
 - Pydantic v2 → msgspec：流式 hot path 出现性能瓶颈（profile 证明 > 5% time in serialization）
 - Mutable → Frozen：出现"被意外修改"的并发 bug
 - 子模块 → 单文件：protocols 总行数 < 200 可以扁平化
+- **Anti-corruption layer 第一次压力测试**（2026-04-28 加入）：
+  P1-T3 改用 OpenAI-compatible（Qwen）作为首个 Provider，
+  protocols/ 仍是 Anthropic-shape。如果翻译层超 200 行 OR 被迫改 protocols/，
+  写 `decisions/04-protocol-revision.md` 解释。**这是 D2.2（discriminated
+  union by type）这一选择的真正考验**——现在不是设计阶段，是实测阶段。
