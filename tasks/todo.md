@@ -30,7 +30,7 @@ Done. See [learnings/01-scaffolding.md](../learnings/01-scaffolding.md).
 
 ---
 
-## P1-T3: OpenAI-compatible API client + retries (mocked) 🟡 **NEXT**
+## P1-T3: OpenAI-compatible API client + retries (mocked) ✅
 
 **Strategy**: [decisions/03-api-client-strategy.md](../decisions/03-api-client-strategy.md) — Qwen via DashScope as the Phase 1 test target.
 
@@ -41,11 +41,11 @@ Done. See [learnings/01-scaffolding.md](../learnings/01-scaffolding.md).
 | 3c.1 | Wire translation pure functions (`to_openai_request` + `_StreamAssembler`) + 22 tests | ✅ `e2332b3` |
 | 3c.2 | `OpenAICompatibleApiClient` orchestration + 10 tests (covers retry + error translation end-to-end) | ✅ `5849742` |
 | 3d | Retry integration (rate-limited / 5xx / auth retried correctly) — covered by 3c.2 tests | ✅ `5849742` |
-| **3e** | **`__init__.py` re-exports + cross-module integration tests** | 🟡 **NEXT** |
+| 3e | `__init__.py` re-exports + test_client.py uses public path (= integration verification) | ✅ `fe724cb` |
 
 ---
 
-## P1-T4: CLI + real-API end-to-end ⏸
+## P1-T4: CLI + real-API end-to-end 🟡 **NEXT** (after learnings/03)
 
 | # | Sub-unit | Status |
 |---|---------|--------|
