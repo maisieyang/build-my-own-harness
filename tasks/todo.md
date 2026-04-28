@@ -22,8 +22,8 @@ Done. See [learnings/01-scaffolding.md](../learnings/01-scaffolding.md).
 | 2d | UsageSnapshot + tests | ✅ | `f334542` |
 | 2e-1 | ApiMessageRequest minimal | ✅ over-split | `4fa3ea6` |
 | 2e-2 | ApiMessageRequest + system | ✅ over-split | `f6a7975` |
-| **2e** | **Complete ApiMessageRequest + ToolSpec** (stream / max_tokens validation / tools list / ToolSpec class with name/description/input_schema) + comprehensive tests | 🟡 **NEXT** | — |
-| 2f | ApiStreamEvent hierarchy (TextDelta / MessageComplete / Retry) + tests | ⏸ | — |
+| 2e | Complete ApiMessageRequest + ToolSpec (stream / tools / max_tokens validation) + 14 tests | ✅ | `7f96f06` |
+| **2f** | **ApiStreamEvent hierarchy** (TextDelta / MessageComplete / Retry) + tests | 🟡 **NEXT** | — |
 | 2g | `__init__.py` re-exports + integration tests + coverage gate ≥ 90% | ⏸ | — |
 
 **Acceptance**: Module 2 complete when `from openharness.protocols import *` exposes the public API and `pytest --cov=openharness.protocols --cov-fail-under=90` passes.
