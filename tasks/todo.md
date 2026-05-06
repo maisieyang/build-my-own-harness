@@ -54,7 +54,7 @@ test gated by `@pytest.mark.integration`.
 
 | # | Sub-unit | Files | Status |
 |---|---------|-------|--------|
-| 4a | `Settings` (pydantic-settings) + env loading + missing-key error | `src/openharness/config/{__init__,settings}.py`; `tests/config/test_settings.py`; add `pydantic-settings` dep | ⏸ |
+| 4a | `Settings` (pydantic-settings) + env loading + missing-key error | `src/openharness/config/{__init__,settings}.py`; `tests/config/test_settings.py`; add `pydantic-settings` dep | ✅ `843ac40` |
 | 4b | `oh ask` Typer command (mocked client) — flag parsing + model override | `src/openharness/cli.py` (rewrite, no real I/O yet); `tests/cli/test_cli.py`; add `typer` dep | ⏸ |
 | 4c | Real-client wiring + append-only streaming renderer + differentiated error UX | `src/openharness/cli.py` (extend); `src/openharness/_stream_render.py` (new); `tests/cli/test_render.py` | ⏸ |
 | 4d | Integration test against real Qwen, gated by `@pytest.mark.integration` | `tests/cli/test_integration.py`; register marker in `pyproject.toml` | ⏸ |
