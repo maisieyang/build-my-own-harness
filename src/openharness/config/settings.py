@@ -1,0 +1,62 @@
+"""Runtime configuration loaded from ``OPENHARNESS_*`` environment variables.
+
+The :class:`Settings` class is the harness's single source of truth for
+provider credentials and model selection. It is intentionally narrow in
+Phase 1 — three fields, all plumbed straight to the OpenAI-compatible
+client — but it carries the design contract that the rest of the CLI
+relies on:
+
+* **Provider-neutral prefix**: env vars are namespaced under
+  ``OPENHARNESS_`` regardless of which Provider the base URL points to.
+  Switching from Qwen to a future Anthropic-compatible endpoint changes
+  the *value* of ``OPENHARNESS_BASE_URL``, never the *name* of any var.
+  See ``decisions/05-cli.md`` D5.1.
+
+* **Fail-fast on missing config**: ``api_key`` and ``base_url`` are
+  required (no default). A missing value raises
+  :class:`pydantic.ValidationError` at construction time, not at the
+  first LLM call. This keeps the failure surface co-located with
+  protocol-layer validation — every "bad input" path raises the same
+  exception family. See D5.2.
+
+* **Sensible default for ``model``**: ``qwen-plus`` balances cost and
+  capability for the Phase 1 test target. CLI ``--model`` and
+  ``OPENHARNESS_MODEL`` both override it. See D5.3.
+"""
+
+from __future__ import annotations
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """OpenHarness runtime configuration.
+
+    Loaded from ``OPENHARNESS_*`` env vars (and optionally a ``.env``
+    file via the ``_env_file`` init kwarg). The loader is case-insensitive
+    on env var names and ignores any unprefixed variable, so a stray
+    ``API_KEY`` in the user's shell cannot silently override
+    ``OPENHARNESS_API_KEY``.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="OPENHARNESS_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    api_key: str = Field(
+        ...,
+        description="API key for the OpenAI-compatible Provider (required).",
+    )
+    base_url: str = Field(
+        ...,
+        description="OpenAI-compatible base URL (required).",
+    )
+    model: str = Field(
+        default="qwen-plus",
+        description="Default model name; overridden by CLI --model.",
+    )

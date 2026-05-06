@@ -45,14 +45,20 @@ Done. See [learnings/01-scaffolding.md](../learnings/01-scaffolding.md).
 
 ---
 
-## P1-T4: CLI + real-API end-to-end 🟡 **NEXT** (after learnings/03)
+## P1-T4: CLI + real-API end-to-end 🟡 **IN PROGRESS**
 
-| # | Sub-unit | Status |
-|---|---------|--------|
-| 4a | Config layer (`ANTHROPIC_API_KEY` from env) + tests | ⏸ |
-| 4b | `oh ask` Typer command + tests with mocked client | ⏸ |
-| 4c | Wiring real client + Rich streaming renderer | ⏸ |
-| 4d | Integration test against real API (gated by env var) | ⏸ |
+**Decisions**: [decisions/05-cli.md](../decisions/05-cli.md) — provider-neutral
+env vars (`OPENHARNESS_API_KEY` / `_BASE_URL` / `_MODEL`), `pydantic-settings`
+for config, append-only streaming render, differentiated error UX, integration
+test gated by `@pytest.mark.integration`.
+
+| # | Sub-unit | Files | Status |
+|---|---------|-------|--------|
+| 4a | `Settings` (pydantic-settings) + env loading + missing-key error | `src/openharness/config/{__init__,settings}.py`; `tests/config/test_settings.py`; add `pydantic-settings` dep | ⏸ |
+| 4b | `oh ask` Typer command (mocked client) — flag parsing + model override | `src/openharness/cli.py` (rewrite, no real I/O yet); `tests/cli/test_cli.py`; add `typer` dep | ⏸ |
+| 4c | Real-client wiring + append-only streaming renderer + differentiated error UX | `src/openharness/cli.py` (extend); `src/openharness/_stream_render.py` (new); `tests/cli/test_render.py` | ⏸ |
+| 4d | Integration test against real Qwen, gated by `@pytest.mark.integration` | `tests/cli/test_integration.py`; register marker in `pyproject.toml` | ⏸ |
+| 4e | `__init__.py` re-exports (Settings) + smoke test that `oh --help` works | `src/openharness/__init__.py`; `tests/cli/test_smoke.py` | ⏸ |
 
 ---
 

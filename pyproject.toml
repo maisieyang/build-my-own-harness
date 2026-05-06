@@ -29,6 +29,9 @@ dependencies = [
     # against any OpenAI-compatible endpoint (Qwen via DashScope is the
     # Phase 1 test target). See decisions/03-api-client-strategy.md.
     "openai>=1.50,<2.0",
+    # P1-T4 sub-unit 4a — Settings layer reads OPENHARNESS_* env vars + .env
+    # files. See decisions/05-cli.md (D5.2).
+    "pydantic-settings>=2.1",
     # Phase 1 will add: typer, rich
 ]
 
