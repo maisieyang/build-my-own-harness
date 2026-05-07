@@ -114,31 +114,33 @@ uv run pytest tests/api/ --cov=openharness.api --cov-fail-under=90
 
 ---
 
-### P1-T4: CLI + real-API end-to-end
+### P1-T4: CLI + real-API end-to-end ✅ DONE
 
-**Description**: Replace placeholder CLI with a Typer-based `oh ask "hi"` command
-that wires up: load API key from env → construct request → call Anthropic →
-stream response to terminal. One integration test gated by `ANTHROPIC_API_KEY`
-env var.
+**Description**: Replace placeholder CLI with a Typer-based `oh ask "<prompt>"`
+command that wires up: load env via `Settings` → construct request →
+call OpenAI-compatible Provider (Qwen via DashScope) → stream response
+to terminal with append-only renderer + differentiated error UX. One
+integration test gated by `@pytest.mark.integration`.
 
 **Acceptance criteria**:
-- [ ] `uv run oh ask "hi"` produces streamed text from real Anthropic
-- [ ] `--model` flag overrides default model
-- [ ] Missing `ANTHROPIC_API_KEY` produces a clear error message
-- [ ] Integration test (skipped without env var) passes against real API
+- [x] `uv run oh ask "hi"` produces streamed text from real Provider
+- [x] `--model` flag overrides default model (`qwen-plus`)
+- [x] `--max-tokens` flag caps generation length (min 1, default 1024)
+- [x] Missing `OPENHARNESS_API_KEY` / `_BASE_URL` produces a clear error
+  message (no Python traceback in default mode)
+- [x] Integration test (skipped without env vars) passes against real API
 
 **Verification**:
 ```bash
-ANTHROPIC_API_KEY=... uv run oh ask "hi"   # human verifies streamed output
-uv run pytest tests/cli/                    # all unit tests green
-ANTHROPIC_API_KEY=... uv run pytest tests/cli/ -m integration  # real API
+OPENHARNESS_API_KEY=... OPENHARNESS_BASE_URL=... uv run oh ask "hi"
+uv run pytest tests/cli/                                         # unit tests
+uv run pytest -m integration                                     # gated real API
 ```
 
-**Files**: `src/openharness/cli.py` (rewrite), `src/openharness/config/{__init__,settings}.py`,
-`tests/cli/test_cli.py`, `tests/cli/test_integration.py`
+**Files**: `src/openharness/cli.py`, `src/openharness/_stream_render.py`,
+`src/openharness/__init__.py`, `tests/cli/{test_cli,test_render,test_integration,test_smoke}.py`
 
-**Sub-units**: agent 在 build 时 runtime 决定（参见 CLAUDE.md 工作流）。
-进度跟踪与已完成 sub-units 的历史记录见 `tasks/todo.md`。
+**Implementation rationale**: see `learnings/04-cli.md`.
 
 ---
 

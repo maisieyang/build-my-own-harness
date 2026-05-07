@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read(//Users/yangxiyue/2026/aa/build-my-own-harness/**)",
+      "Bash(uv run *)",
+      "Bash(uv sync *)",
+      "Bash(uv add *)",
+      "Bash(uv pip *)",
+      "Bash(set -e)",
+      "Bash(git add *)",
+      "Bash(git rm *)",
+      "Bash(git mv *)",
+      "Bash(git commit *)",
+      "Bash(git reset *)",
+      "Bash(git push *)",
+      "Bash(git stash *)",
+      "Bash(git restore *)"
+    ]
+  }
+}

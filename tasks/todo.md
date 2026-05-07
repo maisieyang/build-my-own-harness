@@ -45,21 +45,14 @@ Done. See [learnings/01-scaffolding.md](../learnings/01-scaffolding.md).
 
 ---
 
-## P1-T4: CLI + real-API end-to-end 🟡 **IN PROGRESS**
+## P1-T4: CLI + real-API end-to-end ✅
 
-**外部约束**：参见 [decisions/05-cli.md](../decisions/05-cli.md) — provider-neutral
-env vars (`OPENHARNESS_API_KEY` / `_BASE_URL` / `_MODEL`)、`pydantic-settings`
-依赖、`@pytest.mark.integration` marker。**实现策略由 agent runtime 决定。**
+**外部约束**：[decisions/05-cli.md](../decisions/05-cli.md) — provider-neutral
+env vars、`pydantic-settings`、`typer`、`@pytest.mark.integration` marker。
+**实现策略**：[learnings/04-cli.md](../learnings/04-cli.md)。
 
-**已完成的 sub-unit（历史记录）**：
-
-| # | 内容 | Commit |
-|---|------|--------|
-| 4a | `Settings` (pydantic-settings) + env loading + missing-key error | ✅ `843ac40` |
-
-**剩余 capability**：`oh ask` Typer 命令、真 client 接线、流式渲染、错误 UX、
-集成测试（gated）、`__init__` re-exports + `oh --help` smoke。**由 agent 在
-build 时拆分顺序，遇到外部契约 / 不可逆决策时停下问。**
+P1-T4 capability shipped — `oh ask "<prompt>"` 流式输出 + 差异化错误 UX +
+集成测试 gated。Coverage 92.83%。详见 commit history.
 
 ---
 

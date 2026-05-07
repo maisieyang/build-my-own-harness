@@ -59,8 +59,9 @@ phases add subcommands.
 ### Phase 1 (current target)
 
 ```bash
-oh ask "<prompt>"                              # Stream a single LLM response (default: qwen-max via DashScope)
+oh ask "<prompt>"                              # Stream a single LLM response (default: qwen-plus via DashScope)
 oh ask --model qwen-plus "<prompt>"            # Override default model (any model the configured Provider supports)
+oh ask --max-tokens 256 "<prompt>"             # Cap generation length (default 1024, min 1)
 oh --version
 oh --help
 ```
@@ -280,6 +281,7 @@ explicit "always do / ask first / never do" list — this section codifies it.
 
 ## Modification log
 
+- **2026-05-07 (b)** — §2 Commands: add `--max-tokens` flag (emergent UX from P1-T4 build, kept per review). Fixed default-model name from `qwen-max` to `qwen-plus` to match D5.3.
 - **2026-05-07** — Removed §4 Development Workflow (data-flow / layer-roles / workflow-loop content now lives in `CLAUDE.md` under the capability-driven workflow). Renumbered §5-§7 → §4-§6.
 - **2026-04-28** — Pivoted Phase 1 test target from Anthropic-native to
   Qwen via DashScope (OpenAI-compatible). Updated §1 deliverable, §2 commands +

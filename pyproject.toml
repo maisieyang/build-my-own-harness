@@ -33,6 +33,7 @@ dependencies = [
     # files. See decisions/05-cli.md (D5.2).
     "pydantic-settings>=2.1",
     # Phase 1 will add: typer, rich
+    "typer>=0.12,<1.0",
 ]
 
 [project.scripts]
@@ -140,6 +141,13 @@ addopts = [
     "--cov=openharness",
     "--cov-report=term-missing",
     "--cov-report=xml",
+]
+# Custom markers — listed here so ``--strict-markers`` does not flag them.
+# ``integration`` is opt-in; CI runs ``pytest -m "not integration"`` and
+# nightly / on-demand runs ``pytest -m integration`` (with the API-key env
+# var set as a secret). See decisions/05-cli.md D5.7.
+markers = [
+    "integration: real-API end-to-end test (opt-in via -m integration)",
 ]
 
 [tool.coverage.run]
