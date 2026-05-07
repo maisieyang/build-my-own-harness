@@ -137,11 +137,8 @@ ANTHROPIC_API_KEY=... uv run pytest tests/cli/ -m integration  # real API
 **Files**: `src/openharness/cli.py` (rewrite), `src/openharness/config/{__init__,settings}.py`,
 `tests/cli/test_cli.py`, `tests/cli/test_integration.py`
 
-**Sub-units**:
-- [ ] 4a — Config layer (load `ANTHROPIC_API_KEY` from env) + tests
-- [ ] 4b — `oh ask` Typer command (no real API) + tests using mocked client
-- [ ] 4c — Wiring: real `AnthropicApiClient` + Rich streaming renderer
-- [ ] 4d — Integration test against real API (gated by env var)
+**Sub-units**: agent 在 build 时 runtime 决定（参见 CLAUDE.md 工作流）。
+进度跟踪与已完成 sub-units 的历史记录见 `tasks/todo.md`。
 
 ---
 

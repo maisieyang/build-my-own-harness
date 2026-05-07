@@ -116,90 +116,9 @@ canonical tree. Roles in summary:
 
 ---
 
-## 4. Development Workflow
-
-The project flows through five layers of artifact, each at a different time
-scale and answering a different question. Understanding which layer you're
-operating in (and which one you are *not*) is essential.
-
-### Data flow
-
-```
-   外部参考                      内部产物                       工具触发
-
-REFERENCE.md  (OpenHarness 完整逆向，固定的输入)
-       │
-       │ /spec  ←━━━━━━━━━━━━━━━━━━━━━━━━━━━ ① 生成"做什么+不做什么+行为"
-       ▼
-SPEC.md       (本文档——What 是什么 + 边界 + 测试 + 行为)
-       │
-       │ /make-plan (项目尺度) ←━━━━━━━━━━━━━ ② 生成"分阶段战略地图"
-       ▼
-ARCHITECTURE.md (战略 plan——Tier / Phase 顺序 / 依赖图)
-       │
-       │ /make-plan (Phase 尺度) ←━━━━━━━━━━━ ③ 当前 Phase 的战术 plan
-       ▼
-tasks/plan.md ←→ tasks/todo.md (5 任务 + 检查点 / 运行清单)
-       │
-       │ /build  ←━━━━━━━━━━━━━━━━━━━━━━━━━━ ④ 实施每个任务
-       ▼
-src/  +  tests/  +  commits
-
-       Module 完成时
-       ▼
-learnings/<NN>.md (复盘——下一次做时的知识)
-
-       任何"我选了 A 而不是 B"的瞬间
-       ▼
-decisions/<NN>.md (横切的 — Why 选 X 不选 Y)
-```
-
-### Layer roles
-
-| 文档 | 时间尺度 | 回答的问题 | 工具命令 |
-|------|---------|----------|--------|
-| **REFERENCE.md** | 不变 | "OpenHarness 是什么样" | （外部输入，没有命令） |
-| **SPEC.md** | 项目级（2-3 月） | "我要做什么 / 不做什么 / 怎么做" | `/spec` |
-| **ARCHITECTURE.md** | 项目级（多 Phase） | "分多少阶段？什么顺序？依赖？" | `/make-plan`（项目尺度） |
-| **tasks/plan.md** + **todo.md** | Phase 级（1-3 周） | "本 Phase 拆成几个任务？验收？" | `/make-plan`（Phase 尺度） |
-| **src/** + tests + commits | 任务级（小时） | "代码长什么样" | `/build` |
-
-### Why these are different documents
-
-它们看起来都在"做计划"，但**回答的问题完全不同**：
-
-- **SPEC** —— 合同性的："任何在做的人都要遵守这些规则"
-- **ARCHITECTURE** —— 战略性的："我们大概分 7 个阶段做，先 A 后 B 因为 B
-  依赖 A"
-- **tasks/plan** —— 战术性的："现在这个阶段我有 5 个具体任务，每个验收
-  什么样"
-
-**不能用一份文档承担三种角色**——会变成怪物（要么太宏观无法执行，
-要么太微观看不到全局）。
-
-### Workflow loop
-
-每完成一层，回到上一层 review：
-
-```
-完成一个任务（=  RED → GREEN → COMMIT 一轮）
-   ↓
-完成一个 Module（多个任务）
-   ↓ 写 learnings/<NN>.md，更新 todo
-完成一个 Phase（多个 Module）
-   ↓ 写 learnings/phase-N.md，归档当前 tasks/plan.md，
-   ↓ 重新 /make-plan 下个 Phase 的战术任务
-完成整个项目
-   ↓ 写 learnings/project.md，可能更新 SPEC.md
-```
-
-**SPEC.md 应该很少变**。每次变都要写
-`decisions/<NN>-spec-revision.md` 解释为什么——它是契约，频繁修改 = 契约
-失效。
-
 ---
 
-## 5. Code Style
+## 4. Code Style
 
 Single source of truth: `pyproject.toml`. Decisions documented in
 [decisions/01-scaffolding.md](./decisions/01-scaffolding.md) and
@@ -223,7 +142,7 @@ Single source of truth: `pyproject.toml`. Decisions documented in
 
 ---
 
-## 6. Testing Strategy
+## 5. Testing Strategy
 
 The previous artifacts lacked a unified statement here. **This is the
 canonical testing contract.**
@@ -293,7 +212,7 @@ not line-coverage games.
 
 ---
 
-## 7. Boundaries
+## 6. Boundaries
 
 Behavior contract for working on this project. The previous artifacts had no
 explicit "always do / ask first / never do" list — this section codifies it.
@@ -361,6 +280,7 @@ explicit "always do / ask first / never do" list — this section codifies it.
 
 ## Modification log
 
+- **2026-05-07** — Removed §4 Development Workflow (data-flow / layer-roles / workflow-loop content now lives in `CLAUDE.md` under the capability-driven workflow). Renumbered §5-§7 → §4-§6.
 - **2026-04-28** — Pivoted Phase 1 test target from Anthropic-native to
   Qwen via DashScope (OpenAI-compatible). Updated §1 deliverable, §2 commands +
   auth, §7 external integrations to reflect `openai` SDK + `DASHSCOPE_API_KEY`.

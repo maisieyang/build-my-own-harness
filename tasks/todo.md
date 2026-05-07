@@ -47,18 +47,19 @@ Done. See [learnings/01-scaffolding.md](../learnings/01-scaffolding.md).
 
 ## P1-T4: CLI + real-API end-to-end 🟡 **IN PROGRESS**
 
-**Decisions**: [decisions/05-cli.md](../decisions/05-cli.md) — provider-neutral
-env vars (`OPENHARNESS_API_KEY` / `_BASE_URL` / `_MODEL`), `pydantic-settings`
-for config, append-only streaming render, differentiated error UX, integration
-test gated by `@pytest.mark.integration`.
+**外部约束**：参见 [decisions/05-cli.md](../decisions/05-cli.md) — provider-neutral
+env vars (`OPENHARNESS_API_KEY` / `_BASE_URL` / `_MODEL`)、`pydantic-settings`
+依赖、`@pytest.mark.integration` marker。**实现策略由 agent runtime 决定。**
 
-| # | Sub-unit | Files | Status |
-|---|---------|-------|--------|
-| 4a | `Settings` (pydantic-settings) + env loading + missing-key error | `src/openharness/config/{__init__,settings}.py`; `tests/config/test_settings.py`; add `pydantic-settings` dep | ✅ `843ac40` |
-| 4b | `oh ask` Typer command (mocked client) — flag parsing + model override | `src/openharness/cli.py` (rewrite, no real I/O yet); `tests/cli/test_cli.py`; add `typer` dep | ⏸ |
-| 4c | Real-client wiring + append-only streaming renderer + differentiated error UX | `src/openharness/cli.py` (extend); `src/openharness/_stream_render.py` (new); `tests/cli/test_render.py` | ⏸ |
-| 4d | Integration test against real Qwen, gated by `@pytest.mark.integration` | `tests/cli/test_integration.py`; register marker in `pyproject.toml` | ⏸ |
-| 4e | `__init__.py` re-exports (Settings) + smoke test that `oh --help` works | `src/openharness/__init__.py`; `tests/cli/test_smoke.py` | ⏸ |
+**已完成的 sub-unit（历史记录）**：
+
+| # | 内容 | Commit |
+|---|------|--------|
+| 4a | `Settings` (pydantic-settings) + env loading + missing-key error | ✅ `843ac40` |
+
+**剩余 capability**：`oh ask` Typer 命令、真 client 接线、流式渲染、错误 UX、
+集成测试（gated）、`__init__` re-exports + `oh --help` smoke。**由 agent 在
+build 时拆分顺序，遇到外部契约 / 不可逆决策时停下问。**
 
 ---
 

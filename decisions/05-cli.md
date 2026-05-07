@@ -35,6 +35,11 @@ is wrong, the pain will surface here.
 
 ## Decisions
 
+> **Note (2026-05-07)**: 原 D5.5（流式渲染策略）/ D5.6（错误 UX 措辞）/ D5.8
+> （Print mode 范围）已移出本文档，归到 `learnings/04-cli.md`。这三条是内部
+> 实现策略，不属于"外部约束 + 不可逆决策"——按新工作流应在 build 中 emerge、
+> 做完后沉淀到 learnings。
+
 ### D5.1 — Env var naming: **provider-neutral with `OPENHARNESS_` prefix**
 
 - `OPENHARNESS_API_KEY` — the API key (required)
@@ -87,39 +92,6 @@ for an OSS learning harness; would revisit for a public release.
 - `oh ask "hi" --model qwen-max` overrides settings default
 - Resolution order: CLI `--model` > env `OPENHARNESS_MODEL` > settings default
 
-### D5.5 — Streaming render: **append-only `print(end="", flush=True)`**
-
-- For each `ApiTextDeltaEvent`: print `event.delta` with no newline, flushed
-- For `ApiMessageCompleteEvent`: print final newline + (optionally) usage stats
-- For `ApiRetryEvent`: print to stderr with a short `[retry n/N: <reason>]` notice
-
-**Why not Rich `Live` markdown re-render?**
-- Rich `Live` re-renders the whole markdown on every delta — flicker, complexity, edge cases (terminal resize, scrollback)
-- Append-only is what `cat`, `curl --no-buffer`, `ssh`, every classic Unix
-  tool does — and it composes with pipes (`oh ask "..." | tee out.txt`)
-- Markdown re-rendering belongs in Tier 1 (proper Print mode) where we'd
-  also handle JSON output, --output flags, etc.
-- **Phase 1 is "first signal" — boring is good**
-
-**Trade-off**: Markdown lists/headers won't render formatted in Phase 1.
-Acceptable; cleartext is fine for a harness's first run.
-
-### D5.6 — Error UX: **differentiated by exception type**
-
-- `OpenHarnessApiError` subclasses are user-facing — each gets a tailored hint:
-  - `AuthenticationFailure` → "Set `OPENHARNESS_API_KEY` (got HTTP 401 from <provider>)."
-  - `RateLimitFailure` → "Provider rate-limited the request after N retries. Try again in a moment."
-  - `RequestFailure` → "Provider returned HTTP <status>: <message>"
-  - `pydantic.ValidationError` from `Settings` → "Configuration error: <field>: <reason>"
-- All errors → exit code 1, message to stderr, no Python traceback (unless
-  `--debug` flag set; deferred to Tier 1)
-
-**Why not a single generic "<error>: <message>"?**
-- CLI is the **user-perceived layer**. The user doesn't see our exception
-  hierarchy; they see what we print. Differentiated hints turn each error
-  into a "next step" instead of a wall.
-- Effort is small (1-line hint per type); value is high.
-
 ### D5.7 — Integration test gating: **`@pytest.mark.integration` marker**
 
 - Register `integration` marker in `pyproject.toml` `[tool.pytest.ini_options]`
@@ -135,14 +107,6 @@ Acceptable; cleartext is fine for a harness's first run.
   tests discoverable
 - CI can run `-m "not integration"` for the default pipeline and an
   `integration` job (with the env var as a secret) for nightly / on-demand
-
-### D5.8 — Print mode scope: **streaming text only**
-
-- Phase 1 ships only the streaming text path
-- `--output json` / `--output text` / proper Print mode = **Tier 1, deferred**
-- Reasoning: Phase 1's bar is "user can run `oh ask "hi"` and see a
-  streamed response". JSON, transcript-style output, format flags expand
-  scope without adding to that bar.
 
 ## Sub-unit shape (preview)
 
