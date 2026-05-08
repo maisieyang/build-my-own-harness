@@ -3,7 +3,7 @@
 > Tracks the 6 capabilities defined in [phase-2-plan.md](./phase-2-plan.md).
 > Phase 1 archive: [plan.md](./plan.md) / [todo.md](./todo.md).
 
-**Currently working on**: P2-T4 (run_query core loop) — NEXT after Three-Axis kickoff for P2-T4.
+**Currently working on**: P2-T5 (system prompt assembly) — NEXT after Three-Axis kickoff for P2-T5.
 
 ---
 
@@ -74,21 +74,30 @@ default-registry integration test. All gates clean.
 
 ---
 
-## P2-T4: run_query core loop
+## P2-T4: run_query core loop ✅
 
 **Decisions**: 06-phase-2-boundary D6.1 (loop exit hybrid) + D6.3 (serial execution).
-Sub-decisions on event ordering / error semantics — Three-Axis at task entry.
+Sub-decisions D10.1–D10.5 + D7.1 amendment captured in
+[learnings/08-run-query.md](../learnings/08-run-query.md).
+
+> **Sub-unit count revised from 5 to 6** — added 4c for the
+> `PermissionChecker` Protocol (D10.1). Original 4c-4e renumbered to 4d-4f.
 
 | # | Sub-unit | Status | Commit |
 |---|---------|--------|--------|
-| 4a | `ToolExecutionStarted` / `ToolExecutionCompleted` added to `ApiStreamEvent` discriminated union + tests | ☐ | |
-| 4b | `LoopLimitExceeded` added to error hierarchy + tests | ☐ | |
-| 4c | `run_query` no-tool path (immediate `end_turn`) + tests | ☐ | |
-| 4d | `run_query` single-tool path (1 turn → tool → end_turn) + tests | ☐ | |
-| 4e | `run_query` multi-turn + max_turns boundary + tests | ☐ | |
+| 4a | `ToolExecutionStartedEvent` + `ToolExecutionCompletedEvent` added to discriminated union | ✅ | `c264c92` |
+| 4b | `LoopLimitExceeded(OpenHarnessApiError)` + tests | ✅ | `7b56c32` |
+| 4c | `PermissionChecker` Protocol + `Decision` enum + tighten `QueryContext` (D7.2 cash 2/2) | ✅ | `dd2a9d7` |
+| 4d | `run_query` no-tool path (clean P2-T1 stub tripwires) + tests | ✅ | `4d1b6fb` |
+| 4e | `run_query` 1-tool path + 4 recovery flows | ✅ | `aa43d02` |
+| 4f | multi-turn + max_turns boundary + programming-error propagation tests | ✅ | `d9c91e3` |
 
-**Acceptance**: end-to-end test with mocked client + 2 fake tools covers 0-turn / 1-turn / max_turns;
-coverage on `engine/query.py` ≥ 90%.
+**Acceptance**: `run_query` body fully landed. 19 dedicated tests in
+`tests/engine/test_query.py` cover async-generator shape / no-tool exit on 3
+stop_reasons / request shape / defensive copy / 1-tool happy path / 4
+recovery flows / 3-turn happy / max_turns boundary / programming-error
+propagation / multi-tool serial dispatch. `mypy --strict` clean. Both D7.2
+hand-offs cashed; `rg "tighten to"` returns no functional markers.
 
 ---
 
