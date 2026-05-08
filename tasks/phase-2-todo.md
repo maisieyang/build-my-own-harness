@@ -3,7 +3,7 @@
 > Tracks the 6 capabilities defined in [phase-2-plan.md](./phase-2-plan.md).
 > Phase 1 archive: [plan.md](./plan.md) / [todo.md](./todo.md).
 
-**Currently working on**: P2-T2 (tool system foundation) — NEXT after Three-Axis kickoff for P2-T2.
+**Currently working on**: P2-T3 (five base tools) — NEXT after Three-Axis kickoff for P2-T3.
 
 ---
 
@@ -31,20 +31,25 @@ missing — that's P2-T4.
 
 ---
 
-## P2-T2: Tool system foundation
+## P2-T2: Tool system foundation ✅
 
-**Decisions**: 06-phase-2-boundary D6.4 (PascalCase names) + tool-system specifics
-TBD via Three-Axis discussion at task entry.
+**Decisions**: 06-phase-2-boundary D6.4 (PascalCase names);
+Three-Axis sub-decisions D8.1–D8.9 captured in [learnings/06-tool-system.md](../learnings/06-tool-system.md).
 
 | # | Sub-unit | Status | Commit |
 |---|---------|--------|--------|
-| 2a | `ToolResult` + `ToolExecutionContext` dataclasses + tests | ☐ | |
-| 2b | `BaseTool` ABC + tests via `_FakeTool` fixture | ☐ | |
-| 2c | `ToolRegistry` (register / get / list / duplicate detection) + tests | ☐ | |
-| 2d | `to_api_schema()` translation BaseTool → ToolSpec + tests | ☐ | |
-| 2e | `tools/__init__.py` re-exports + `_FakeTool` promoted to `tests/tools/conftest.py` | ☐ | |
+| 2a | `ToolResult` + `ToolExecutionContext` dataclasses + tests | ✅ | `06fe5ec` |
+| 2b | `BaseTool` ABC + tests via `_FakeTool` fixture | ✅ | `810bf99` |
+| 2c | `ToolRegistry` (register / get / list / duplicate detection) + tests | ✅ | `66dfb37` |
+| 2d | `to_api_schema()` translation BaseTool → ToolSpec + tests | ✅ | `8e7988f` |
+| 2e | `tools/__init__.py` re-exports + `_FakeTool` promoted to `tests/tools/conftest.py` + engine D7.2 hand-off | ✅ | `be5ebb2` |
 
-**Acceptance**: A `_FakeTool` registers, executes, returns `ToolResult`; coverage on `tools/` ≥ 90%.
+**Acceptance**: `_FakeTool` registers, executes, returns `ToolResult`; coverage
+on `tools/` 100% (3/3 + 36/36 statements); `mypy --strict` clean. P2-T1 D7.2
+hand-off cashed: `QueryContext.tool_registry: object` tightened to `ToolRegistry`.
+
+**Hand-offs to later tasks**:
+- P2-T6 acceptance must include: tighten `QueryContext.permission_checker: object` → `PermissionChecker` (the last D7.2 marker)
 
 ---
 
