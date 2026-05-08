@@ -97,8 +97,40 @@ class BaseTool(ABC, Generic[InputT]):
         """Run the tool with already-validated ``args`` and return a result.
 
         Recoverable failures (file not found, command non-zero exit, network
-        timeout) → ``ToolResult(is_error=True, output="<error message>")`` so
+        timeout) -> ``ToolResult(is_error=True, output="<error message>")`` so
         the LLM can read the error and adapt. Programming errors (assertion
-        failures, type mismatches that escaped validation) → ``raise`` and
+        failures, type mismatches that escaped validation) -> ``raise`` and
         let the loop surface them.
         """
+
+
+class ToolRegistry:
+    """In-memory map from tool name to :class:`BaseTool` instance.
+
+    Per D8.6 (Three-Axis): plain method ``register`` (no decorator sugar),
+    duplicate names raise ``ValueError``. Stored as ``BaseTool[Any]`` —
+    the registry doesn't care about the input type parameter; only the loop
+    (P2-T4) cares once a specific tool's ``execute`` is being called.
+    """
+
+    def __init__(self) -> None:
+        # Insertion-ordered; ``list_tools()`` and ``to_api_schema()`` rely
+        # on dict's ordering guarantee (Python 3.7+) for stable output.
+        self._tools: dict[str, BaseTool[Any]] = {}
+
+    def register(self, tool: BaseTool[Any]) -> None:
+        """Register a tool under its ``name``. Raises on duplicate."""
+        if tool.name in self._tools:
+            raise ValueError(f"tool {tool.name!r} already registered")
+        self._tools[tool.name] = tool
+
+    def get(self, name: str) -> BaseTool[Any]:
+        """Retrieve a registered tool by name. Raises ``KeyError`` if absent."""
+        if name not in self._tools:
+            raise KeyError(name)
+        return self._tools[name]
+
+    def list_tools(self) -> list[BaseTool[Any]]:
+        """Return the registered tools in insertion order. Caller-owned list
+        copy — mutating it does not affect the registry."""
+        return list(self._tools.values())

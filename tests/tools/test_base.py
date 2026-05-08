@@ -22,7 +22,12 @@ from pathlib import Path
 
 import pytest
 
-from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from openharness.tools.base import (
+    BaseTool,
+    ToolExecutionContext,
+    ToolRegistry,
+    ToolResult,
+)
 from tools.conftest import FakeInput, _FakeTool
 
 
@@ -93,3 +98,58 @@ class TestFakeToolRoundTrip:
         assert isinstance(result, ToolResult)
         assert result.output == "value=hello"
         assert result.is_error is False
+
+
+class _AltFakeTool(BaseTool[FakeInput]):
+    """Second fake with a different name — used to verify multi-registration."""
+
+    name = "Alt"
+    description = "Second fake."
+    input_model = FakeInput
+
+    async def execute(
+        self,
+        args: FakeInput,
+        context: ToolExecutionContext,
+    ) -> ToolResult:
+        del context
+        return ToolResult(output=f"alt:{args.value}")
+
+
+class TestToolRegistry:
+    def test_register_and_get_round_trip(self) -> None:
+        registry = ToolRegistry()
+        tool = _FakeTool()
+        registry.register(tool)
+        assert registry.get("Fake") is tool
+
+    def test_register_duplicate_name_raises(self) -> None:
+        registry = ToolRegistry()
+        registry.register(_FakeTool())
+        with pytest.raises(ValueError, match="'Fake' already registered"):
+            registry.register(_FakeTool())
+
+    def test_get_missing_raises_key_error(self) -> None:
+        registry = ToolRegistry()
+        with pytest.raises(KeyError, match="DoesNotExist"):
+            registry.get("DoesNotExist")
+
+    def test_list_tools_empty_initially(self) -> None:
+        assert ToolRegistry().list_tools() == []
+
+    def test_list_tools_preserves_registration_order(self) -> None:
+        registry = ToolRegistry()
+        first = _FakeTool()
+        second = _AltFakeTool()
+        registry.register(first)
+        registry.register(second)
+        listed = registry.list_tools()
+        assert [t.name for t in listed] == ["Fake", "Alt"]
+
+    def test_list_tools_returns_caller_owned_copy(self) -> None:
+        # Mutating the returned list must not affect the registry.
+        registry = ToolRegistry()
+        registry.register(_FakeTool())
+        listed = registry.list_tools()
+        listed.clear()
+        assert len(registry.list_tools()) == 1
