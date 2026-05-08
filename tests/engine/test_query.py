@@ -20,12 +20,13 @@ import pytest
 from openharness.api import OpenAICompatibleApiClient
 from openharness.engine.context import QueryContext
 from openharness.engine.query import run_query
+from openharness.tools import ToolRegistry
 
 
 def _make_context() -> QueryContext:
     return QueryContext(
         api_client=cast("OpenAICompatibleApiClient", Mock(spec=OpenAICompatibleApiClient)),
-        tool_registry=object(),
+        tool_registry=ToolRegistry(),
         permission_checker=object(),
         system_prompt="",
         cwd=Path("/tmp"),

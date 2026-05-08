@@ -18,6 +18,7 @@ import pytest
 
 from openharness.api import OpenAICompatibleApiClient
 from openharness.engine.context import QueryContext
+from openharness.tools import ToolRegistry
 
 
 def _stub_client() -> OpenAICompatibleApiClient:
@@ -34,7 +35,7 @@ def context() -> QueryContext:
     """A baseline QueryContext most tests can use as-is or via ``replace``."""
     return QueryContext(
         api_client=_stub_client(),
-        tool_registry=object(),
+        tool_registry=ToolRegistry(),
         permission_checker=object(),
         system_prompt="you are a test harness",
         cwd=Path("/tmp"),
@@ -45,9 +46,9 @@ class TestQueryContext:
     def test_required_fields_round_trip(self, context: QueryContext) -> None:
         assert context.system_prompt == "you are a test harness"
         assert context.cwd == Path("/tmp")
-        # tool_registry / permission_checker carry sentinel objects (D7.2);
-        # we only assert they were stored, not their identity beyond that.
-        assert context.tool_registry is not None
+        # tool_registry now tightened to ToolRegistry (P2-T2 hand-off);
+        # permission_checker stays object until P2-T6.
+        assert isinstance(context.tool_registry, ToolRegistry)
         assert context.permission_checker is not None
 
     def test_max_turns_default_matches_boundary_contract(self, context: QueryContext) -> None:
@@ -57,7 +58,7 @@ class TestQueryContext:
     def test_max_turns_override_accepted(self) -> None:
         ctx = QueryContext(
             api_client=_stub_client(),
-            tool_registry=object(),
+            tool_registry=ToolRegistry(),
             permission_checker=object(),
             system_prompt="",
             cwd=Path("/tmp"),

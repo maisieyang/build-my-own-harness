@@ -21,6 +21,7 @@ from unittest.mock import Mock
 import pytest
 
 from openharness.api import OpenAICompatibleApiClient
+from openharness.tools import ToolRegistry
 
 
 def test_public_api_reachable_from_package_root() -> None:
@@ -51,7 +52,7 @@ async def test_query_context_and_run_query_compose_via_public_path() -> None:
 
     ctx = QueryContext(
         api_client=cast("OpenAICompatibleApiClient", Mock(spec=OpenAICompatibleApiClient)),
-        tool_registry=object(),
+        tool_registry=ToolRegistry(),
         permission_checker=object(),
         system_prompt="",
         cwd=Path("/tmp"),

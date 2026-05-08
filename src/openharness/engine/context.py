@@ -24,19 +24,20 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from openharness.api import OpenAICompatibleApiClient
+    from openharness.tools import ToolRegistry
 
 
 @dataclass(frozen=True)
 class QueryContext:
     """Per-query collaborators that do not change across loop iterations.
 
-    Construction is the caller's job (CLI in P2-T6 wires Settings →
-    ToolRegistry → ``build_system_prompt(...)`` → QueryContext); this dataclass
+    Construction is the caller's job (CLI in P2-T6 wires Settings ->
+    ToolRegistry -> ``build_system_prompt(...)`` -> QueryContext); this dataclass
     intentionally has no factory method to avoid coupling to ``Settings``.
     """
 
     api_client: OpenAICompatibleApiClient
-    tool_registry: object  # tighten to ToolRegistry in P2-T2
+    tool_registry: ToolRegistry
     permission_checker: object  # tighten to PermissionChecker in P2-T6
     system_prompt: str
     cwd: Path
