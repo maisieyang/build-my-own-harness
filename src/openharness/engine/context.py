@@ -2,14 +2,13 @@
 
 Per the P2-T1 Three-Axis discussion (D7.1 / D7.2 / D7.5):
 
-- D7.1 originally fixed the field set at 6 entries. P2-T4.4d revised this to
-  add ``model`` and ``max_tokens`` -- both are per-query immutables that the
-  loop needs to construct each ``ApiMessageRequest``. Recorded as an
-  amendment in ``learnings/08-run-query.md``.
+- D7.1 originally fixed the field set at 6 entries. Two amendments since:
+  P2-T4.4d added ``model`` + ``max_tokens`` (loop builds ApiMessageRequest);
+  P2-T6.6b added ``permission_mode`` (DRY_RUN short-circuit needs to live
+  next to permission_checker). Both recorded in learnings/08 / 10.
 - D7.2 typed unfinished collaborators as ``object`` at runtime, then tightened
   per hand-off. P2-T2.2e cashed ``tool_registry``; P2-T4.4c cashed
-  ``permission_checker``. The marker convention (``rg "tighten to"``) is now
-  exhausted.
+  ``permission_checker``. The marker convention is exhausted.
 - D7.5 fixes ``system_prompt`` as the *assembled* string. ``prompts.py`` (P2-T5)
   is the constructor; QueryContext just holds the result.
 
@@ -19,8 +18,10 @@ Per the P2-T1 Three-Axis discussion (D7.1 / D7.2 / D7.5):
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
+from openharness.permissions import PermissionMode
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -47,3 +48,4 @@ class QueryContext:
     model: str
     max_tokens: int = 1024
     max_turns: int = 20
+    permission_mode: PermissionMode = field(default=PermissionMode.DEFAULT)

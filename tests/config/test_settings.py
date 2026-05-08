@@ -66,6 +66,52 @@ class TestDefaults:
 
         assert settings.model == "qwen-plus"
 
+    def test_default_permission_mode_is_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from openharness.permissions import PermissionMode
+
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://example.com/v1")
+
+        settings = Settings()
+
+        assert settings.permission_mode is PermissionMode.DEFAULT
+
+
+class TestPermissionModeFromEnv:
+    """OPENHARNESS_PERMISSION_MODE env var sets the permission policy."""
+
+    @pytest.mark.parametrize(
+        ("env_value", "expected"),
+        [
+            ("default", "DEFAULT"),
+            ("auto", "AUTO"),
+            ("dry_run", "DRY_RUN"),
+        ],
+    )
+    def test_each_mode_value_loads(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        env_value: str,
+        expected: str,
+    ) -> None:
+        from openharness.permissions import PermissionMode
+
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://example.com/v1")
+        monkeypatch.setenv("OPENHARNESS_PERMISSION_MODE", env_value)
+
+        settings = Settings()
+
+        assert settings.permission_mode is PermissionMode[expected]
+
+    def test_invalid_mode_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://example.com/v1")
+        monkeypatch.setenv("OPENHARNESS_PERMISSION_MODE", "yolo")
+
+        with pytest.raises(ValidationError):
+            Settings()
+
 
 class TestMissingRequiredFields:
     """Missing required fields produce a ``ValidationError`` naming the field."""

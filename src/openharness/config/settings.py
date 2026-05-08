@@ -29,6 +29,8 @@ from __future__ import annotations
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from openharness.permissions import PermissionMode
+
 
 class Settings(BaseSettings):
     """OpenHarness runtime configuration.
@@ -59,4 +61,13 @@ class Settings(BaseSettings):
     model: str = Field(
         default="qwen-plus",
         description="Default model name; overridden by CLI --model.",
+    )
+    permission_mode: PermissionMode = Field(
+        default=PermissionMode.DEFAULT,
+        description=(
+            "Permission policy. DEFAULT runs the deny-list normally; AUTO is "
+            "P3-reserved (skip interactive confirmation, currently identical "
+            "to DEFAULT); DRY_RUN never executes tools, emits 'would call X' "
+            "events instead. Overridden by --auto / --dry-run CLI flags."
+        ),
     )
