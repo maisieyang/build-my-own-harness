@@ -2,12 +2,12 @@
 
 Per the P2-T1 Three-Axis discussion (D7.1 / D7.2 / D7.5):
 
-- D7.1 fixes the field set at the final shape (6 fields). ``tool_registry`` and
-  ``permission_checker`` exist now even though their types do not — see D7.2.
+- D7.1 fixes the field set at the final shape (6 fields).
 - D7.2 lets us keep the engine independent of P2-T2 / P2-T6 by typing the
-  unfinished collaborators as ``object`` at runtime. P2-T2 (tool system) and
-  P2-T6 (permissions) each tighten the corresponding annotation; their
-  acceptance criteria include this hand-off.
+  unfinished collaborators as ``object`` at runtime, then tightening per
+  hand-off. P2-T2.2e cashed ``tool_registry``; P2-T4.4c cashes
+  ``permission_checker``. The marker convention (``rg "tighten to"``) is now
+  exhausted.
 - D7.5 fixes ``system_prompt`` as the *assembled* string. ``prompts.py`` (P2-T5)
   is the constructor; QueryContext just holds the result.
 
@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from openharness.api import OpenAICompatibleApiClient
+    from openharness.permissions import PermissionChecker
     from openharness.tools import ToolRegistry
 
 
@@ -38,7 +39,7 @@ class QueryContext:
 
     api_client: OpenAICompatibleApiClient
     tool_registry: ToolRegistry
-    permission_checker: object  # tighten to PermissionChecker in P2-T6
+    permission_checker: PermissionChecker
     system_prompt: str
     cwd: Path
     max_turns: int = 20

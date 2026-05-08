@@ -17,6 +17,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from engine.conftest import _AllowAllChecker
 from openharness.api import OpenAICompatibleApiClient
 from openharness.engine.context import QueryContext
 from openharness.engine.query import run_query
@@ -27,7 +28,7 @@ def _make_context() -> QueryContext:
     return QueryContext(
         api_client=cast("OpenAICompatibleApiClient", Mock(spec=OpenAICompatibleApiClient)),
         tool_registry=ToolRegistry(),
-        permission_checker=object(),
+        permission_checker=_AllowAllChecker(),
         system_prompt="",
         cwd=Path("/tmp"),
     )
