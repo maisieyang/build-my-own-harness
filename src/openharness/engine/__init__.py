@@ -1,11 +1,24 @@
 """Engine — the agent loop and its per-query collaborators.
 
-P2-T1 (this scaffold): :class:`QueryContext` carries the immutable per-query
-collaborators; :mod:`messages` exposes pure helpers that build conversation
-history; :func:`run_query` exists as a typed stub. The loop body itself
-lands in P2-T4.
+P2-T1 (this scaffold) ships:
 
-Public API is consolidated here in P2-T1 sub-unit 1d (re-exports below).
+- :class:`QueryContext` — immutable per-query collaborator bundle (sub-unit 1a).
+- :mod:`openharness.engine.messages` — pure helpers for building conversation
+  history (sub-unit 1b). Loop-internal: import from the submodule directly.
+- :func:`run_query` — async-generator entrypoint (sub-unit 1c). Body is a
+  ``NotImplementedError`` stub; P2-T4 fills it.
+
+Public API:
+
+    from openharness.engine import QueryContext, run_query
 """
 
 from __future__ import annotations
+
+from openharness.engine.context import QueryContext
+from openharness.engine.query import run_query
+
+__all__ = [
+    "QueryContext",
+    "run_query",
+]
