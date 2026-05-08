@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from openharness.protocols import ToolSpec
 from openharness.tools.base import (
     BaseTool,
     ToolExecutionContext,
@@ -153,3 +154,35 @@ class TestToolRegistry:
         listed = registry.list_tools()
         listed.clear()
         assert len(registry.list_tools()) == 1
+
+
+class TestToolRegistryToApiSchema:
+    def test_empty_registry_returns_empty_list(self) -> None:
+        assert ToolRegistry().to_api_schema() == []
+
+    def test_single_tool_schema_carries_name_and_description(self) -> None:
+        registry = ToolRegistry()
+        registry.register(_FakeTool())
+        schemas = registry.to_api_schema()
+        assert len(schemas) == 1
+        assert isinstance(schemas[0], ToolSpec)
+        assert schemas[0].name == "Fake"
+        assert schemas[0].description == "Fake tool used in tests."
+
+    def test_input_schema_reflects_pydantic_model(self) -> None:
+        # Verifies the D8.2 claim: model_json_schema() output goes through.
+        registry = ToolRegistry()
+        registry.register(_FakeTool())
+        schema = registry.to_api_schema()[0].input_schema
+        # FakeInput has a single ``value: str`` field; assert the schema
+        # carries it without binding to JSON-schema-spec implementation
+        # details (e.g., property type name format).
+        assert "properties" in schema
+        assert "value" in schema["properties"]
+
+    def test_multi_tool_order_matches_registration(self) -> None:
+        registry = ToolRegistry()
+        registry.register(_FakeTool())
+        registry.register(_AltFakeTool())
+        names = [spec.name for spec in registry.to_api_schema()]
+        assert names == ["Fake", "Alt"]

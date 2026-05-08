@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from pydantic import BaseModel
 
+from openharness.protocols import ToolSpec
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -132,5 +134,25 @@ class ToolRegistry:
 
     def list_tools(self) -> list[BaseTool[Any]]:
         """Return the registered tools in insertion order. Caller-owned list
-        copy — mutating it does not affect the registry."""
+        copy -- mutating it does not affect the registry."""
         return list(self._tools.values())
+
+    def to_api_schema(self) -> list[ToolSpec]:
+        """Project the registry to ``list[ToolSpec]`` for the API request.
+
+        Per D8.2: each tool's ``input_model.model_json_schema()`` becomes the
+        ``input_schema`` field. Per D8.8: returns the ``ToolSpec`` Pydantic
+        type from ``protocols``, not a raw ``list[dict]`` -- callers can pass
+        the result straight into ``ApiMessageRequest.tools`` without
+        translation.
+
+        Insertion order preserved (mirrors :meth:`list_tools`).
+        """
+        return [
+            ToolSpec(
+                name=tool.name,
+                description=tool.description,
+                input_schema=tool.input_model.model_json_schema(),
+            )
+            for tool in self._tools.values()
+        ]
