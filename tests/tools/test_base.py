@@ -1,12 +1,18 @@
-"""Tests for :class:`ToolResult` and :class:`ToolExecutionContext` —
-P2-T2 sub-unit 2a.
+"""Tests for :class:`ToolResult`, :class:`ToolExecutionContext`, and
+:class:`BaseTool` — P2-T2 sub-units 2a + 2b.
 
-Two contract properties matter:
+For ToolResult / ToolExecutionContext (2a):
 
 1. Both are frozen — the loop trusts results and contexts are not mutated
    after construction.
 2. ``ToolResult.metadata`` defaults to a *fresh* dict per instance — the
    classic ``= {}`` mutable-default trap would silently couple instances.
+
+For BaseTool (2b):
+
+1. ABC enforcement: subclass missing ``execute`` cannot be instantiated.
+2. ``_FakeTool`` (in conftest.py) round-trips through name / description /
+   input_model / execute and produces a ToolResult.
 """
 
 from __future__ import annotations
@@ -16,7 +22,8 @@ from pathlib import Path
 
 import pytest
 
-from openharness.tools.base import ToolExecutionContext, ToolResult
+from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from tools.conftest import FakeInput, _FakeTool
 
 
 class TestToolResult:
@@ -57,3 +64,32 @@ class TestToolExecutionContext:
         ctx = ToolExecutionContext(cwd=Path("/tmp"))
         with pytest.raises(dataclasses.FrozenInstanceError):
             ctx.cwd = Path("/elsewhere")  # type: ignore[misc]
+
+
+class TestBaseToolAbstractEnforcement:
+    def test_subclass_without_execute_cannot_instantiate(self) -> None:
+        # ABC's @abstractmethod guard: any subclass that omits ``execute``
+        # raises TypeError on instantiation, naming the missing method.
+        class _Incomplete(BaseTool[FakeInput]):
+            name = "Incomplete"
+            description = "missing execute"
+            input_model = FakeInput
+
+        with pytest.raises(TypeError, match="execute"):
+            _Incomplete()  # type: ignore[abstract]
+
+
+class TestFakeToolRoundTrip:
+    def test_class_attributes_set_correctly(self) -> None:
+        tool = _FakeTool()
+        assert tool.name == "Fake"
+        assert tool.description == "Fake tool used in tests."
+        assert tool.input_model is FakeInput
+
+    async def test_execute_returns_tool_result(self) -> None:
+        tool = _FakeTool()
+        args = FakeInput(value="hello")
+        result = await tool.execute(args, ToolExecutionContext(cwd=Path("/tmp")))
+        assert isinstance(result, ToolResult)
+        assert result.output == "value=hello"
+        assert result.is_error is False

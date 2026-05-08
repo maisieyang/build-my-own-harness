@@ -1,22 +1,29 @@
-"""Tool abstractions — :class:`ToolResult` / :class:`ToolExecutionContext`
-(P2-T2 sub-unit 2a).
+"""Tool abstractions — :class:`BaseTool`, :class:`ToolResult`,
+:class:`ToolExecutionContext` (P2-T2 sub-units 2a + 2b).
 
-Per the P2-T2 Three-Axis discussion (D8.4 / D8.5 / D8.7):
+Per the P2-T2 Three-Axis discussion (D8.1 - D8.5, D8.7):
 
-- **D8.4**: ``ToolResult.output`` is a flat ``str``. Multi-modal results are
-  Phase 5+ territory; ``metadata`` is the escape hatch for structured info.
+- **D8.1**: ``BaseTool`` is an ABC, not a Protocol. Every tool source (base
+  tools, future MCP adapter, plugins) explicitly inherits.
+- **D8.2**: ``input_model`` is a Pydantic class (``type[InputT]``). MCP
+  adapters synthesize one via ``pydantic.create_model()`` from JSON Schema.
+- **D8.3**: ``BaseTool`` is generic in ``InputT`` (a ``BaseModel`` subclass)
+  so subclasses can write ``execute(args: ReadInput, ...)`` without an LSP
+  violation.
+- **D8.4**: ``ToolResult.output`` is a flat ``str``. ``metadata`` is the
+  escape hatch for structured info.
 - **D8.5**: ``is_error=True`` represents a *recoverable* failure the LLM can
-  see and react to (file not found, command non-zero exit). Programming
-  errors propagate via ``raise`` instead of being smuggled into the result.
-- **D8.7**: ``ToolExecutionContext`` carries only ``cwd`` for now. Field set
-  is intentionally minimal — adding fields later is non-breaking because
-  the only caller (``run_query`` in P2-T4) is internal.
+  react to. Programming errors ``raise`` instead.
+- **D8.7**: ``ToolExecutionContext`` carries only ``cwd`` for now.
 """
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
+
+from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -51,3 +58,47 @@ class ToolExecutionContext:
     """
 
     cwd: Path
+
+
+# Bound to BaseModel so every tool's input is parseable from the LLM's
+# JSON dict via ``model.model_validate(...)``.
+InputT = TypeVar("InputT", bound=BaseModel)
+
+
+class BaseTool(ABC, Generic[InputT]):
+    """Abstract base class for every tool the agent can invoke.
+
+    Subclasses define four things:
+
+    1. ``name`` — unique identifier; PascalCase per ``decisions/06`` D6.4.
+    2. ``description`` — one-line LLM-visible description.
+    3. ``input_model`` — Pydantic class describing the tool's arguments.
+    4. ``execute`` — the async body that does the actual work.
+
+    ABC enforcement: ``execute`` is ``@abstractmethod``, so any subclass
+    that forgets it cannot be instantiated. ``name`` / ``description`` /
+    ``input_model`` are class-level annotations — mypy strict catches
+    subclasses that omit them at static-check time; at runtime, accessing
+    a missing attribute raises ``AttributeError``.
+    """
+
+    # Class attributes subclasses must assign. No defaults here — that would
+    # make incomplete subclasses silently inherit base values.
+    name: str
+    description: str
+    input_model: type[InputT]
+
+    @abstractmethod
+    async def execute(
+        self,
+        args: InputT,
+        context: ToolExecutionContext,
+    ) -> ToolResult:
+        """Run the tool with already-validated ``args`` and return a result.
+
+        Recoverable failures (file not found, command non-zero exit, network
+        timeout) → ``ToolResult(is_error=True, output="<error message>")`` so
+        the LLM can read the error and adapt. Programming errors (assertion
+        failures, type mismatches that escaped validation) → ``raise`` and
+        let the loop surface them.
+        """
