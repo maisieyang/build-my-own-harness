@@ -537,6 +537,142 @@ class TestRunQueryProgrammingErrorPropagation:
                 pass
 
 
+class TestRunQueryDryRunMode:
+    """D12.5: PermissionMode.DRY_RUN bypasses permission_checker and
+    tool.execute() entirely, emitting synthetic "would call X with Y"
+    completions so the LLM sees loop progress without side effects."""
+
+    async def test_dry_run_skips_execute_and_emits_synthetic_completion(
+        self,
+    ) -> None:
+        from openharness.permissions import PermissionMode
+        from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+        from tools.conftest import FakeInput
+
+        # A tool that would CRASH if actually called -- proves DRY_RUN
+        # short-circuit really skips execute.
+        class _MustNotRun(BaseTool[FakeInput]):
+            name = "Fake"
+            description = "Crashes if executed -- DRY_RUN should never run this."
+            input_model = FakeInput
+
+            async def execute(
+                self,
+                args: FakeInput,
+                context: ToolExecutionContext,
+            ) -> ToolResult:
+                del args, context
+                raise AssertionError("execute() called under DRY_RUN")
+
+        registry = ToolRegistry()
+        registry.register(_MustNotRun())
+        client = _StubApiClient(
+            events_per_turn=[
+                [_fake_tool_use_event(tool_input={"value": "anything"})],
+                [_end_turn_event()],
+            ],
+        )
+        ctx = _make_context(api_client=client, tool_registry=registry)
+        ctx = dataclasses.replace(ctx, permission_mode=PermissionMode.DRY_RUN)
+
+        events = [
+            event
+            async for event in run_query(
+                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+                ctx,
+            )
+        ]
+        completed = next(
+            event for event in events if isinstance(event, ToolExecutionCompletedEvent)
+        )
+        assert completed.is_error is False
+        assert completed.output.startswith("would call Fake with ")
+        assert "anything" in completed.output  # input echoed back
+
+    async def test_dry_run_bypasses_deny_listed_command(self) -> None:
+        # A "rm -rf /" command would normally hit DenyListChecker; under
+        # DRY_RUN we never even consult the checker -- the synthetic
+        # "would call" path runs instead.
+        from openharness.permissions import DenyListChecker, PermissionMode
+        from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+        from tools.conftest import FakeInput
+
+        # Fake that masquerades as Bash for deny-list purposes.
+        class _BashLike(BaseTool[FakeInput]):
+            name = "Bash"
+            description = "Bash-like; would run if execute() reached."
+            input_model = FakeInput
+
+            async def execute(
+                self,
+                args: FakeInput,
+                context: ToolExecutionContext,
+            ) -> ToolResult:
+                del args, context
+                raise AssertionError("execute() called under DRY_RUN")
+
+        registry = ToolRegistry()
+        registry.register(_BashLike())
+        client = _StubApiClient(
+            events_per_turn=[
+                [_fake_tool_use_event(tool_name="Bash", tool_input={"value": "x"})],
+                [_end_turn_event()],
+            ],
+        )
+        ctx = _make_context(api_client=client, tool_registry=registry)
+        ctx = dataclasses.replace(
+            ctx,
+            permission_checker=DenyListChecker(),
+            permission_mode=PermissionMode.DRY_RUN,
+        )
+
+        events = [
+            event
+            async for event in run_query(
+                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+                ctx,
+            )
+        ]
+        completed = next(
+            event for event in events if isinstance(event, ToolExecutionCompletedEvent)
+        )
+        # No "permission denied" -- DRY_RUN doesn't consult the checker.
+        assert "would call Bash" in completed.output
+        assert completed.is_error is False
+
+    async def test_auto_mode_behaves_like_default_in_phase2(self) -> None:
+        # D12.4: AUTO is reserved for Phase 3 (skip interactive confirmation).
+        # In Phase 2 it must behave identically to DEFAULT — pass through to
+        # permission_checker + tool.execute().
+        from openharness.permissions import PermissionMode
+
+        client = _StubApiClient(
+            events_per_turn=[
+                [_fake_tool_use_event(tool_input={"value": "hello"})],
+                [_end_turn_event()],
+            ],
+        )
+        ctx = _make_context(
+            api_client=client,
+            tool_registry=_registry_with_fake_tool(),
+        )
+        ctx = dataclasses.replace(ctx, permission_mode=PermissionMode.AUTO)
+
+        events = [
+            event
+            async for event in run_query(
+                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+                ctx,
+            )
+        ]
+        completed = next(
+            event for event in events if isinstance(event, ToolExecutionCompletedEvent)
+        )
+        # Real tool ran -- output is the FakeTool's "value=hello", not "would call".
+        assert completed.output == "value=hello"
+        assert completed.is_error is False
+
+
 class TestRunQueryParallelToolUsesInOneTurn:
     """LLM may emit multiple tool_use blocks in one assistant message.
     D6.3 says serial within a turn -- order must be preserved."""

@@ -36,7 +36,7 @@ from openharness.engine.messages import (
     append_tool_results,
     extract_tool_uses,
 )
-from openharness.permissions import Decision
+from openharness.permissions import Decision, PermissionMode
 from openharness.protocols import (
     ApiMessageCompleteEvent,
     ApiMessageRequest,
@@ -110,7 +110,14 @@ async def run_query(
                 tool_name=tool_use.name,
                 tool_input=tool_use.input,
             )
-            output, is_error = await _dispatch_one(tool_use, context, exec_context)
+            # D12.5: DRY_RUN bypasses both permission_checker and execute(),
+            # emitting a synthetic "would call X with Y" result so the LLM
+            # sees the loop progressing but no side effects occur.
+            if context.permission_mode is PermissionMode.DRY_RUN:
+                output = f"would call {tool_use.name} with {tool_use.input}"
+                is_error = False
+            else:
+                output, is_error = await _dispatch_one(tool_use, context, exec_context)
             yield ToolExecutionCompletedEvent(
                 tool_use_id=tool_use.id,
                 tool_name=tool_use.name,
