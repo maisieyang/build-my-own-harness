@@ -2,10 +2,12 @@
 
 Per the P2-T1 Three-Axis discussion (D7.1 / D7.2 / D7.5):
 
-- D7.1 fixes the field set at the final shape (6 fields).
-- D7.2 lets us keep the engine independent of P2-T2 / P2-T6 by typing the
-  unfinished collaborators as ``object`` at runtime, then tightening per
-  hand-off. P2-T2.2e cashed ``tool_registry``; P2-T4.4c cashes
+- D7.1 originally fixed the field set at 6 entries. P2-T4.4d revised this to
+  add ``model`` and ``max_tokens`` -- both are per-query immutables that the
+  loop needs to construct each ``ApiMessageRequest``. Recorded as an
+  amendment in ``learnings/08-run-query.md``.
+- D7.2 typed unfinished collaborators as ``object`` at runtime, then tightened
+  per hand-off. P2-T2.2e cashed ``tool_registry``; P2-T4.4c cashed
   ``permission_checker``. The marker convention (``rg "tighten to"``) is now
   exhausted.
 - D7.5 fixes ``system_prompt`` as the *assembled* string. ``prompts.py`` (P2-T5)
@@ -42,4 +44,6 @@ class QueryContext:
     permission_checker: PermissionChecker
     system_prompt: str
     cwd: Path
+    model: str
+    max_tokens: int = 1024
     max_turns: int = 20

@@ -1,21 +1,35 @@
-"""Query loop public entrypoint — typed stub for P2-T1 sub-unit 1c.
+"""``run_query`` -- the agent loop.
 
-The body lands in P2-T4. P2-T1 ships only the *signature* so that:
+Per the first-principles map (``learnings/openharness-first-principles.md`` §1),
+the loop is::
 
-- ``cli.py`` (P2-T6) can already import the symbol it will call.
-- ``QueryContext`` (1a) and ``messages.py`` (1b) have a load-bearing consumer
-  exercising their public types — if the signature here doesn't compile, one
-  of the helper modules has a public-API problem.
+    while True:
+        stream = llm.stream(messages)
+        parse tool_use blocks
+        for each tool_use: check permission, execute, append result
+        if stop_reason == "end_turn": break
 
-Per D7.4 (Three-Axis kickoff): the entrypoint takes
-``list[ConversationMessage]`` — not a bare prompt string — so the caller (CLI
-for one-shot prompts, future Memory layer for restored history) controls
-history shape; ``run_query`` only consumes.
+P2-T4 sub-units land this in stages:
+
+- 4d (this commit): no-tool path. Build request, stream events, exit on
+  ``end_turn`` / ``max_tokens`` / ``stop_sequence``. The ``stop_reason ==
+  "tool_use"`` branch raises an explicit stub for 4e to clear.
+- 4e: 1-tool path with the four recovery flows (validation / not-found /
+  denied / tool is_error).
+- 4f: multi-turn + ``LoopLimitExceeded`` boundary + programming-error
+  propagation.
+
+Per D6.1 the loop exits on ``stop_reason == "end_turn"`` (or any non-tool_use
+reason from the API: ``max_tokens`` / ``stop_sequence``); per D6.3 tools execute
+serially within a turn (4e onward).
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+
+from openharness.engine.errors import LoopLimitExceeded
+from openharness.protocols import ApiMessageCompleteEvent, ApiMessageRequest
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -25,18 +39,46 @@ if TYPE_CHECKING:
 
 
 async def run_query(
-    initial_messages: list[ConversationMessage],  # noqa: ARG001  -- P2-T4 body uses
-    context: QueryContext,  # noqa: ARG001  -- P2-T4 body uses
+    initial_messages: list[ConversationMessage],
+    context: QueryContext,
 ) -> AsyncIterator[ApiStreamEvent]:
     """Drive the agent loop, yielding stream events until ``end_turn`` or the
     ``max_turns`` cap is reached.
 
-    Stub for P2-T1: raises :class:`NotImplementedError` on first iteration.
-    Body lands in P2-T4 (run_query core loop).
+    Yields events in the order they arrive: API events from
+    ``stream_message`` (retry / text-delta / message-complete) interleaved
+    with engine events from tool dispatch (started / completed) once 4e+
+    fills the tool path.
     """
-    raise NotImplementedError("run_query body lands in P2-T4")
-    # The `yield` below is unreachable but its mere presence in the AST is what
-    # makes Python treat this as an async-generator function (so callers iterate
-    # rather than await). Without it, this would be a plain coroutine and the
-    # signature would be a lie.
-    yield  # type: ignore[unreachable]
+    # Defensive copy: the caller's list must not be mutated even though the
+    # messages helpers (engine.messages) all return new lists.
+    messages = list(initial_messages)
+
+    for _turn in range(context.max_turns):
+        request = ApiMessageRequest(
+            model=context.model,
+            max_tokens=context.max_tokens,
+            system=context.system_prompt or None,
+            messages=messages,
+            tools=context.tool_registry.to_api_schema() or None,
+        )
+
+        complete_event: ApiMessageCompleteEvent | None = None
+        async for event in context.api_client.stream_message(request):
+            yield event
+            if isinstance(event, ApiMessageCompleteEvent):
+                complete_event = event
+
+        # ``stream_message`` always emits exactly one terminal event
+        # (api/client.py docstring); if it didn't, we have a contract bug
+        # and the assertion surfaces it loudly rather than silently looping.
+        assert complete_event is not None, "stream_message yielded no terminal event"
+
+        if complete_event.stop_reason != "tool_use":
+            return  # end_turn / max_tokens / stop_sequence -> clean exit
+
+        # P2-T4.4e fills the tool dispatch path: extract tool_uses, permission
+        # check, execute, emit ToolExecution events, append tool results, loop.
+        raise NotImplementedError("tool dispatch lands in P2-T4.4e")
+
+    raise LoopLimitExceeded(max_turns=context.max_turns)

@@ -68,5 +68,6 @@ def test_query_context_accepts_real_tool_registry() -> None:
         permission_checker=_AllowAllChecker(),
         system_prompt="",
         cwd=Path("/tmp"),
+        model="qwen-plus",
     )
     assert isinstance(ctx.tool_registry, ToolRegistry)

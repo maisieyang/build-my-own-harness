@@ -1,27 +1,28 @@
-"""Integration tests across the engine package — P2-T1 sub-unit 1d.
+"""Integration tests across the engine package — P2-T1 sub-unit 1d
+(extended in P2-T4.4d).
 
 Verifies the public API contract:
 
 1. ``QueryContext`` and ``run_query`` resolve via ``openharness.engine`` directly
    (no need for callers to know about submodule layout).
 2. They compose end-to-end via the public path: build a context, call
-   run_query, iterate once, get the expected NotImplementedError.
+   run_query, iterate it, observe a clean exit on a no-tool turn.
 
 Helpers in :mod:`openharness.engine.messages` are intentionally **not**
 re-exported at the package root — they are implementation detail consumed
-by ``run_query`` (P2-T4). Callers needing them import from the submodule.
+by ``run_query``. Callers needing them import from the submodule.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
-from unittest.mock import Mock
 
-import pytest
-
-from engine.conftest import _AllowAllChecker
-from openharness.api import OpenAICompatibleApiClient
+from engine.conftest import _AllowAllChecker, _StubApiClient
+from openharness.protocols import (
+    ApiMessageCompleteEvent,
+    ConversationMessage,
+    TextBlock,
+)
 from openharness.tools import ToolRegistry
 
 
@@ -51,14 +52,30 @@ async def test_query_context_and_run_query_compose_via_public_path() -> None:
     """End-to-end shape via public imports — locks the surface in place."""
     from openharness.engine import QueryContext, run_query
 
+    end_turn = ApiMessageCompleteEvent.model_validate(
+        {
+            "message": {"role": "assistant", "content": []},
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+            "stop_reason": "end_turn",
+        }
+    )
+    client = _StubApiClient(events_per_turn=[[end_turn]])
+
     ctx = QueryContext(
-        api_client=cast("OpenAICompatibleApiClient", Mock(spec=OpenAICompatibleApiClient)),
+        api_client=client,  # type: ignore[arg-type]
         tool_registry=ToolRegistry(),
         permission_checker=_AllowAllChecker(),
         system_prompt="",
         cwd=Path("/tmp"),
+        model="qwen-plus",
     )
 
-    gen = run_query([], ctx)
-    with pytest.raises(NotImplementedError, match="P2-T4"):
-        await anext(gen)
+    collected = [
+        event
+        async for event in run_query(
+            [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+            ctx,
+        )
+    ]
+    assert len(collected) == 1
+    assert isinstance(collected[0], ApiMessageCompleteEvent)

@@ -40,6 +40,7 @@ def context() -> QueryContext:
         permission_checker=_AllowAllChecker(),
         system_prompt="you are a test harness",
         cwd=Path("/tmp"),
+        model="qwen-plus",
     )
 
 
@@ -66,6 +67,7 @@ class TestQueryContext:
             permission_checker=_AllowAllChecker(),
             system_prompt="",
             cwd=Path("/tmp"),
+            model="qwen-plus",
             max_turns=5,
         )
         assert ctx.max_turns == 5
