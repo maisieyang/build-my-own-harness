@@ -1,23 +1,34 @@
 """Permission system -- decides whether a tool call may execute.
 
-P2-T4 (this scaffold) ships only the *interface* (D10.1):
+P2-T4.4c shipped the *interface*; P2-T6 ships the implementations:
 
 - :class:`Decision` enum (ALLOW / DENY)
+- :class:`PermissionMode` enum (DEFAULT / AUTO / DRY_RUN)
 - :class:`PermissionChecker` Protocol with ``evaluate(...)``
-
-The actual deny-list implementation lands in P2-T6 alongside the CLI flags
-(``--auto`` / ``--dry-run``).
+- :class:`DenyListChecker` -- minimal Bash deny-list
 
 Public API:
 
-    from openharness.permissions import Decision, PermissionChecker
+    from openharness.permissions import (
+        Decision,
+        DenyListChecker,
+        PermissionChecker,
+        PermissionMode,
+    )
 """
 
 from __future__ import annotations
 
-from openharness.permissions.checker import Decision, PermissionChecker
+from openharness.permissions.checker import (
+    Decision,
+    DenyListChecker,
+    PermissionChecker,
+    PermissionMode,
+)
 
 __all__ = [
     "Decision",
+    "DenyListChecker",
     "PermissionChecker",
+    "PermissionMode",
 ]
