@@ -1,18 +1,17 @@
 """Append-only streaming renderer: ``ApiStreamEvent`` → terminal.
 
-Phase 1 ships the simplest possible renderer (D5.5):
+Phase 1 (D5.5) shipped a 3-event renderer; P2-T6.6d extends it with the two
+engine-emitted tool events introduced in P2-T4.4a:
 
 - :class:`ApiTextDeltaEvent` → write ``text`` to stdout, no newline, flushed
 - :class:`ApiRetryEvent`     → diagnostic line on stderr (does not pollute stdout)
 - :class:`ApiMessageCompleteEvent` → trailing newline (only if any text was emitted)
+- :class:`ToolExecutionStartedEvent` → ``[ToolName] arg1=v1 arg2=v2\\n`` (D12.6)
+- :class:`ToolExecutionCompletedEvent` → ``[ToolName] → output (truncated)\\n``,
+  with ``[ToolName error] ...`` prefix on ``is_error=True``
 
-No Markdown re-render, no Rich live region, no JSON output mode -- those
-arrive in Tier 1 alongside proper Print mode. "First signal" deliberately
-mirrors ``cat`` / ``curl --no-buffer``: an append-only byte stream that
-composes with pipes (``oh ask "..." | tee out.txt``).
-
-The renderer accepts injectable ``stdout`` / ``stderr`` so tests verify
-output without touching real file descriptors.
+Tool events render on their own line with a ``[Tool]`` prefix; output is
+truncated at ``MAX_OUTPUT_PREVIEW`` chars to keep terminal noise bounded.
 """
 
 from __future__ import annotations
@@ -24,6 +23,8 @@ from openharness.protocols.stream_events import (
     ApiMessageCompleteEvent,
     ApiRetryEvent,
     ApiTextDeltaEvent,
+    ToolExecutionCompletedEvent,
+    ToolExecutionStartedEvent,
 )
 
 if TYPE_CHECKING:
@@ -31,6 +32,12 @@ if TYPE_CHECKING:
     from typing import TextIO
 
     from openharness.protocols.stream_events import ApiStreamEvent
+
+
+# Per D12.6: cap tool output rendered to terminal so a 12k-char Bash dump
+# doesn't drown the LLM's actual answer. The full output is still in the
+# ToolResultBlock that goes back to the LLM -- this is purely UI hygiene.
+MAX_OUTPUT_PREVIEW = 500
 
 
 async def render_stream(
@@ -41,11 +48,10 @@ async def render_stream(
 ) -> ApiMessageCompleteEvent | None:
     """Drain ``events`` to ``stdout`` / ``stderr``; return the terminal event.
 
-    Returning :class:`ApiMessageCompleteEvent` lets the caller inspect the
-    final assembled message (e.g., for testing or for future "show usage"
-    flags) without re-parsing terminal output. Returns ``None`` if the
-    stream ended without a complete event -- which only happens if an
-    exception escaped mid-stream and was caught by the caller.
+    Returns the *last* :class:`ApiMessageCompleteEvent` seen (multi-turn
+    loops emit several -- one per turn). Returns ``None`` if the stream
+    ended without a complete event -- which only happens if an exception
+    escaped mid-stream and was caught by the caller.
     """
     out = sys.stdout if stdout is None else stdout
     err = sys.stderr if stderr is None else stderr
@@ -69,5 +75,31 @@ async def render_stream(
             if saw_text:
                 out.write("\n")
                 out.flush()
+                # Reset so the next turn's text deltas decide independently
+                # whether to add a trailing newline.
+                saw_text = False
+        elif isinstance(event, ToolExecutionStartedEvent):
+            out.write(_render_tool_started(event))
+            out.flush()
+        elif isinstance(event, ToolExecutionCompletedEvent):
+            out.write(_render_tool_completed(event))
+            out.flush()
 
     return final
+
+
+def _render_tool_started(event: ToolExecutionStartedEvent) -> str:
+    """``[Bash] command="ls /tmp"`` style line."""
+    args_repr = " ".join(f"{k}={v!r}" for k, v in event.tool_input.items())
+    return f"[{event.tool_name}] {args_repr}\n"
+
+
+def _render_tool_completed(event: ToolExecutionCompletedEvent) -> str:
+    """``[Bash] → output...`` (success) or ``[Bash error] ...`` (recoverable)."""
+    label = f"{event.tool_name} error" if event.is_error else event.tool_name
+    output = event.output
+    if len(output) > MAX_OUTPUT_PREVIEW:
+        dropped = len(output) - MAX_OUTPUT_PREVIEW
+        output = output[:MAX_OUTPUT_PREVIEW] + f"... [+{dropped} chars]"
+    arrow = "✗" if event.is_error else "→"
+    return f"[{label}] {arrow} {output}\n"
