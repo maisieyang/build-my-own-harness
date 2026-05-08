@@ -15,6 +15,7 @@ Subsequent sub-units (4e/4f) replace the tripwire with real tool dispatch.
 
 from __future__ import annotations
 
+import dataclasses
 import inspect
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -23,6 +24,7 @@ import pytest
 
 from engine.conftest import _AllowAllChecker, _StubApiClient
 from openharness.engine.context import QueryContext
+from openharness.engine.errors import LoopLimitExceeded
 from openharness.engine.query import run_query
 from openharness.protocols import (
     ApiMessageCompleteEvent,
@@ -430,3 +432,165 @@ class TestRunQueryRecoveryPaths:
         )
         assert completed.is_error is True
         assert completed.output == "something went wrong"
+
+
+class TestRunQueryMultiTurn:
+    """3+ turns of tool_use, finally end_turn -> clean exit."""
+
+    async def test_three_turns_then_end_turn(self) -> None:
+        client = _StubApiClient(
+            events_per_turn=[
+                [_fake_tool_use_event(tool_use_id="t1", tool_input={"value": "1"})],
+                [_fake_tool_use_event(tool_use_id="t2", tool_input={"value": "2"})],
+                [_fake_tool_use_event(tool_use_id="t3", tool_input={"value": "3"})],
+                [_end_turn_event(text="all done")],
+            ],
+        )
+        context = _make_context(
+            api_client=client,
+            tool_registry=_registry_with_fake_tool(),
+        )
+
+        events = [
+            event
+            async for event in run_query(
+                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+                context,
+            )
+        ]
+
+        # 4 API turns made; 3 tool dispatches done.
+        assert client._turn == 4
+        started = [e for e in events if isinstance(e, ToolExecutionStartedEvent)]
+        completed = [e for e in events if isinstance(e, ToolExecutionCompletedEvent)]
+        assert [e.tool_use_id for e in started] == ["t1", "t2", "t3"]
+        assert [e.tool_use_id for e in completed] == ["t1", "t2", "t3"]
+        # Final API event is end_turn.
+        api_completes = [e for e in events if isinstance(e, ApiMessageCompleteEvent)]
+        assert api_completes[-1].stop_reason == "end_turn"
+
+
+class TestRunQueryMaxTurnsBoundary:
+    """Hitting the max_turns cap raises LoopLimitExceeded -- D6.1 hard floor."""
+
+    async def test_max_turns_exhausted_raises_loop_limit_exceeded(self) -> None:
+        client = _StubApiClient(
+            events_per_turn=[
+                [_fake_tool_use_event(tool_use_id="t1", tool_input={"value": "1"})],
+                [_fake_tool_use_event(tool_use_id="t2", tool_input={"value": "2"})],
+            ],
+        )
+        context = _make_context(
+            api_client=client,
+            tool_registry=_registry_with_fake_tool(),
+        )
+        # Cap to 2 turns -- both consumed by tool_use, no end_turn.
+        context = dataclasses.replace(context, max_turns=2)
+
+        with pytest.raises(LoopLimitExceeded) as exc_info:
+            async for _ in run_query(
+                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+                context,
+            ):
+                pass
+
+        assert exc_info.value.max_turns == 2
+        # Both configured turns ran before the loop exhausted.
+        assert client._turn == 2
+
+
+class TestRunQueryProgrammingErrorPropagation:
+    """Per D8.5/D10.5: tool.execute()'s raise propagates through the
+    async generator -- not silently caught."""
+
+    async def test_runtime_error_in_execute_surfaces_to_caller(self) -> None:
+        from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+        from tools.conftest import FakeInput
+
+        class _CrashingFake(BaseTool[FakeInput]):
+            name = "Fake"
+            description = "Crashes mid-execution -- should propagate."
+            input_model = FakeInput
+
+            async def execute(
+                self,
+                args: FakeInput,
+                context: ToolExecutionContext,
+            ) -> ToolResult:
+                del args, context
+                raise RuntimeError("boom")
+
+        registry = ToolRegistry()
+        registry.register(_CrashingFake())
+        client = _StubApiClient(
+            events_per_turn=[
+                [_fake_tool_use_event(tool_input={"value": "x"})],
+            ],
+        )
+        context = _make_context(api_client=client, tool_registry=registry)
+
+        with pytest.raises(RuntimeError, match="boom"):
+            async for _ in run_query(
+                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+                context,
+            ):
+                pass
+
+
+class TestRunQueryParallelToolUsesInOneTurn:
+    """LLM may emit multiple tool_use blocks in one assistant message.
+    D6.3 says serial within a turn -- order must be preserved."""
+
+    async def test_two_tool_uses_dispatch_in_emission_order(self) -> None:
+        multi_use = ApiMessageCompleteEvent.model_validate(
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "ta",
+                            "name": "Fake",
+                            "input": {"value": "first"},
+                        },
+                        {
+                            "type": "tool_use",
+                            "id": "tb",
+                            "name": "Fake",
+                            "input": {"value": "second"},
+                        },
+                    ],
+                },
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+                "stop_reason": "tool_use",
+            }
+        )
+        client = _StubApiClient(
+            events_per_turn=[
+                [multi_use],
+                [_end_turn_event()],
+            ],
+        )
+        context = _make_context(
+            api_client=client,
+            tool_registry=_registry_with_fake_tool(),
+        )
+
+        events = [
+            event
+            async for event in run_query(
+                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+                context,
+            )
+        ]
+
+        started = [e for e in events if isinstance(e, ToolExecutionStartedEvent)]
+        completed = [e for e in events if isinstance(e, ToolExecutionCompletedEvent)]
+        # Order preserved: ta before tb
+        assert [e.tool_use_id for e in started] == ["ta", "tb"]
+        assert [e.tool_use_id for e in completed] == ["ta", "tb"]
+        # Each tool's Started immediately precedes its Completed (D6.3 serial).
+        ta_start_idx = events.index(started[0])
+        ta_done_idx = events.index(completed[0])
+        tb_start_idx = events.index(started[1])
+        assert ta_start_idx < ta_done_idx < tb_start_idx
