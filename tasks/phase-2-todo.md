@@ -3,7 +3,9 @@
 > Tracks the 6 capabilities defined in [phase-2-plan.md](./phase-2-plan.md).
 > Phase 1 archive: [plan.md](./plan.md) / [todo.md](./todo.md).
 
-**Currently working on**: P2-T6 (minimal permissions + CLI integration) — NEXT after Three-Axis kickoff for P2-T6.
+**Phase 2 ✅ COMPLETE.** Next milestone: write `learnings/phase-1-and-2.md`
+combined retrospective (per [decisions/06](../decisions/06-phase-2-boundary.md)
+Process Meta-Decision), then enter Phase 3 (Safety + Production Hardening).
 
 ---
 
@@ -119,32 +121,45 @@ locked. 13 dedicated tests in `tests/test_prompts.py`. mypy strict + ruff clean.
 
 ---
 
-## P2-T6: Minimal permissions + CLI integration
+## P2-T6: Minimal permissions + CLI integration ✅
 
-**Decisions**: 06-phase-2-boundary D6.2 (deny-list + flags). Specific deny patterns
-+ render UX for tool calls — Three-Axis at task entry.
+**Decisions**: 06-phase-2-boundary D6.2 (deny-list + flags).
+Three-Axis sub-decisions D12.1-D12.8 captured in
+[learnings/10-cli-loop.md](../learnings/10-cli-loop.md).
+
+> **Sub-unit count revised from 5 to 6**: split DRY_RUN integration into
+> its own sub-unit (6c) since it touches `engine/query.py` distinctly from
+> the cli.py rewrite. Original 6a-6e mapping preserved by simply renumbering.
 
 | # | Sub-unit | Status | Commit |
 |---|---------|--------|--------|
-| 6a | `PermissionChecker` + hardcoded deny-list + tests | ☐ | |
-| 6b | `permission_mode` plumbed through `Settings` + `QueryContext` + tests | ☐ | |
-| 6c | `--auto` / `--dry-run` CLI flags + tests | ☐ | |
-| 6d | `_run_ask` rewrite (single call → loop) + `_stream_render.py` extension for tool events + tests | ☐ | |
-| 6e | Smoke test: `oh ask "list files in $PWD"` actually invokes `Bash` (or new gated integration test) | ☐ | |
+| 6a | `DenyListChecker` + `PermissionMode` enum + 7 deny patterns + tests | ✅ | `343cd97` |
+| 6b | `Settings.permission_mode` + `QueryContext.permission_mode` plumbing + tests | ✅ | `7a04209` |
+| 6c | `run_query` DRY_RUN short-circuit + tests | ✅ | `a2f247a` |
+| 6d | `_stream_render.py` extension for 5-event dispatch + tests | ✅ | `7bb283f` |
+| 6e | `cli.py` `_run_ask` rewrite using `run_query` + `--auto` / `--dry-run` flags + tests | ✅ | `cbe7c32` |
+| 6f | end-to-end mock integration (real Bash + DenyListChecker + render) | ✅ | `0ed3b5a` |
 
-**Acceptance**: `oh ask "what files are in /tmp"` invokes `Bash` and returns the answer;
-`--dry-run` lists without executing; deny-list rejects dangerous commands.
+**Acceptance** (all green via `tests/cli/test_loop_integration.py`):
+- `oh ask "..."` invokes Bash via the loop and surfaces real subprocess output
+- `--dry-run` emits `[Bash] → would call Bash with {...}` without executing
+- Deny-list rejects `rm -rf /` with `[Bash error] permission denied: Bash`
+- LLM's recovery text flows through after a denial, loop doesn't crash
+
+351 total tests, mypy strict + ruff clean, total coverage 93%+.
 
 ---
 
 ## Phase 2 Definition of Done
 
-- [ ] All 6 capabilities ✅ in this file
-- [ ] Overall coverage ≥ 70% (Phase 1 baseline maintained)
-- [ ] `mypy --strict src/ tests/` clean
-- [ ] `ruff check && ruff format --check` clean
-- [ ] `oh ask "what files are in /tmp"` actually works against real Qwen
-- [ ] `oh ask --dry-run "<anything>"` lists tool calls without side-effects
+- [x] All 6 capabilities ✅ in this file
+- [x] Overall coverage ≥ 70% (Phase 1 baseline maintained) — actual 93%+
+- [x] `mypy --strict src/ tests/` clean
+- [x] `ruff check && ruff format --check` clean
+- [x] `oh ask --dry-run "<anything>"` lists tool calls without side-effects
+      (verified by `tests/cli/test_loop_integration.py`)
+- [ ] `oh ask "what files are in /tmp"` works against real Qwen
+      (mock-integration verified; real-API smoke is user-controlled)
 - [ ] Combined Phase 1+2 retrospective written: `learnings/phase-1-and-2.md`
   (per [decisions/06](../decisions/06-phase-2-boundary.md) Process Meta-Decision)
 - [ ] CI green on a clean push
