@@ -27,6 +27,8 @@ from openharness.protocols.stream_events import (
     ApiRetryEvent,
     ApiStreamEvent,
     ApiTextDeltaEvent,
+    ToolExecutionCompletedEvent,
+    ToolExecutionStartedEvent,
 )
 from openharness.protocols.tools import ToolSpec
 from openharness.protocols.usage import UsageSnapshot
@@ -42,6 +44,8 @@ __all__ = [
     "ImageBlock",
     "ImageSource",
     "TextBlock",
+    "ToolExecutionCompletedEvent",
+    "ToolExecutionStartedEvent",
     "ToolResultBlock",
     "ToolSpec",
     "ToolUseBlock",

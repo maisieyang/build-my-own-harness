@@ -12,6 +12,8 @@ from openharness.protocols.stream_events import (
     ApiRetryEvent,
     ApiStreamEvent,
     ApiTextDeltaEvent,
+    ToolExecutionCompletedEvent,
+    ToolExecutionStartedEvent,
 )
 from openharness.protocols.usage import UsageSnapshot
 
@@ -148,6 +150,74 @@ class TestApiStreamEventDiscriminator:
     def test_unknown_type_rejected(self) -> None:
         with pytest.raises(ValidationError):
             _EVENT_ADAPTER.validate_python({"type": "made_up_event"})
+
+    def test_dispatch_tool_execution_started(self) -> None:
+        event = _EVENT_ADAPTER.validate_python(
+            {
+                "type": "tool_execution_started",
+                "tool_use_id": "toolu_01A",
+                "tool_name": "Bash",
+                "tool_input": {"command": "ls"},
+            }
+        )
+        assert isinstance(event, ToolExecutionStartedEvent)
+        assert event.tool_input == {"command": "ls"}
+
+    def test_dispatch_tool_execution_completed(self) -> None:
+        event = _EVENT_ADAPTER.validate_python(
+            {
+                "type": "tool_execution_completed",
+                "tool_use_id": "toolu_01A",
+                "tool_name": "Bash",
+                "output": "file.txt\n",
+                "is_error": False,
+            }
+        )
+        assert isinstance(event, ToolExecutionCompletedEvent)
+        assert event.is_error is False
+
+
+class TestToolExecutionEvents:
+    def test_started_event_construction(self) -> None:
+        event = ToolExecutionStartedEvent(
+            tool_use_id="toolu_x",
+            tool_name="Read",
+            tool_input={"path": "README.md"},
+        )
+        assert event.type == "tool_execution_started"
+        assert event.tool_name == "Read"
+
+    def test_completed_event_with_error_flag(self) -> None:
+        event = ToolExecutionCompletedEvent(
+            tool_use_id="toolu_y",
+            tool_name="Bash",
+            output="permission denied",
+            is_error=True,
+        )
+        assert event.type == "tool_execution_completed"
+        assert event.is_error is True
+
+    def test_started_extra_field_forbidden(self) -> None:
+        with pytest.raises(ValidationError):
+            ToolExecutionStartedEvent.model_validate(
+                {
+                    "type": "tool_execution_started",
+                    "tool_use_id": "x",
+                    "tool_name": "Bash",
+                    "tool_input": {},
+                    "extra": "no",
+                }
+            )
+
+    def test_completed_roundtrip(self) -> None:
+        original = ToolExecutionCompletedEvent(
+            tool_use_id="t1",
+            tool_name="Read",
+            output="contents",
+            is_error=False,
+        )
+        loaded = ToolExecutionCompletedEvent.model_validate_json(original.model_dump_json())
+        assert loaded == original
 
 
 class TestRealisticStreamingSequence:
