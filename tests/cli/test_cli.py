@@ -261,3 +261,114 @@ class TestArgumentValidation:
         result = runner.invoke(cli_module.app, ["ask", "hi", "--max-tokens", "0"])
         # min=1 → Click reports "Invalid value".
         assert result.exit_code == 2
+
+
+# --------------------------------------------------------------------------- #
+# Permission flags (P2-T6.6e)                                                 #
+# --------------------------------------------------------------------------- #
+
+
+class _CapturedContext:
+    """Holds the QueryContext that ``cli._run_ask`` constructs.
+
+    ``cli.run_query`` is monkeypatched to a function that records its
+    ``context`` argument here, then yields a single end_turn event so
+    ``render_stream`` completes cleanly. This is the only way to verify
+    flag → permission_mode propagation without inspecting Typer internals.
+    """
+
+    def __init__(self) -> None:
+        self.context: object | None = None
+
+
+def _patch_run_query_capture(monkeypatch: pytest.MonkeyPatch, captured: _CapturedContext) -> None:
+    async def _capturing_run_query(
+        initial_messages: list[ConversationMessage],
+        context: object,
+    ) -> AsyncIterator[ApiStreamEvent]:
+        del initial_messages
+        captured.context = context
+        yield ApiMessageCompleteEvent(
+            message=ConversationMessage(role="assistant", content=[]),
+            usage=UsageSnapshot(input_tokens=1, output_tokens=1),
+            stop_reason="end_turn",
+        )
+
+    monkeypatch.setattr(cli_module, "run_query", _capturing_run_query)
+
+
+class TestPermissionFlags:
+    """``--auto`` / ``--dry-run`` thread permission_mode into QueryContext."""
+
+    def test_default_mode_when_no_flags(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from openharness.permissions import PermissionMode
+
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi"])
+
+        assert result.exit_code == 0
+        assert captured.context is not None
+        assert captured.context.permission_mode is PermissionMode.DEFAULT  # type: ignore[attr-defined]
+
+    def test_dry_run_flag_sets_dry_run_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from openharness.permissions import PermissionMode
+
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi", "--dry-run"])
+
+        assert result.exit_code == 0
+        assert captured.context.permission_mode is PermissionMode.DRY_RUN  # type: ignore[attr-defined]
+
+    def test_auto_flag_sets_auto_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from openharness.permissions import PermissionMode
+
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi", "--auto"])
+
+        assert result.exit_code == 0
+        assert captured.context.permission_mode is PermissionMode.AUTO  # type: ignore[attr-defined]
+
+    def test_auto_and_dry_run_mutually_exclusive(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _set_minimum_env(monkeypatch)
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi", "--auto", "--dry-run"])
+
+        assert result.exit_code == 2
+        assert "mutually exclusive" in result.stderr
+
+    def test_env_var_permission_mode_propagates_when_no_flag(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from openharness.permissions import PermissionMode
+
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("OPENHARNESS_PERMISSION_MODE", "dry_run")
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi"])
+
+        assert result.exit_code == 0
+        # Env var takes effect even without --dry-run flag.
+        assert captured.context.permission_mode is PermissionMode.DRY_RUN  # type: ignore[attr-defined]

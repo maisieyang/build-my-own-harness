@@ -1,39 +1,44 @@
-"""Command-line interface for OpenHarness (P1-T4).
+"""Command-line interface for OpenHarness.
 
-This module is the user-facing seam of Phase 1: it parses the command
-line, loads :class:`Settings` from env, builds an
-:class:`OpenAICompatibleApiClient`, dispatches a single request, and
-streams the response through :func:`render_stream`.
+P1-T4 shipped a single-call CLI that streamed one LLM response. P2-T6.6e
+rewrites ``_run_ask`` to drive the full agent loop (``run_query``):
 
-Design highlights (rationale in ``learnings/04-cli.md``; external
-contracts in ``decisions/05-cli.md``):
+* Build :class:`QueryContext` from ``Settings`` + the default tool registry +
+  :class:`DenyListChecker` + the assembled system prompt + the detected
+  environment + permission_mode (from ``--auto`` / ``--dry-run`` flags).
+* Hand off to :func:`run_query`; render the streamed events.
 
-* **Typer** powers argument parsing (``--model`` / ``-m`` overrides,
-  ``--max-tokens`` for budgeting, single positional prompt).
-* **Provider-neutral env vars** (``OPENHARNESS_API_KEY`` /
-  ``_BASE_URL`` / ``_MODEL``) are read by ``Settings``; the CLI never
+Design highlights (rationale in ``learnings/04-cli.md`` + ``learnings/10-cli-loop.md``;
+external contracts in ``decisions/05-cli.md`` + ``decisions/06`` + ``decisions/07``):
+
+* **Provider-neutral env vars** (``OPENHARNESS_API_KEY`` / ``_BASE_URL`` /
+  ``_MODEL`` / ``_PERMISSION_MODE``) are read by ``Settings``; the CLI never
   reaches into ``os.environ`` directly.
 * **Differentiated error UX**: each error type maps to a one-line hint
-  pointing at the next user action. No Python tracebacks in the default
-  mode -- ``--debug`` is deferred to Tier 1.
-* **Append-only streaming**: :func:`render_stream` lives in
-  ``_stream_render.py`` and is unit-tested separately.
+  pointing at the next user action. ``LoopLimitExceeded`` (the new
+  Phase 2 error from D6.1) is caught by the existing
+  ``except OpenHarnessApiError`` arm, with its message naming
+  ``--max-turns``.
+* **Permission flags** ``--auto`` / ``--dry-run`` are mutually exclusive
+  (D12.8). ``--dry-run`` lists every tool call without executing
+  (D12.5). ``--auto`` is parsed but Phase 2 has no interactive
+  confirmation flow yet.
 
-The two seams that tests substitute:
+The seams that tests substitute:
 
 * :func:`_load_settings` -- replace to inject deterministic config.
 * :func:`_build_client` -- replace with a stub client that yields
-  canned :class:`ApiStreamEvent`s, exercising the entire CLI path
-  without touching the network.
+  canned :class:`ApiStreamEvent`s.
+* :func:`run_query` (module-level reference) -- replace to capture the
+  constructed :class:`QueryContext` for flag-propagation tests.
 
-Both seams are module-level so ``monkeypatch.setattr`` works without
+All seams are module-level so ``monkeypatch.setattr`` works without
 touching Typer internals.
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
 
 import typer
 from openai import AsyncOpenAI
@@ -49,17 +54,14 @@ from openharness.api import (
     RequestFailure,
 )
 from openharness.config import Settings
+from openharness.engine import QueryContext, run_query
+from openharness.permissions import DenyListChecker, PermissionMode
+from openharness.prompts import build_system_prompt, detect_environment
 from openharness.protocols import (
-    ApiMessageRequest,
     ConversationMessage,
     TextBlock,
 )
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
-
-    from openharness.protocols.stream_events import ApiStreamEvent
-
+from openharness.tools import create_default_tool_registry
 
 # Phase 1 default. Lifted into a CLI flag (``--max-tokens``) so users can
 # tune for short prompts or longer essays without editing code; kept
@@ -113,26 +115,41 @@ async def _run_ask(
     *,
     model_override: str | None,
     max_tokens: int,
+    permission_mode_override: PermissionMode | None,
 ) -> None:
-    """Build the request, run the stream, render it. Not exception-handling
-    aware -- the synchronous Typer command wraps this and translates
-    exceptions into user-facing exit codes."""
+    """Build the QueryContext, run the loop, render the events.
+
+    Not exception-handling aware -- the synchronous Typer command wraps
+    this and translates exceptions into user-facing exit codes.
+    """
     settings = _load_settings()
     model = model_override or settings.model
-
-    request = ApiMessageRequest(
-        model=model,
-        max_tokens=max_tokens,
-        messages=[
-            ConversationMessage(
-                role="user",
-                content=[TextBlock(text=prompt)],
-            ),
-        ],
+    permission_mode = (
+        permission_mode_override
+        if permission_mode_override is not None
+        else settings.permission_mode
     )
 
     client = _build_client(settings)
-    events: AsyncIterator[ApiStreamEvent] = client.stream_message(request)
+    registry = create_default_tool_registry()
+    env = detect_environment()
+    system_prompt = build_system_prompt(registry.to_api_schema(), env)
+
+    context = QueryContext(
+        api_client=client,
+        tool_registry=registry,
+        permission_checker=DenyListChecker(),
+        system_prompt=system_prompt,
+        cwd=env.cwd,
+        model=model,
+        max_tokens=max_tokens,
+        permission_mode=permission_mode,
+    )
+
+    initial_messages = [
+        ConversationMessage(role="user", content=[TextBlock(text=prompt)]),
+    ]
+    events = run_query(initial_messages, context)
     await render_stream(events)
 
 
@@ -178,10 +195,40 @@ def ask(
         min=1,
         help="Maximum tokens to generate (default 1024).",
     ),
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Skip interactive confirmation prompts (Phase 3 reserved; no-op in Phase 2).",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="List tool calls the loop would make without executing them.",
+    ),
 ) -> None:
-    """Stream a single LLM response to stdout."""
+    """Stream a single LLM response (with tool dispatch) to stdout."""
+    if auto and dry_run:
+        typer.echo(
+            "error: --auto and --dry-run are mutually exclusive",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    permission_mode_override: PermissionMode | None = None
+    if dry_run:
+        permission_mode_override = PermissionMode.DRY_RUN
+    elif auto:
+        permission_mode_override = PermissionMode.AUTO
+
     try:
-        asyncio.run(_run_ask(prompt, model_override=model, max_tokens=max_tokens))
+        asyncio.run(
+            _run_ask(
+                prompt,
+                model_override=model,
+                max_tokens=max_tokens,
+                permission_mode_override=permission_mode_override,
+            )
+        )
     except ValidationError as exc:
         # Configuration error (Settings missing OPENHARNESS_API_KEY etc.):
         # name the missing fields without dumping a stack trace.
@@ -213,9 +260,9 @@ def ask(
         )
         raise typer.Exit(code=1) from exc
     except OpenHarnessApiError as exc:
-        # Catch-all for any future API error subclass we have not
-        # specialized. Better to report something than to vanish.
-        typer.echo(f"API error: {exc}", err=True)
+        # Catch-all for any other API/loop error subclass (LoopLimitExceeded
+        # lands here -- its message already names --max-turns as remediation).
+        typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
 
