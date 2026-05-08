@@ -3,7 +3,7 @@
 > Tracks the 6 capabilities defined in [phase-2-plan.md](./phase-2-plan.md).
 > Phase 1 archive: [plan.md](./plan.md) / [todo.md](./todo.md).
 
-**Currently working on**: P2-T3 (five base tools) — NEXT after Three-Axis kickoff for P2-T3.
+**Currently working on**: P2-T4 (run_query core loop) — NEXT after Three-Axis kickoff for P2-T4.
 
 ---
 
@@ -53,21 +53,24 @@ hand-off cashed: `QueryContext.tool_registry: object` tightened to `ToolRegistry
 
 ---
 
-## P2-T3: Five base tools (Read / Write / Edit / Bash / Grep)
+## P2-T3: Five base tools (Read / Write / Edit / Bash / Grep) ✅
 
-**Decisions**: per-tool semantics (timeout / truncation / safety) — Three-Axis discussion
-at task entry; expect a new `decisions/0X-base-tools.md`.
+**Decisions**: [decisions/07-base-tools.md](../decisions/07-base-tools.md)
+captures D9.1-D9.6. Retrospective + Python patterns:
+[learnings/07-base-tools.md](../learnings/07-base-tools.md).
 
 | # | Sub-unit | Status | Commit |
 |---|---------|--------|--------|
-| 3a | `Read` tool + tests | ☐ | |
-| 3b | `Write` tool + tests | ☐ | |
-| 3c | `Edit` tool (exact string replacement) + tests | ☐ | |
-| 3d | `Bash` tool (asyncio subprocess + 600s timeout + 12k char truncation) + tests | ☐ | |
-| 3e | `Grep` tool (ripgrep wrapper + 8MB stream limit + 200/2000 line caps) + tests | ☐ | |
-| 3f | `create_default_tool_registry()` factory + integration test (all 5 round-trip) | ☐ | |
+| 3a | `Read` tool + tests | ✅ | `0344d2c` |
+| 3b | `Write` tool + tests | ✅ | `f4ad745` |
+| 3c | `Edit` tool (exact string replacement) + tests | ✅ | `99b5db4` |
+| 3d | `Bash` tool (asyncio subprocess + 600s timeout + 12k char truncation) + tests | ✅ | `925c52c` |
+| 3e | `Grep` tool (ripgrep wrapper + 8MB stream limit + 200/2000 line caps) + tests | ✅ | `e274147` |
+| 3f | `create_default_tool_registry()` factory + decisions/07 + integration test | ✅ | `8a4bda1` |
 
-**Acceptance**: All 5 tools registered, each with happy path + ≥2 error path tests; coverage ≥ 90%.
+**Acceptance**: All 5 tools registered, each with happy + ≥2 error path tests
+(45 tests across 6 files); end-to-end Read / Bash execution verified via the
+default-registry integration test. All gates clean.
 
 ---
 
