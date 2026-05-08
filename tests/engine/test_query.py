@@ -29,6 +29,8 @@ from openharness.protocols import (
     ApiTextDeltaEvent,
     ConversationMessage,
     TextBlock,
+    ToolExecutionCompletedEvent,
+    ToolExecutionStartedEvent,
 )
 from openharness.tools import ToolRegistry
 
@@ -204,16 +206,227 @@ class TestRunQueryDefensiveCopy:
         assert original == snapshot
 
 
-class TestRunQueryToolUseStubMarker:
-    """The tool-dispatch path is a P2-T4.4e tripwire."""
+def _fake_tool_use_event(
+    *,
+    tool_use_id: str = "toolu_01",
+    tool_name: str = "Fake",
+    tool_input: dict[str, object] | None = None,
+) -> ApiMessageCompleteEvent:
+    """Build a turn-1 message_complete carrying one tool_use block."""
+    return ApiMessageCompleteEvent.model_validate(
+        {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": tool_use_id,
+                        "name": tool_name,
+                        "input": tool_input if tool_input is not None else {"value": "hi"},
+                    }
+                ],
+            },
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+            "stop_reason": "tool_use",
+        }
+    )
 
-    async def test_tool_use_stop_reason_raises_4e_marker(self) -> None:
-        client = _StubApiClient(events_per_turn=[[_tool_use_event()]])
-        context = _make_context(api_client=client)
 
-        with pytest.raises(NotImplementedError, match=r"P2-T4\.4e"):
-            async for _ in run_query(
+def _registry_with_fake_tool() -> ToolRegistry:
+    from tools.conftest import _FakeTool
+
+    registry = ToolRegistry()
+    registry.register(_FakeTool())
+    return registry
+
+
+class TestRunQueryHappyToolPath:
+    """Turn 1 tool_use, turn 2 end_turn, all recovery paths bypassed."""
+
+    async def test_one_tool_then_end_turn_yields_full_event_sequence(self) -> None:
+        client = _StubApiClient(
+            events_per_turn=[
+                [_fake_tool_use_event(tool_input={"value": "hello"})],
+                [_end_turn_event(text="done")],
+            ],
+        )
+        context = _make_context(
+            api_client=client,
+            tool_registry=_registry_with_fake_tool(),
+        )
+
+        events = [
+            event
+            async for event in run_query(
                 [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
                 context,
-            ):
-                pass
+            )
+        ]
+
+        # Expected order: turn-1 message_complete, started, completed, turn-2 message_complete
+        assert isinstance(events[0], ApiMessageCompleteEvent)
+        assert events[0].stop_reason == "tool_use"
+        assert isinstance(events[1], ToolExecutionStartedEvent)
+        assert events[1].tool_name == "Fake"
+        assert events[1].tool_use_id == "toolu_01"
+        assert isinstance(events[2], ToolExecutionCompletedEvent)
+        assert events[2].is_error is False
+        assert events[2].output == "value=hello"
+        assert isinstance(events[3], ApiMessageCompleteEvent)
+        assert events[3].stop_reason == "end_turn"
+        assert client._turn == 2
+
+    async def test_turn_2_request_carries_assistant_and_tool_result_messages(
+        self,
+    ) -> None:
+        client = _StubApiClient(
+            events_per_turn=[
+                [_fake_tool_use_event(tool_input={"value": "hello"})],
+                [_end_turn_event()],
+            ],
+        )
+        context = _make_context(
+            api_client=client,
+            tool_registry=_registry_with_fake_tool(),
+        )
+
+        async for _ in run_query(
+            [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+            context,
+        ):
+            pass
+
+        # Turn 2 request: original user + assistant tool_use + user tool_result
+        turn2 = client.captured_requests[1]
+        assert len(turn2.messages) == 3
+        assert turn2.messages[0].role == "user"
+        assert turn2.messages[1].role == "assistant"
+        assert turn2.messages[2].role == "user"  # tool_results live in user msg
+        # The assistant turn carries the original tool_use block
+        assert isinstance(turn2.messages[1].content[0], type(turn2.messages[1].content[0]))
+
+
+class TestRunQueryRecoveryPaths:
+    """Four recovery paths per D10.4 — all surface as is_error=True without
+    halting the loop."""
+
+    async def test_tool_not_found_returns_error_result(self) -> None:
+        client = _StubApiClient(
+            events_per_turn=[
+                [_fake_tool_use_event(tool_name="Ghost", tool_input={})],
+                [_end_turn_event()],
+            ],
+        )
+        # Empty registry -- "Ghost" cannot be resolved.
+        context = _make_context(api_client=client)
+
+        events = [
+            event
+            async for event in run_query(
+                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+                context,
+            )
+        ]
+        completed = next(
+            event for event in events if isinstance(event, ToolExecutionCompletedEvent)
+        )
+        assert completed.is_error is True
+        assert "tool not found: Ghost" in completed.output
+
+    async def test_validation_error_returns_error_result(self) -> None:
+        # FakeInput requires `value: str`. Send something missing it.
+        client = _StubApiClient(
+            events_per_turn=[
+                [_fake_tool_use_event(tool_input={"wrong_field": 1})],
+                [_end_turn_event()],
+            ],
+        )
+        context = _make_context(
+            api_client=client,
+            tool_registry=_registry_with_fake_tool(),
+        )
+
+        events = [
+            event
+            async for event in run_query(
+                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+                context,
+            )
+        ]
+        completed = next(
+            event for event in events if isinstance(event, ToolExecutionCompletedEvent)
+        )
+        assert completed.is_error is True
+        assert "invalid input for Fake" in completed.output
+
+    async def test_permission_denied_returns_error_result(self) -> None:
+        from engine.conftest import _DenyChecker
+
+        client = _StubApiClient(
+            events_per_turn=[
+                [_fake_tool_use_event(tool_input={"value": "x"})],
+                [_end_turn_event()],
+            ],
+        )
+        # Override the AllowAll fixture with the deny checker.
+        ctx = _make_context(
+            api_client=client,
+            tool_registry=_registry_with_fake_tool(),
+        )
+        # dataclass.replace would also work but we have direct construction.
+        import dataclasses
+
+        ctx = dataclasses.replace(ctx, permission_checker=_DenyChecker())
+
+        events = [
+            event
+            async for event in run_query(
+                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+                ctx,
+            )
+        ]
+        completed = next(
+            event for event in events if isinstance(event, ToolExecutionCompletedEvent)
+        )
+        assert completed.is_error is True
+        assert "permission denied: Fake" in completed.output
+
+    async def test_tool_returning_is_error_passes_through(self) -> None:
+        from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+        from tools.conftest import FakeInput
+
+        class _ErroringFake(BaseTool[FakeInput]):
+            name = "Fake"
+            description = "Always returns is_error=True."
+            input_model = FakeInput
+
+            async def execute(
+                self,
+                args: FakeInput,
+                context: ToolExecutionContext,
+            ) -> ToolResult:
+                del args, context
+                return ToolResult(is_error=True, output="something went wrong")
+
+        registry = ToolRegistry()
+        registry.register(_ErroringFake())
+        client = _StubApiClient(
+            events_per_turn=[
+                [_fake_tool_use_event(tool_input={"value": "x"})],
+                [_end_turn_event()],
+            ],
+        )
+        context = _make_context(api_client=client, tool_registry=registry)
+
+        events = [
+            event
+            async for event in run_query(
+                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+                context,
+            )
+        ]
+        completed = next(
+            event for event in events if isinstance(event, ToolExecutionCompletedEvent)
+        )
+        assert completed.is_error is True
+        assert completed.output == "something went wrong"
