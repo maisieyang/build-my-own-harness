@@ -3,7 +3,7 @@
 > Tracks the 6 capabilities defined in [phase-2-plan.md](./phase-2-plan.md).
 > Phase 1 archive: [plan.md](./plan.md) / [todo.md](./todo.md).
 
-**Currently working on**: P2-T5 (system prompt assembly) — NEXT after Three-Axis kickoff for P2-T5.
+**Currently working on**: P2-T6 (minimal permissions + CLI integration) — NEXT after Three-Axis kickoff for P2-T6.
 
 ---
 
@@ -101,17 +101,21 @@ hand-offs cashed; `rg "tighten to"` returns no functional markers.
 
 ---
 
-## P2-T5: System prompt assembly
+## P2-T5: System prompt assembly ✅
 
-**Decisions**: 06-phase-2-boundary D6.5 (function-driven). Internal structure of the
-prompt itself (sections / order / phrasing) — Three-Axis at task entry.
+**Decisions**: 06-phase-2-boundary D6.5 (function-driven).
+Three-Axis sub-decisions D11.1-D11.6 captured in
+[learnings/09-prompts.md](../learnings/09-prompts.md).
 
 | # | Sub-unit | Status | Commit |
 |---|---------|--------|--------|
-| 5a | `EnvironmentInfo` dataclass + `detect_environment()` + tests | ☐ | |
-| 5b | `build_system_prompt(tools, env)` + tests (catalog + env injection) | ☐ | |
+| 5a | `EnvironmentInfo` dataclass + `detect_environment()` + tests | ✅ | `015c1d4` |
+| 5b | `build_system_prompt(tools, env)` + tests (catalog + env + base + sentinel + ordering) | ✅ | `afc25f8` |
 
-**Acceptance**: prompt non-empty; contains every tool name + cwd + OS; snapshot test for structure.
+**Acceptance**: prompt non-empty; section markers (`## Tools` / `## Environment`)
+present; every tool name + description appears verbatim; cwd + os_name + os_version
++ shell + python_version all surface; empty tools renders sentinel; ordering
+locked. 13 dedicated tests in `tests/test_prompts.py`. mypy strict + ruff clean.
 
 ---
 
