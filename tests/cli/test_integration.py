@@ -47,9 +47,9 @@ def test_real_qwen_streaming_e2e() -> None:
         ["ask", "Reply with the single word OK and nothing else."],
     )
 
-    assert (
-        result.exit_code == 0
-    ), f"oh ask exited {result.exit_code}\nstdout={result.stdout!r}\nstderr={result.stderr!r}"
+    assert result.exit_code == 0, (
+        f"oh ask exited {result.exit_code}\nstdout={result.stdout!r}\nstderr={result.stderr!r}"
+    )
     # Streamed text reached stdout. Loose assertion: at least one
     # non-whitespace character. Provider may pad with punctuation,
     # markdown, etc.; we are only proving the wire path works.

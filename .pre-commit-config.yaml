@@ -15,7 +15,7 @@ repos:
         args: [--maxkb=500]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.7.0
+    rev: v0.15.12  # match local + CI ruff to avoid 3-way format drift; bumped 2026-05-09
     hooks:
       - id: ruff
         args: [--fix]
