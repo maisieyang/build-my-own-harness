@@ -143,3 +143,83 @@ class TestEditValidation:
         # Pydantic's min_length=1 catches this before ever reaching execute().
         with pytest.raises(ValidationError):
             EditInput(path="x", old_str="", new_str="y")
+
+
+class TestEditAtomicWrite:
+    """P3-T1.1c: write is tempfile + fsync + rename, not in-place truncate.
+
+    Atomicity contract: a mid-write crash leaves the target file untouched
+    and no temp files behind. Verified by monkeypatching ``os.fsync`` to
+    raise — that's the deepest point of the write where a real disk-full /
+    IO error would surface.
+    """
+
+    async def test_mid_write_crash_leaves_original_intact(
+        self,
+        tool: Edit,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        target = tmp_path / "important.txt"
+        original = "ORIGINAL CONTENT — must survive a mid-write crash"
+        target.write_text(original, encoding="utf-8")
+
+        def boom(*args: object, **kwargs: object) -> None:
+            raise OSError("simulated disk full at fsync")
+
+        monkeypatch.setattr("os.fsync", boom)
+
+        # The atomic helper re-raises after cleanup; Edit doesn't catch
+        # generic OSError (D8.5: programming/system errors propagate).
+        with pytest.raises(OSError, match="simulated disk full"):
+            await tool.execute(
+                EditInput(path=str(target), old_str="ORIGINAL", new_str="MODIFIED"),
+                _ctx(tmp_path),
+            )
+
+        # The target file is bytes-identical to the original.
+        assert target.read_text(encoding="utf-8") == original
+
+    async def test_no_tempfile_leaks_on_crash(
+        self,
+        tool: Edit,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        target = tmp_path / "f.txt"
+        target.write_text("abc", encoding="utf-8")
+
+        def boom(*args: object, **kwargs: object) -> None:
+            raise OSError("simulated rename failure")
+
+        monkeypatch.setattr("os.rename", boom)
+
+        with pytest.raises(OSError, match="simulated rename failure"):
+            await tool.execute(
+                EditInput(path=str(target), old_str="a", new_str="X"),
+                _ctx(tmp_path),
+            )
+
+        # No tempfile lingering: glob hidden ``.<name>.*.tmp`` siblings.
+        leftover = list(tmp_path.glob(f".{target.name}.*.tmp"))
+        assert leftover == [], f"tempfile leak: {leftover}"
+
+    async def test_no_tempfile_leaks_on_success(
+        self,
+        tool: Edit,
+        tmp_path: Path,
+    ) -> None:
+        # Even on the happy path, the tempfile must be renamed-away (not left
+        # behind). After a successful Edit, only the target file should exist.
+        target = tmp_path / "f.txt"
+        target.write_text("abc", encoding="utf-8")
+
+        result = await tool.execute(
+            EditInput(path=str(target), old_str="a", new_str="X"),
+            _ctx(tmp_path),
+        )
+        assert result.is_error is False
+        assert target.read_text(encoding="utf-8") == "Xbc"
+
+        leftover = list(tmp_path.glob(f".{target.name}.*.tmp"))
+        assert leftover == [], f"tempfile leak: {leftover}"
