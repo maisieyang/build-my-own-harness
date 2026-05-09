@@ -334,6 +334,87 @@ judge framework。**框架构建者的复利就长在这里**。
 
 ---
 
+## 8. Language as Substrate, Judgment as Substance — AI 协作时代的能力分水岭
+
+> Phase 2 close-out 之后，用户自己浮现的认知（不是教出来的）：
+>
+> > 「这个项目都是用 Python 写的，然后其实我并不太熟悉，在今天语言真的不重要
+> > 了，因为代码是你写，而我有自己擅长的语言，所以不懂的地方，我可以很快类比，
+> > 语言是表层的东西，更深层次的东西是思考和需求。」
+>
+> 这是 §1-§7 工程实践走过之后**自然显形**的元层洞察，是 §7.5「抄 judge framework
+> 不抄具体形」在能力面的对偶——不是单项目的判断 framework，是**跨语言、跨栈、
+> 跨技术周期的迁移性资产**。
+
+### 8.1 三层模型：从表层到元层
+
+| 层级 | 性质 | 典型问题 | 跨语言迁移性 |
+|---|---|---|---|
+| **语言 / 语法** | 表层 substrate | "Python 怎么写 async generator?" | ❌ 锁单语言 |
+| **思考** | 在某场景下想清楚 | "这个 hook 应该怎么设计?" | 部分 |
+| **需求** | 客户/产品具体要什么 | "客户希望 X" | 部分 |
+| ⭐ **判断 framework** | 跨场景的元思考 | "类似场景哪些必抽 / 哪些可 inline?" | ✅ 跨语言 / 跨栈 / 跨周期 |
+
+§1-§7 全部论证集中在最顶层。这就是为什么 framing doc **不教 Python 语法**——
+教的是 RPC 同构性 / 5 件配套 / 5 条统一原则。**这些是真正的迁移性资产**。
+
+### 8.2 nuance：语言不无关，只是「在抽象层无关 / 在实施层相关」
+
+实施层有 Python-specific 的 production hardening 要点（retro §9 6 节专门记）：
+
+- `asyncio.to_thread(...)` 是文件 IO 唯一可移植解（Python 没"真异步文件 IO"）
+- `Generic[InputT]` 解 LSP 违规（子类 narrow 参数类型）
+- Pydantic `model_validate(dict)` 是 LLM JSON → typed args 的边界守门员
+- `process.terminate() → wait → kill` 两阶段子进程终止
+- `errors="replace"` 软失败 vs `try/except UnicodeDecodeError` 硬拒绝
+
+但**学 Python 的方式**是「跨语言的设计 pattern 在 Python 里是什么 syntactic
+shape」——先有原则、再 grok 语法。这比"先学完 Python 再想架构"**快一个量级**。
+
+### 8.3 这条认知在 FDE 角色上是 load-bearing
+
+[`/CLAUDE.md`](../../CLAUDE.md) 4 个项目跨栈分布：
+
+| 项目 | 主语言 | 干的事 |
+|---|---|---|
+| 1. RAG | TypeScript / Next.js | 评测驱动 + 增量更新 + 权限管控 |
+| 2. Social Media Agent | TypeScript / LangGraph | Workflow 编排 + HITL |
+| 3+4. Test Agent | TypeScript / Claude Agent SDK | Skill + Safety Hook + Coverage MCP |
+| **OpenHarness（本项目）** | **Python** | 把 RPC 框架的演化逻辑在「奇怪 client」上重走一遍 |
+
+**4 个跨语言的项目，在元层是同一件事**——给 LLM 朴素调用装 production 配套
+（§6 已 mapping 过）。
+
+客户那边可能来 Java 后端 / Go 微服务 / Rust 工具链——FDE 的能力**不在于"会不会
+立刻写它们"，在于"能不能识别这场景该用哪个 RPC 配套 + 什么 trade-off"**。
+
+判断 framework 跨语言、跨技术栈、甚至跨技术周期（RPC 1980s → Workflow 2024 →
+Agent 2024，三代抽象层都成立）。
+
+### 8.4 能力分水岭
+
+> **2024 之前**：能不能写代码 = 工程能力
+>
+> **2026 当下**：能不能判断「该写什么 / 为什么写 / 怎么验证」+ 能让 AI 写得对
+> = 工程能力
+
+具体含义：
+
+- 「代码是 AI 写」——但 boundary 拍板、Three-Axis 讨论、code review 必须人主导
+- **读代码能力 ≠ 写代码能力**——AI 时代后者门槛大幅降低，前者仍是 hard requirement
+- 判断 framework 是 **持有（own）** 的能力，语法是 **借用（borrow）** 的能力
+- 当能力轴从"会写"上移到"会判断"，**人对 AI 的杠杆比就从「替代」变「放大」**
+
+### 8.5 一句话
+
+> **Language as substrate, judgment as substance.**
+>
+> 语言是基底——任何 substance 都要落到某种基底上才能跑。但 substance 才是要**跨
+> 周期持有的资产**。这是 framework 构建者在 AI 协作时代的能力轴心，也是 §1-§7
+> 这套 framing 真正想沉淀给未来自己的核心。
+
+---
+
 ## 一句话沉淀
 
 > **Phase 1 把 chambers 装好，Phase 2 让 heart beat 起来，Phase 3 把这颗心装上
