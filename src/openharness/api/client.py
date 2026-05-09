@@ -14,7 +14,7 @@ configuring the ``AsyncOpenAI`` instance with a different ``base_url``.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import openai
 
@@ -76,6 +76,33 @@ def _translate_openai_error(exc: Exception) -> OpenHarnessApiError:
         return RequestFailure(f"Connection error: {exc}", status_code=None)
     # Unknown -- wrap conservatively. Caller's ``from`` chains the original.
     return RequestFailure(f"Unexpected error: {exc}", status_code=None)
+
+
+class SupportsStreamingMessages(Protocol):
+    """Streaming-messages contract that engine / CLI consume.
+
+    P3-T1.1d makes this Protocol explicit so:
+
+    1. ``QueryContext.api_client`` types against a *contract* not a concrete
+       class — Phase 5 Anthropic-native client / future Provider-specific
+       clients all satisfy the same shape without inheritance.
+    2. Tests that need to stub the API can implement the Protocol with a
+       minimal class instead of touching :class:`OpenAICompatibleApiClient`
+       internals.
+
+    Structural typing: any object exposing a single async method
+    ``stream_message(request) -> AsyncIterator[ApiStreamEvent]`` satisfies
+    this Protocol — no inheritance required (mirrors the
+    :class:`PermissionChecker` Protocol pattern in ``permissions/checker.py``).
+    """
+
+    def stream_message(
+        self,
+        request: ApiMessageRequest,
+    ) -> AsyncIterator[ApiStreamEvent]:
+        """Stream a single LLM response. See :meth:`OpenAICompatibleApiClient.stream_message`
+        for the canonical event-order contract."""
+        ...
 
 
 class OpenAICompatibleApiClient:

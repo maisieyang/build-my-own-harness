@@ -15,11 +15,14 @@ fixtures so the error-translation code path is exercised end-to-end.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import openai
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 # Imports from the package root (rather than submodules) — this also
 # verifies the public API surface defined in api/__init__.py.
@@ -29,6 +32,7 @@ from openharness.api import (
     RateLimitFailure,
     RequestFailure,
     RetryPolicy,
+    SupportsStreamingMessages,
 )
 from openharness.protocols.content import TextBlock, ToolUseBlock
 from openharness.protocols.messages import ConversationMessage
@@ -375,3 +379,52 @@ class TestErrorTranslation:
         assert exc_info.value.status_code is None
         # Not retryable since status_code is None — only one call
         assert sdk.chat_completions.call_count == 1
+
+
+# ============================================================================
+# SupportsStreamingMessages Protocol — P3-T1.1d
+# ============================================================================
+
+
+class TestSupportsStreamingMessagesProtocol:
+    """The Protocol that ``QueryContext.api_client`` types against.
+
+    Structural typing: any object whose ``stream_message`` matches the
+    signature satisfies the Protocol — no inheritance required. These tests
+    are mypy-driven (the act of typing the LHS as ``SupportsStreamingMessages``
+    while assigning a concrete object is itself the structural-typing check;
+    if mypy strict is happy, the contract holds).
+    """
+
+    def test_oaic_client_satisfies_protocol(self) -> None:
+        # Phase 2's OpenAICompatibleApiClient predates the Protocol declaration
+        # (P3-T1.1d) but satisfies it by structural typing. The act of typing
+        # the LHS as the Protocol while assigning the concrete class is itself
+        # the structural-typing assertion; if mypy strict is happy, contract holds.
+        from unittest.mock import Mock
+
+        from openai import AsyncOpenAI
+
+        client: SupportsStreamingMessages = OpenAICompatibleApiClient(
+            sdk=Mock(spec=AsyncOpenAI),
+        )
+        assert callable(client.stream_message)
+
+    def test_minimal_implementation_satisfies_protocol(self) -> None:
+        # A class with ONLY ``stream_message`` (no inheritance, no other
+        # methods) satisfies the Protocol — that's the value of structural
+        # typing for stub clients in tests.
+        class _MinimalClient:
+            def stream_message(
+                self,
+                request: ApiMessageRequest,
+            ) -> AsyncIterator[ApiStreamEvent]:
+                async def _gen() -> AsyncIterator[ApiStreamEvent]:
+                    return
+                    yield  # pragma: no cover  # makes this an async generator
+
+                del request
+                return _gen()
+
+        client: SupportsStreamingMessages = _MinimalClient()
+        assert callable(client.stream_message)

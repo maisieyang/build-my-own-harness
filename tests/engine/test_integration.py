@@ -62,7 +62,7 @@ async def test_query_context_and_run_query_compose_via_public_path() -> None:
     client = _StubApiClient(events_per_turn=[[end_turn]])
 
     ctx = QueryContext(
-        api_client=client,  # type: ignore[arg-type]
+        api_client=client,
         tool_registry=ToolRegistry(),
         permission_checker=_AllowAllChecker(),
         system_prompt="",

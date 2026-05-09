@@ -14,6 +14,7 @@ about internal submodules:
         OpenHarnessApiError,
         RetryPolicy,
         DEFAULT_POLICY,
+        SupportsStreamingMessages,
     )
 
 Internal modules (not re-exported, but accessible for tests / advanced use):
@@ -26,7 +27,7 @@ Internal modules (not re-exported, but accessible for tests / advanced use):
 
 from __future__ import annotations
 
-from openharness.api.client import OpenAICompatibleApiClient
+from openharness.api.client import OpenAICompatibleApiClient, SupportsStreamingMessages
 from openharness.api.errors import (
     AuthenticationFailure,
     OpenHarnessApiError,
@@ -43,4 +44,5 @@ __all__ = [
     "RateLimitFailure",
     "RequestFailure",
     "RetryPolicy",
+    "SupportsStreamingMessages",
 ]

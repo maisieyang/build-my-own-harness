@@ -9,6 +9,10 @@ Per the P2-T1 Three-Axis discussion (D7.1 / D7.2 / D7.5):
 - D7.2 typed unfinished collaborators as ``object`` at runtime, then tightened
   per hand-off. P2-T2.2e cashed ``tool_registry``; P2-T4.4c cashed
   ``permission_checker``. The marker convention is exhausted.
+- P3-T1.1d further widens ``api_client`` from the concrete
+  ``OpenAICompatibleApiClient`` to the ``SupportsStreamingMessages`` Protocol —
+  Phase 5 Anthropic-native client / Phase 6 sub-agent stub clients can satisfy
+  the contract without inheriting.
 - D7.5 fixes ``system_prompt`` as the *assembled* string. ``prompts.py`` (P2-T5)
   is the constructor; QueryContext just holds the result.
 
@@ -26,7 +30,7 @@ from openharness.permissions import PermissionMode
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from openharness.api import OpenAICompatibleApiClient
+    from openharness.api import SupportsStreamingMessages
     from openharness.permissions import PermissionChecker
     from openharness.tools import ToolRegistry
 
@@ -40,7 +44,7 @@ class QueryContext:
     intentionally has no factory method to avoid coupling to ``Settings``.
     """
 
-    api_client: OpenAICompatibleApiClient
+    api_client: SupportsStreamingMessages
     tool_registry: ToolRegistry
     permission_checker: PermissionChecker
     system_prompt: str
