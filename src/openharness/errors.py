@@ -58,3 +58,41 @@ class LoopError(OpenHarnessError):
     under ``OpenHarnessApiError`` because the cli.py catch-all happened to
     cover it. The loop is not an API-layer concern, so D13.4 split it out.
     """
+
+
+class ToolError(OpenHarnessError):
+    """Programming errors in tool execution / dispatch (placeholder for P3-T3).
+
+    NOT for recoverable tool failures — those flow through
+    ``ToolResult(is_error=True)`` back to the LLM (D8.5). ``ToolError``
+    captures the *programming* path: tool implementation raised an
+    unexpected exception, dispatch found a tool that lacks required attrs,
+    registry returned an inconsistent shape, etc.
+
+    P3-T3 wires the first concrete raise sites; until then this class is
+    just the typed surface other modules can ``raise ToolError(...)`` against.
+    """
+
+
+class PermissionError(OpenHarnessError):
+    """Programming errors in the AuthZ subsystem (placeholder for P3-T3).
+
+    NOT for normal DENY decisions — those produce ``ToolResult`` so the LLM
+    can adapt. ``PermissionError`` is for *programming* errors in the
+    decision engine: malformed config, checker crashed, contradictory rules.
+
+    Caveat: shadows Python's builtin ``PermissionError`` (OS-level FS
+    permission). Internal callers always import by qualified path
+    (``from openharness.errors import PermissionError``) to avoid the
+    collision; user code that catches both should alias one of them.
+    """
+
+
+class HookError(OpenHarnessError):
+    """Middleware (hook) implementation crashed (placeholder for P3-T4).
+
+    NOT for hooks returning ``HookResult(decision="deny")`` — that's the
+    documented user-extension path. ``HookError`` fires when a registered
+    hook itself raises an unexpected exception; the executor wraps it so
+    the cli ``OnError`` chain can surface it with a hook-specific hint.
+    """

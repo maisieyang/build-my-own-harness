@@ -103,3 +103,94 @@ class TestLoopError:
         from openharness.errors import LoopError
 
         assert not issubclass(LoopError, OpenHarnessApiError)
+
+
+class TestToolError:
+    """``ToolError`` (P3-T2.2c) — placeholder for P3-T3 tool dispatch errors.
+
+    NOT for recoverable tool failures(those flow through
+    :class:`ToolResult(is_error=True)` back to the LLM, per D8.5).
+    ``ToolError`` is for *programming* errors:tool implementation crashed,
+    dispatch wired wrong, registry produced an unexpected shape, etc.
+    """
+
+    def test_is_subclass_of_root(self) -> None:
+        from openharness.errors import ToolError
+
+        assert issubclass(ToolError, OpenHarnessError)
+
+    def test_is_not_an_api_error(self) -> None:
+        from openharness.errors import ToolError
+
+        assert not issubclass(ToolError, OpenHarnessApiError)
+
+    def test_can_be_raised_and_caught_at_root(self) -> None:
+        from openharness.errors import ToolError
+
+        with pytest.raises(OpenHarnessError):
+            raise ToolError("tool dispatch crashed")
+
+
+class TestPermissionError:
+    """``PermissionError`` (P3-T2.2c) — placeholder for P3-T3 AuthZ subsystem
+    errors.
+
+    NOT for normal DENY decisions(those flow through ``ToolResult`` to the LLM
+    so it can adapt). ``PermissionError`` is for *programming* errors in the
+    decision engine:malformed config, contradictory rules, checker crashed.
+
+    Caveat: Python has a builtin ``PermissionError`` (OS-level filesystem
+    permission). Our class shadows it within ``openharness.errors``;
+    callers always import by qualified name (``from openharness.errors import
+    PermissionError``) so collisions are avoided.
+    """
+
+    def test_is_subclass_of_root(self) -> None:
+        from openharness.errors import PermissionError as OhPermissionError
+
+        assert issubclass(OhPermissionError, OpenHarnessError)
+
+    def test_is_distinct_from_python_builtin(self) -> None:
+        # Documents the intentional shadow: our class lives in
+        # ``openharness.errors``, the builtin lives in ``builtins``.
+        # Module identity is a more meaningful check than ``is not`` (which
+        # mypy short-circuits as trivially true given the type info).
+        import builtins
+
+        from openharness.errors import PermissionError as OhPermissionError
+
+        assert OhPermissionError.__module__ == "openharness.errors"
+        assert builtins.PermissionError.__module__ == "builtins"
+
+    def test_can_be_raised_and_caught_at_root(self) -> None:
+        from openharness.errors import PermissionError as OhPermissionError
+
+        with pytest.raises(OpenHarnessError):
+            raise OhPermissionError("permission checker misconfigured")
+
+
+class TestHookError:
+    """``HookError`` (P3-T2.2c) — placeholder for P3-T4 middleware/hook crashes.
+
+    NOT for hooks returning ``HookResult(decision="deny")`` (that's the
+    documented user-extension path). ``HookError`` fires when a registered
+    hook itself raises an unexpected exception during dispatch — the
+    framework wraps and re-raises so the cli ``OnError`` chain (P3-T4) can
+    surface it.
+    """
+
+    def test_is_subclass_of_root(self) -> None:
+        from openharness.errors import HookError
+
+        assert issubclass(HookError, OpenHarnessError)
+
+    def test_is_not_an_api_error(self) -> None:
+        from openharness.errors import HookError
+
+        assert not issubclass(HookError, OpenHarnessApiError)
+
+    def test_can_be_raised_and_caught_at_root(self) -> None:
+        from openharness.errors import HookError
+
+        with pytest.raises(OpenHarnessError):
+            raise HookError("hook X crashed during PreToolUse")
