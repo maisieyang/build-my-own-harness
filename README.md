@@ -8,7 +8,10 @@
 
 > **A production-grade Python harness for LLM agents — built from scratch as a learning project.**
 >
-> 🚧 **Status**: Phase 1 (Foundation). CLI not yet usable.
+> ✅ **Status**: Phase 1 complete — `oh ask "<prompt>"` streams real responses
+> from any OpenAI-compatible Provider (Qwen via DashScope tested). Phase 2
+> (Tool Loop) is next. See [learnings/phase-1.md](./learnings/phase-1.md)
+> for the cross-module retrospective.
 
 ---
 
@@ -22,8 +25,8 @@ The project is staged in 7 phases (see [ARCHITECTURE.md](./ARCHITECTURE.md)):
 | Phase | Goal | Status |
 |-------|------|--------|
 | 0 | Architecture map: tier division, module dependency graph, scope boundary | ✅ |
-| 1 | **Foundation + Hello LLM** — toolchain, data models, API client, CLI, Print mode | 🟡 in progress |
-| 2 | Tool Loop — `BaseTool` / `ToolRegistry` / `run_query()` / Read+Write+Edit+Bash+Grep | ⏸ |
+| 1 | **Foundation + Hello LLM** — toolchain, data models, API client, CLI, Print mode | ✅ |
+| 2 | Tool Loop — `BaseTool` / `ToolRegistry` / `run_query()` / Read+Write+Edit+Bash+Grep | ⏸ next |
 | 3 | Safety + Production Hardening — full permissions, hooks, retries, test coverage | ⏸ |
 | 4 | Context Management — auto-compaction (microcompact + boundary detection) | ⏸ |
 | 5 | Extensibility — MCP, slash commands, Skills/Plugins | ⏸ |
@@ -52,6 +55,65 @@ uv sync
 # Smoke check — package can be imported and basic invariants hold
 uv run python -m openharness
 uv run pytest
+```
+
+---
+
+## How do I try it?
+
+Phase 1 ships `oh ask "<prompt>"` — a single-shot CLI that streams a real
+LLM response. The default Provider is **Qwen via DashScope** (OpenAI-compatible),
+but any OpenAI-compatible endpoint works (OpenAI cloud, DeepSeek, Moonshot, etc.).
+
+### 1. Get a DashScope API key
+
+[阿里云百炼 / DashScope console](https://bailian.console.aliyun.com/) → 创建 API Key.
+You can swap to OpenAI / DeepSeek / etc. by pointing `OPENHARNESS_BASE_URL` at the
+right endpoint and using their key.
+
+### 2. Set environment variables
+
+```bash
+export OPENHARNESS_API_KEY="sk-..."
+export OPENHARNESS_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
+# Optional — overrides the qwen-plus default; CLI --model overrides this
+export OPENHARNESS_MODEL="qwen-plus"
+```
+
+Or drop them in a `.env` file at the repo root (loaded automatically).
+
+### 3. Run it
+
+```bash
+# Default model (qwen-plus), default max-tokens (1024)
+uv run oh ask "say hello"
+
+# Override model per-invocation
+uv run oh ask "explain async iterators in Python" --model qwen-max
+
+# Cap generation length (handy for testing or budgeting)
+uv run oh ask "what is HTTP/2?" --max-tokens 256
+
+# Pipe-friendly (the renderer is append-only on stdout, retries to stderr)
+uv run oh ask "list 5 git commands" | tee transcript.txt
+```
+
+### Errors are differentiated
+
+| Situation | What you see |
+|-----------|-------------|
+| `OPENHARNESS_API_KEY` not set | `Configuration error` + hint pointing at the env var |
+| Wrong key | `Authentication failed (HTTP 401)` + "verify OPENHARNESS_API_KEY" |
+| Provider rate-limit | `Rate-limited after retries (HTTP 429)` + retry hint |
+| Server error | `Request failed (HTTP <status>): <message>` |
+
+No Python tracebacks in the default mode. Coverage 92.83%.
+
+### Want to verify the wire path against your account?
+
+```bash
+# Runs the gated integration test (skipped when env vars aren't set)
+uv run pytest -m integration
 ```
 
 ---
@@ -93,10 +155,20 @@ uv run pre-commit run --all-files
 ├── docs/ideas/               # Blog drafts and ideation outputs
 ├── docs/learning/            # Living learning resources (book lists, etc.)
 ├── src/openharness/          # Source (src layout)
-│   ├── __init__.py
+│   ├── __init__.py           # Top-level re-exports (Settings, __version__)
 │   ├── __main__.py           # `python -m openharness` entry
-│   └── cli.py                # CLI entry point (Typer-based — Phase 1 Module 4)
+│   ├── cli.py                # CLI: Typer `oh ask` command + error UX (P1-T4)
+│   ├── _stream_render.py     # Append-only ApiStreamEvent → terminal renderer
+│   ├── config/               # pydantic-settings layer (OPENHARNESS_*) — P1-T4 4a
+│   ├── protocols/            # Pydantic v2 wire types (Anthropic-shape) — P1-T2
+│   └── api/                  # Provider clients + retry + translation — P1-T3
+│       ├── client.py         # OpenAICompatibleApiClient (Qwen / OpenAI / etc.)
+│       ├── translation.py    # Anthropic ↔ OpenAI wire translation
+│       ├── retry.py          # Exponential backoff + jitter
+│       └── errors.py         # OpenHarnessApiError hierarchy
 ├── tests/                    # pytest suite (asyncio_mode = auto)
+│   ├── protocols/, api/, config/, cli/  # mirrors src/ layout
+│   └── conftest.py           # Shared fixtures (env-var carve-outs)
 ├── .github/workflows/ci.yml  # Lint + type-check + test on Python 3.10 / 3.11
 └── .pre-commit-config.yaml   # Fast hooks only (ruff + hygiene)
 ```
