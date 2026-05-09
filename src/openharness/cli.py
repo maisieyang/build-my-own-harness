@@ -14,11 +14,12 @@ external contracts in ``decisions/05-cli.md`` + ``decisions/06`` + ``decisions/0
 * **Provider-neutral env vars** (``OPENHARNESS_API_KEY`` / ``_BASE_URL`` /
   ``_MODEL`` / ``_PERMISSION_MODE``) are read by ``Settings``; the CLI never
   reaches into ``os.environ`` directly.
-* **Differentiated error UX**: each error type maps to a one-line hint
-  pointing at the next user action. ``LoopLimitExceeded`` (D6.1) is caught
-  by the root ``except OpenHarnessError`` arm (P3-T2.2b widened from
-  ``OpenHarnessApiError``); its own message names ``--max-turns``.
-  P3-T2.2d will add a dedicated ``except LoopError`` arm above the root.
+* **Differentiated error UX**: each error type maps to a category prefix
+  in stderr; exit code 1. ``LoopLimitExceeded`` (D6.1) is caught by the
+  dedicated ``except LoopError`` arm (P3-T2.2d) — "Loop error:" prefix
+  signals the category, the embedded message itself names ``--max-turns``.
+  Anything that escapes named arms lands in the ``except OpenHarnessError``
+  root catch-all (P3-T2.2b widened from ``OpenHarnessApiError``).
 * **Permission flags** ``--auto`` / ``--dry-run`` are mutually exclusive
   (D12.8). ``--dry-run`` lists every tool call without executing
   (D12.5). ``--auto`` is parsed but Phase 2 has no interactive
@@ -54,7 +55,7 @@ from openharness.api import (
 )
 from openharness.config import Settings
 from openharness.engine import QueryContext, run_query
-from openharness.errors import OpenHarnessError
+from openharness.errors import LoopError, OpenHarnessError
 from openharness.permissions import DenyListChecker, PermissionMode
 from openharness.prompts import build_system_prompt, detect_environment
 from openharness.protocols import (
@@ -259,12 +260,18 @@ def ask(
             err=True,
         )
         raise typer.Exit(code=1) from exc
+    except LoopError as exc:
+        # P3-T2.2d: dedicated arm for loop-control-flow errors. The "Loop error:"
+        # prefix differentiates this category from the generic
+        # OpenHarnessError catch-all below; the embedded message
+        # (e.g., LoopLimitExceeded already names --max-turns) carries the
+        # remediation, so no separate Hint line is needed here.
+        typer.echo(f"Loop error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     except OpenHarnessError as exc:
         # Root catch-all for any OpenHarness error not handled above:
-        # the rare OpenHarnessApiError-but-not-Auth/Rate/Request,
-        # LoopLimitExceeded (its own message names --max-turns), and any
+        # the rare OpenHarnessApiError-but-not-Auth/Rate/Request, plus
         # P3+ ToolError / PermissionError / HookError once they raise.
-        # P3-T2.2d will split LoopError into its own arm with a dedicated hint.
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 

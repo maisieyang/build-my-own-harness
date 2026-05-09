@@ -240,6 +240,32 @@ class TestErrorUX:
         assert "Request failed" in result.stderr
         assert "500" in result.stderr
 
+    def test_loop_limit_exceeded_uses_loop_specific_prefix(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # P3-T2.2d: ``LoopLimitExceeded`` (a ``LoopError`` subclass) must be
+        # caught by the dedicated ``except LoopError`` arm, not the
+        # OpenHarnessError catch-all. User sees "Loop error:" prefix instead
+        # of generic "Error:". The message itself already names ``--max-turns``
+        # as the remediation (no separate Hint line needed).
+        from openharness.engine.errors import LoopLimitExceeded
+
+        _set_minimum_env(monkeypatch)
+        stub = _RaisingStubClient(LoopLimitExceeded(max_turns=20))
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi"])
+
+        assert result.exit_code == 1
+        # Prefix that signals the category — distinct from generic "Error:".
+        assert "Loop error" in result.stderr
+        # Embedded message + remediation hint preserved.
+        assert "20" in result.stderr
+        assert "--max-turns" in result.stderr
+        # No Python traceback should leak.
+        assert "Traceback" not in result.stderr
+
 
 # --------------------------------------------------------------------------- #
 # Argument validation                                                         #
