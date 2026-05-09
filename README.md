@@ -106,8 +106,9 @@ uv run oh ask "list 5 git commands" | tee transcript.txt
 | Wrong key | `Authentication failed (HTTP 401)` + "verify OPENHARNESS_API_KEY" |
 | Provider rate-limit | `Rate-limited after retries (HTTP 429)` + retry hint |
 | Server error | `Request failed (HTTP <status>): <message>` |
+| Loop hit `max_turns` | `Loop error: loop hit turn limit (N); raise --max-turns or simplify the prompt` |
 
-No Python tracebacks in the default mode. Coverage 92.83%.
+No Python tracebacks in the default mode. Coverage 94.81%.
 
 ### Want to verify the wire path against your account?
 
