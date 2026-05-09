@@ -92,3 +92,27 @@ def test_each_tool_has_pascal_case_name(tool_name: str) -> None:
     tool = registry.get(tool_name)
     assert tool.name == tool_name
     assert tool_name[0].isupper()
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "expected_is_read_only"),
+    [
+        ("Read", True),
+        ("Grep", True),
+        ("Write", False),
+        ("Edit", False),
+        # Bash 默认保守 False —— `cat foo` 是只读但 `rm foo` 也是 Bash,
+        # 静态判不出 read vs write,默认非只读交 AuthZ Tier 3 走 strict path
+        ("Bash", False),
+    ],
+)
+def test_is_read_only_classification(
+    tool_name: str,
+    expected_is_read_only: bool,
+) -> None:
+    # P3-T1.1a / D13.3: AuthZ Tier 3 (P3-T3) reads this attribute to decide
+    # lax vs strict permission path. Read / Grep opt-in to read-only; the
+    # others inherit BaseTool's safe default of False.
+    registry = create_default_tool_registry()
+    tool = registry.get(tool_name)
+    assert tool.is_read_only is expected_is_read_only

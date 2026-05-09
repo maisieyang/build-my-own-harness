@@ -54,6 +54,7 @@ class Read(BaseTool[ReadInput]):
         "Files larger than 10 MiB are rejected; use Grep on huge files instead."
     )
     input_model = ReadInput
+    is_read_only = True
 
     async def execute(
         self,

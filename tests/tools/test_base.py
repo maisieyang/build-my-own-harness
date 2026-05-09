@@ -85,6 +85,37 @@ class TestBaseToolAbstractEnforcement:
             _Incomplete()  # type: ignore[abstract]
 
 
+class TestIsReadOnlyDefault:
+    """``is_read_only`` (P3-T1.1a / D13.3) defaults to False on BaseTool.
+
+    Subclasses opt INTO read-only by setting ``is_read_only = True`` (Read /
+    Grep). Tools that mutate state inherit the safe default — the AuthZ Tier 3
+    (P3-T3) gives the strict-mode treatment to anything that could write.
+    """
+
+    def test_basetool_default_is_false(self) -> None:
+        # The default lives on BaseTool itself; _FakeTool doesn't override it.
+        assert _FakeTool.is_read_only is False
+
+    def test_subclass_can_override_to_true(self) -> None:
+        class _ReadOnlyFake(BaseTool[FakeInput]):
+            name = "ReadOnlyFake"
+            description = "Subclass that opts into read-only."
+            input_model = FakeInput
+            is_read_only = True
+
+            async def execute(
+                self,
+                args: FakeInput,
+                context: ToolExecutionContext,
+            ) -> ToolResult:
+                del args, context
+                return ToolResult(output="ok")
+
+        assert _ReadOnlyFake.is_read_only is True
+        assert _ReadOnlyFake().is_read_only is True
+
+
 class TestFakeToolRoundTrip:
     def test_class_attributes_set_correctly(self) -> None:
         tool = _FakeTool()

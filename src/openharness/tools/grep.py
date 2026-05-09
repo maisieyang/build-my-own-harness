@@ -67,6 +67,7 @@ class Grep(BaseTool[GrepInput]):
         "Requires ripgrep (rg) on PATH."
     )
     input_model = GrepInput
+    is_read_only = True
 
     async def execute(
         self,

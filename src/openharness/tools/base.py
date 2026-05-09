@@ -90,6 +90,14 @@ class BaseTool(ABC, Generic[InputT]):
     description: str
     input_model: type[InputT]
 
+    # P3-T1.1a / D13.3: read-only classification with a safe default. Tools
+    # that mutate state (Write / Edit / Bash) inherit ``False`` and go through
+    # the AuthZ Tier 3 strict path (P3-T3); Read-only tools (Read / Grep) opt
+    # IN by setting ``is_read_only = True``. Bash defaults False even though
+    # ``cat foo`` is read-only — static classification can't tell ``cat`` from
+    # ``rm``, so we err conservative.
+    is_read_only: bool = False
+
     @abstractmethod
     async def execute(
         self,
