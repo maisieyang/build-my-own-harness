@@ -19,7 +19,7 @@ import pytest
 from pydantic import ValidationError
 
 from openharness.tools.base import ToolExecutionContext
-from openharness.tools.bash import MAX_OUTPUT_CHARS, Bash, BashInput
+from openharness.tools.bash import MAX_OUTPUT_CHARS, NO_OUTPUT_SENTINEL, Bash, BashInput
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -81,6 +81,60 @@ class TestBashFailures:
         assert result.metadata["timed_out"] is True
         # Test must not actually take 2 seconds.
         assert result.metadata["duration_ms"] < 1800
+
+
+class TestBashEmptyOutput:
+    """Empty stdout returns the ``(no output)`` sentinel — P3-T1.1b.
+
+    Aligns with Read's ``(empty)`` and Grep's ``(no matches)``: a non-empty
+    string the LLM can disambiguate from "tool didn't run / returned blank".
+    Source: OpenHarness REFERENCE A.3.
+    """
+
+    async def test_noop_command_returns_sentinel(
+        self, tool: Bash, ctx: ToolExecutionContext
+    ) -> None:
+        result = await tool.execute(BashInput(command=":"), ctx)
+        assert result.is_error is False
+        assert result.output == NO_OUTPUT_SENTINEL
+        assert result.metadata["exit_code"] == 0
+        assert result.metadata["duration_ms"] >= 0
+
+    async def test_true_command_returns_sentinel(
+        self, tool: Bash, ctx: ToolExecutionContext
+    ) -> None:
+        result = await tool.execute(BashInput(command="true"), ctx)
+        assert result.is_error is False
+        assert result.output == NO_OUTPUT_SENTINEL
+
+    async def test_explicit_empty_echo_returns_sentinel(
+        self, tool: Bash, ctx: ToolExecutionContext
+    ) -> None:
+        # ``printf ""`` writes nothing — different from echo "" which writes
+        # a newline. We want exactly the empty-bytes case.
+        result = await tool.execute(BashInput(command='printf ""'), ctx)
+        assert result.is_error is False
+        assert result.output == NO_OUTPUT_SENTINEL
+
+    async def test_failed_command_with_no_output_still_marks_error(
+        self, tool: Bash, ctx: ToolExecutionContext
+    ) -> None:
+        # ``false`` exits 1 with no output. The sentinel applies even though
+        # is_error is True — because the empty-output / didn't-run ambiguity
+        # is independent of exit code.
+        result = await tool.execute(BashInput(command="false"), ctx)
+        assert result.is_error is True
+        assert result.output == NO_OUTPUT_SENTINEL
+        assert result.metadata["exit_code"] == 1
+
+    async def test_whitespace_only_output_is_not_sentinel(
+        self, tool: Bash, ctx: ToolExecutionContext
+    ) -> None:
+        # Strict empty only: ``echo`` produces "\n" — non-empty, so passes
+        # through unchanged. The sentinel triggers exclusively on b"".
+        result = await tool.execute(BashInput(command="echo"), ctx)
+        assert result.is_error is False
+        assert result.output == "\n"
 
 
 class TestBashTruncation:

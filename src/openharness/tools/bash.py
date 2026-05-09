@@ -7,6 +7,8 @@ Executes a shell command via :func:`asyncio.create_subprocess_shell`, in
 - ``stdout`` and ``stderr`` are merged into a single output stream.
 - On timeout: ``SIGTERM`` -> 2s grace -> ``SIGKILL``.
 - Output truncated at 12,000 chars (with a tail marker).
+- Empty stdout returns ``"(no output)"`` sentinel (P3-T1.1b) — aligns with
+  Read's ``(empty)`` and Grep's ``(no matches)``.
 - ``exit_code`` and ``duration_ms`` go to ``metadata`` (D9.5: output is for
   the LLM, metadata is for programs).
 
@@ -31,6 +33,12 @@ if TYPE_CHECKING:
 DEFAULT_TIMEOUT_SECONDS = 600
 KILL_GRACE_PERIOD_SECONDS = 2.0
 MAX_OUTPUT_CHARS = 12_000
+
+# P3-T1.1b: empty-stdout sentinel. Aligns with Read's ``(empty)`` and Grep's
+# ``(no matches)`` — gives the LLM a non-empty string to read so it can
+# disambiguate "command ran, produced no output" from "tool didn't run /
+# something stripped the output". Source: OpenHarness REFERENCE A.3.
+NO_OUTPUT_SENTINEL = "(no output)"
 
 
 class BashInput(BaseModel):
@@ -100,7 +108,12 @@ class Bash(BaseTool[BashInput]):
             )
 
         output = stdout_bytes.decode("utf-8", errors="replace")
-        if len(output) > MAX_OUTPUT_CHARS:
+        # Strict empty-only: only the empty-bytes case triggers the sentinel;
+        # whitespace-only output (e.g., bare ``echo`` -> "\n") passes through
+        # unchanged. is_error is decided downstream by exit_code.
+        if output == "":
+            output = NO_OUTPUT_SENTINEL
+        elif len(output) > MAX_OUTPUT_CHARS:
             dropped = len(output) - MAX_OUTPUT_CHARS
             output = output[:MAX_OUTPUT_CHARS] + f"\n... [truncated {dropped} chars]"
 
