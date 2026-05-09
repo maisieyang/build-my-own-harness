@@ -1,18 +1,23 @@
 """Engine error hierarchy.
 
-Per D10.2 (P2-T4 Three-Axis): :class:`LoopLimitExceeded` subclasses
-:class:`OpenHarnessApiError` so the existing CLI ``except OpenHarnessApiError``
-catch covers it without changes. The naming mismatch ("API" + "loop limit") is
-acknowledged technical debt -- Phase 3 will introduce hooks errors and at
-that point a base ``OpenHarnessError`` rename refactor is the right move.
+Per P3-T2.2b reparent (D13.4): :class:`LoopLimitExceeded` now subclasses
+:class:`openharness.errors.LoopError` (cross-cutting taxonomy under the
+``OpenHarnessError`` root). Phase 2 originally subclassed
+``OpenHarnessApiError`` so the existing cli.py catch covered it (D10.2);
+that was acknowledged technical debt — the loop is not an API-layer concern.
+
+cli.py's catch-all changed from ``except OpenHarnessApiError`` to
+``except OpenHarnessError`` in the same sub-unit so root-level coverage is
+preserved. P3-T2.2d adds a dedicated ``except LoopError`` arm with a
+loop-specific hint.
 """
 
 from __future__ import annotations
 
-from openharness.api.errors import OpenHarnessApiError
+from openharness.errors import LoopError
 
 
-class LoopLimitExceeded(OpenHarnessApiError):
+class LoopLimitExceeded(LoopError):
     """``run_query`` reached its ``max_turns`` cap without ``end_turn``.
 
     Carries the loop's hard cap so the caller can render a hint like

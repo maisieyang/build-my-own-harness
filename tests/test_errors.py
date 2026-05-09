@@ -76,3 +76,30 @@ class TestOpenHarnessApiErrorReparent:
         from openharness.api import OpenHarnessApiError as ApiViaPackage
 
         assert ApiViaPackage is OpenHarnessApiError
+
+
+class TestLoopError:
+    """``LoopError`` (P3-T2.2b) — control-flow layer of the agent loop.
+
+    Concrete subclass: ``LoopLimitExceeded`` (in ``engine/errors.py``).
+    Direct-raising of bare ``LoopError`` is allowed for now but rare —
+    Phase 4 may add ``LoopCancelled`` / ``LoopBudgetExceeded`` siblings.
+    """
+
+    def test_is_subclass_of_root(self) -> None:
+        from openharness.errors import LoopError
+
+        assert issubclass(LoopError, OpenHarnessError)
+
+    def test_can_be_raised_and_caught_at_root(self) -> None:
+        from openharness.errors import LoopError
+
+        with pytest.raises(OpenHarnessError):
+            raise LoopError("loop misbehaved")
+
+    def test_loop_error_is_not_an_api_error(self) -> None:
+        # The whole point of the reparent: loop control-flow errors are
+        # cross-cutting, not API-layer.
+        from openharness.errors import LoopError
+
+        assert not issubclass(LoopError, OpenHarnessApiError)

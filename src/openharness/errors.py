@@ -44,3 +44,17 @@ class OpenHarnessError(Exception):
     The root itself carries only the message — anything richer belongs in
     a subclass.
     """
+
+
+class LoopError(OpenHarnessError):
+    """Errors from the agent loop's control flow.
+
+    Concrete subclasses live near the loop they describe (e.g.,
+    :class:`openharness.engine.errors.LoopLimitExceeded` — the loop hit its
+    ``max_turns`` cap). Phase 4 may add ``LoopCancelled`` (user Ctrl+C)
+    and ``LoopBudgetExceeded`` (cost cap) as siblings.
+
+    Reparented in P3-T2.2b: Phase 2 had ``LoopLimitExceeded`` directly
+    under ``OpenHarnessApiError`` because the cli.py catch-all happened to
+    cover it. The loop is not an API-layer concern, so D13.4 split it out.
+    """
