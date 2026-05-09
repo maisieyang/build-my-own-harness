@@ -261,6 +261,79 @@ Phase 3 boundary 的本质，不是「技术选型」，是问：
 
 ---
 
+## 7. 从 framing 到实施——5 条统一处理原则
+
+> 这套 framing（RPC 同构 + 奇怪 client + 5 件配套 + 朝工程方向）落到 Phase 3
+> 实施时，沉淀成 5 条可复用的处理原则。它们既是 Phase 3 的 judge framework，
+> 也是 Phase 4/5/6 的 inheritance。Phase 2 close-out 之后第一次自我 review 时
+> 浮现，记下来。
+
+### 7.1 原则 1：每件抽象 = 回答一个反复出现的痛点
+
+不是「装齐为了像 production 系统」，是**每件抽象必须能回答"哪个反复痛点？"**。
+
+| 反复痛点 | 抽象 |
+|---|---|
+| 横切逻辑要写 100 遍 | middleware (hook) |
+| 安全规则演进 ≠ 业务演进 | AuthZ Tier |
+| 事后回查没痕迹 | structlog observability |
+| 一个兜底吞信息 | error taxonomy 5 类 |
+
+→ 这是 §2.7 judge framework 的具象化。**所有未来的 capability 都要过这把尺**——
+不能回答"哪个反复痛点"的抽象，就是过度设计。
+
+### 7.2 原则 2：「production 化」= 把 implicit 信任假设全 explicit 出来
+
+| Phase 1+2 implicit | Phase 3 explicit |
+|---|---|
+| "LLM 不会作恶" | AuthZ 三层 Tier |
+| "用户在场监督" | hook 5 events |
+| "出错我会自己看到" | structlog 接入 |
+| "失败兜底就行" | error taxonomy 5 类 |
+
+**这条原则比"加配套"更深**——它说清了「能跑 → 可放心」的差距到底是什么：
+**把信任面从模糊变可控**。每一条 implicit 信任假设都是潜在的事故源；
+explicit 出来意味着可被审视、可被插入、可被诊断。
+
+### 7.3 原则 3：决策必须可 grep 回 framing
+
+`D{N}.{M} → docstring → code` 的 trace 链：
+
+- boundary doc 每个 D13.x 都有 framing §2.x 锚点
+- 实施时每个 module docstring 引用 D13.x（如 `tools/base.py` 引用 D8.1-D8.7）
+- 一年后重看代码，决策的 *why* 还在那
+
+retro §8 已经验证过 Phase 2 的可行性（Phase 2 全程 35+ sub-decisions 都按这个
+链路落地）。**这是 framework 的复利——不是 build-time 的事，是 maintain-time 的事**。
+
+### 7.4 原则 4：「现在做 / 留接口 / 不做」必须显式分层
+
+不只说做什么，**必须说不做什么 + 为什么**。具体例：
+
+- **D13.5 cost cap 推 Phase 4** → 跟 Compaction 强耦合，一起设计避免双重重构
+- **D13.6 ABC 三层留位** → 现在 structlog / Phase 4 EventLogger / Phase 5+ OTel
+- **D13.3 拆 `is_read_only`（现在）/ parallel（Phase 6）** → 低成本立刻受益 vs 高成本不紧急
+
+reversibility 显式分层让"未来怎么扩"的边界清晰，避免**当下不做的事变成未来的
+silent 锁死**。
+
+### 7.5 原则 5：抄 judge framework，不抄具体形
+
+> **「不是抄 RPC 框架的形——是抄它用了 30 年才学会的判断 framework」**
+
+——§6 一句话原话。**这条是元原则**：前 4 条不是 prescriptive checklist
+（"按这个清单挨个打钩就对了"），是 **generative judgment**（"用这套思维方式
+判断任何新场景该怎么办"）。
+
+具体形会随技术演进——Express middleware vs gRPC interceptor vs LangGraph
+conditional edges vs OpenHarness hook，每一代具体形都不一样。但**判断
+framework 跨代不变**：哪些痛点反复出现 → 哪些必须抽 → 哪些可以 inline。
+
+这就是为什么这套原则**能用在 Phase 4 / 5 / 6**——同一套 trace 链 + 同一套
+judge framework。**框架构建者的复利就长在这里**。
+
+---
+
 ## 一句话沉淀
 
 > **Phase 1 把 chambers 装好，Phase 2 让 heart beat 起来，Phase 3 把这颗心装上
