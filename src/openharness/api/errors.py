@@ -9,14 +9,23 @@ Three concrete error types descend from a common base, matching HTTP semantics:
 All three inherit from ``OpenHarnessApiError`` so callers who do not care
 about the specific kind can write ``except OpenHarnessApiError:`` once.
 
+P3-T2.2a (D13.4): ``OpenHarnessApiError`` itself now subclasses the
+cross-cutting root :class:`openharness.errors.OpenHarnessError`. This lets
+the loop / hooks / permissions layers live under the same root without
+miscategorizing themselves as API errors. Backward-compat: existing
+``from openharness.api import OpenHarnessApiError`` paths still work
+unchanged.
+
 When wrapping an SDK exception, always use ``raise X from sdk_error`` so the
 ``__cause__`` chain is preserved for debug visibility.
 """
 
 from __future__ import annotations
 
+from openharness.errors import OpenHarnessError
 
-class OpenHarnessApiError(Exception):
+
+class OpenHarnessApiError(OpenHarnessError):
     """Base class for all API client errors.
 
     Carries the optional HTTP status code so callers can make fine-grained
