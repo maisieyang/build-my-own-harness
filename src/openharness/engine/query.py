@@ -165,9 +165,23 @@ async def _dispatch_one(
     except ValidationError as exc:
         return f"invalid input for {tool_use.name}: {exc}", True
 
-    decision = context.permission_checker.evaluate(tool_use.name, args, exec_context)
-    if decision is Decision.DENY:
-        return f"permission denied: {tool_use.name}", True
+    permission = context.permission_checker.evaluate(tool_use.name, args, exec_context)
+    if permission.decision is Decision.DENY:
+        reason = permission.reason or tool_use.name
+        return f"permission denied: {reason}", True
+    if permission.decision is Decision.ASK:
+        # Three-Axis G:ASK + mode 解释决定终局。
+        # - AUTO: 用户已经预先信任,treat as ALLOW
+        # - DEFAULT (and any future modes): fail-safe to DENY with hint;
+        #   Phase 4+ replaces this with an interactive prompt.
+        if context.permission_mode is PermissionMode.AUTO:
+            pass  # fall through to execute
+        else:
+            reason = permission.reason or tool_use.name
+            return (
+                f"permission denied (requires confirmation): {reason}; rerun with --auto to allow",
+                True,
+            )
 
     result = await tool.execute(args, exec_context)
     return result.output, result.is_error

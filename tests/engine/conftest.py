@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from openharness.permissions import Decision
+from openharness.permissions import DecisionResult
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -28,10 +28,11 @@ if TYPE_CHECKING:
 
 
 class _AllowAllChecker:
-    """Permission checker that always returns ``Decision.ALLOW``.
+    """Permission checker that always returns ``DecisionResult.allow()``.
 
     Used by tests that exercise the happy-path tool-dispatch flow.
     Structurally satisfies :class:`PermissionChecker` -- no inheritance needed.
+    P3-T3.3d:upgraded from bare ``Decision`` to ``DecisionResult``.
     """
 
     def evaluate(
@@ -39,15 +40,16 @@ class _AllowAllChecker:
         tool_name: str,
         args: BaseModel,
         context: ToolExecutionContext,
-    ) -> Decision:
+    ) -> DecisionResult:
         del tool_name, args, context
-        return Decision.ALLOW
+        return DecisionResult.allow()
 
 
 class _DenyChecker:
-    """Permission checker that always returns ``Decision.DENY``.
+    """Permission checker that always returns ``DecisionResult.deny(...)``.
 
     Used by tests that exercise the permission-denial recovery path.
+    P3-T3.3d:upgraded from bare ``Decision`` to ``DecisionResult``.
     """
 
     def evaluate(
@@ -55,9 +57,9 @@ class _DenyChecker:
         tool_name: str,
         args: BaseModel,
         context: ToolExecutionContext,
-    ) -> Decision:
+    ) -> DecisionResult:
         del tool_name, args, context
-        return Decision.DENY
+        return DecisionResult.deny("stub denial for test")
 
 
 class _StubApiClient:

@@ -17,6 +17,7 @@ plugins / MCP adapters can drop in a checker without needing to inherit.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Protocol
 
@@ -27,10 +28,60 @@ if TYPE_CHECKING:
 
 
 class Decision(Enum):
-    """Outcome of a permission evaluation."""
+    """Outcome of a permission evaluation.
+
+    Three states (P3-T3.3d expanded from binary):
+
+    - ``ALLOW``:framework lets the call run.
+    - ``DENY``:framework refuses; caller feeds reason back to LLM
+      (ToolResult is_error=True). LLM 自己 plan B.
+    - ``ASK``:framework wants human-in-the-loop confirmation. Resolution
+      depends on ``PermissionMode``:AUTO → treat as ALLOW;
+      DEFAULT → Phase 4+ will prompt;until then fail-safe to DENY with
+      a hint pointing at ``--auto``.
+    """
 
     ALLOW = "allow"
     DENY = "deny"
+    ASK = "ask"
+
+
+@dataclass(frozen=True)
+class DecisionResult:
+    """A permission decision + optional reason.
+
+    P3-T3.3d:Phase 2 ``Decision`` enum was bare yes/no — when DENY fired,
+    the LLM only saw ``"permission denied: <tool_name>"`` with no
+    explanation. ``DecisionResult`` wraps the decision with a reason
+    string so the deny message can guide the LLM's next step.
+
+    Use the classmethods (:meth:`allow` / :meth:`deny` / :meth:`ask`)
+    rather than constructing directly — they encode the convention that
+    non-ALLOW results carry a reason.
+    """
+
+    decision: Decision
+    reason: str | None = None  # populated for DENY / ASK
+
+    @classmethod
+    def allow(cls) -> DecisionResult:
+        """Construct an ALLOW result (no reason needed)."""
+        return cls(decision=Decision.ALLOW)
+
+    @classmethod
+    def deny(cls, reason: str) -> DecisionResult:
+        """Construct a DENY result with a reason explaining why."""
+        return cls(decision=Decision.DENY, reason=reason)
+
+    @classmethod
+    def ask(cls, reason: str) -> DecisionResult:
+        """Construct an ASK result (boundary case warranting confirmation).
+
+        ``reason`` explains the boundary; loop layer maps to ALLOW (AUTO
+        mode) / DENY-with-hint (DEFAULT mode, Phase 4+ replaces with
+        interactive prompt).
+        """
+        return cls(decision=Decision.ASK, reason=reason)
 
 
 class PermissionMode(Enum):
@@ -64,8 +115,12 @@ class PermissionChecker(Protocol):
         tool_name: str,
         args: BaseModel,
         context: ToolExecutionContext,
-    ) -> Decision:
-        """Return ``Decision.ALLOW`` or ``Decision.DENY``."""
+    ) -> DecisionResult:
+        """Return ``DecisionResult.allow()`` / ``deny(reason)`` / ``ask(reason)``.
+
+        Signature widened in P3-T3.3d:Phase 2 returned bare ``Decision``;
+        Phase 3 needs reason + three-state semantics for the AuthZ Tiers.
+        """
         ...
 
 
@@ -98,15 +153,16 @@ class DenyListChecker:
         tool_name: str,
         args: BaseModel,
         context: ToolExecutionContext,
-    ) -> Decision:
-        del context  # unused at this layer; Phase 3 may consult cwd
+    ) -> DecisionResult:
+        del context  # unused at this layer; TierBasedPermissionChecker (3e) uses cwd
         if tool_name != "Bash":
-            return Decision.ALLOW
+            return DecisionResult.allow()
         # ``args`` is a validated BashInput at runtime; getattr keeps the
         # check duck-typed (no import dependency on tools.bash).
         command = getattr(args, "command", None)
         if not isinstance(command, str):
-            return Decision.ALLOW
-        if any(pattern in command for pattern in _DENY_PATTERNS):
-            return Decision.DENY
-        return Decision.ALLOW
+            return DecisionResult.allow()
+        for pattern in _DENY_PATTERNS:
+            if pattern in command:
+                return DecisionResult.deny(f"matches catastrophic Bash pattern {pattern!r}")
+        return DecisionResult.allow()

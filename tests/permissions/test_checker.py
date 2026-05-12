@@ -1,14 +1,19 @@
-"""Tests for the permission interface and DenyListChecker — P2-T4.4c + P2-T6.6a.
+"""Tests for the permission interface and DenyListChecker — P2-T4.4c +
+P2-T6.6a + P3-T3.3d (Decision tri-state + DecisionResult upgrade).
 
 Contract properties:
 
-1. ``Decision`` is a closed 2-value enum; ``PermissionMode`` is a closed
-   3-value enum. Direct identity comparison is the supported test idiom.
+1. ``Decision`` is a closed **3-value** enum (P3-T3.3d added ASK);
+   ``PermissionMode`` is a closed 3-value enum.
 2. ``PermissionChecker`` is a Protocol — structural subtypes work without
-   inheritance.
+   inheritance. ``evaluate(...)`` returns ``DecisionResult`` (P3-T3.3d).
 3. ``DenyListChecker`` rejects every catastrophic shell pattern in
-   ``_DENY_PATTERNS`` and lets safe Bash commands through; non-Bash tools
-   always pass.
+   ``_DENY_PATTERNS`` (returning ``DecisionResult.deny(...)`` with reason)
+   and lets safe Bash commands through; non-Bash tools always pass.
+
+Decision enum + DecisionResult shape are exercised in detail by
+``test_decision_result.py``; this file focuses on the Protocol +
+DenyListChecker behavior.
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ from pydantic import BaseModel
 
 from openharness.permissions import (
     Decision,
+    DecisionResult,
     DenyListChecker,
     PermissionChecker,
     PermissionMode,
@@ -37,42 +43,31 @@ class _BashLikeArgs(BaseModel):
     command: str
 
 
-class TestDecision:
-    def test_two_outcomes(self) -> None:
-        # mypy literal-narrowing flags `Decision.ALLOW != Decision.DENY` as
-        # statically obvious; comparing via list membership keeps the runtime
-        # check meaningful while staying mypy-strict-clean.
-        assert Decision.ALLOW in {Decision.ALLOW}
-        assert Decision.DENY not in {Decision.ALLOW}
-
-    def test_string_values_for_serialization(self) -> None:
-        # Useful for emitting decisions in logs / hooks downstream.
-        assert Decision.ALLOW.value == "allow"
-        assert Decision.DENY.value == "deny"
-
-
 class TestPermissionCheckerProtocol:
-    def test_structural_subtype_satisfies_protocol(self) -> None:
-        # Any object that implements ``evaluate(...)`` with the right shape
-        # should be assignable to a PermissionChecker-typed binding.
+    """Detailed Decision / DecisionResult shape tests live in
+    ``test_decision_result.py``;here we only verify the Protocol's
+    structural typing + return shape."""
 
+    def test_structural_subtype_satisfies_protocol(self) -> None:
+        # Any object that implements ``evaluate(...) -> DecisionResult``
+        # should be assignable to a PermissionChecker-typed binding.
         class _Allow:
             def evaluate(
                 self,
                 tool_name: str,
                 args: BaseModel,
                 context: ToolExecutionContext,
-            ) -> Decision:
+            ) -> DecisionResult:
                 del tool_name, args, context  # marker: unused in stub
-                return Decision.ALLOW
+                return DecisionResult.allow()
 
         checker: PermissionChecker = _Allow()
-        decision = checker.evaluate(
+        result = checker.evaluate(
             "Bash",
             _DummyArgs(value="hi"),
             ToolExecutionContext(cwd=Path("/tmp")),
         )
-        assert decision is Decision.ALLOW
+        assert result.decision is Decision.ALLOW
 
     def test_deny_path_returns_deny(self) -> None:
         class _Deny:
@@ -81,19 +76,18 @@ class TestPermissionCheckerProtocol:
                 tool_name: str,
                 args: BaseModel,
                 context: ToolExecutionContext,
-            ) -> Decision:
+            ) -> DecisionResult:
                 del tool_name, args, context
-                return Decision.DENY
+                return DecisionResult.deny("stub denial")
 
         checker: PermissionChecker = _Deny()
-        assert (
-            checker.evaluate(
-                "Bash",
-                _DummyArgs(value="x"),
-                ToolExecutionContext(cwd=Path("/tmp")),
-            )
-            is Decision.DENY
+        result = checker.evaluate(
+            "Bash",
+            _DummyArgs(value="x"),
+            ToolExecutionContext(cwd=Path("/tmp")),
         )
+        assert result.decision is Decision.DENY
+        assert result.reason == "stub denial"
 
 
 class TestPermissionMode:
@@ -123,19 +117,19 @@ class TestDenyListCheckerSafeCommands:
     def test_safe_bash_command_allowed(
         self, checker: DenyListChecker, ctx: ToolExecutionContext
     ) -> None:
-        decision = checker.evaluate("Bash", _BashLikeArgs(command="ls /tmp"), ctx)
-        assert decision is Decision.ALLOW
+        result = checker.evaluate("Bash", _BashLikeArgs(command="ls /tmp"), ctx)
+        assert result.decision is Decision.ALLOW
 
     def test_safe_command_with_substring_close_to_pattern(
         self, checker: DenyListChecker, ctx: ToolExecutionContext
     ) -> None:
         # "rm -rf ./build" should be allowed; only "rm -rf /" / "/* trigger.
-        decision = checker.evaluate(
+        result = checker.evaluate(
             "Bash",
             _BashLikeArgs(command="rm -rf ./build"),
             ctx,
         )
-        assert decision is Decision.ALLOW
+        assert result.decision is Decision.ALLOW
 
 
 class TestDenyListCheckerDangerousCommands:
@@ -158,8 +152,10 @@ class TestDenyListCheckerDangerousCommands:
         ctx: ToolExecutionContext,
         command: str,
     ) -> None:
-        decision = checker.evaluate("Bash", _BashLikeArgs(command=command), ctx)
-        assert decision is Decision.DENY
+        result = checker.evaluate("Bash", _BashLikeArgs(command=command), ctx)
+        assert result.decision is Decision.DENY
+        # P3-T3.3d: deny carries a reason now (used in LLM-facing message).
+        assert result.reason is not None and "Bash pattern" in result.reason
 
 
 class TestDenyListCheckerScope:
@@ -174,13 +170,13 @@ class TestDenyListCheckerScope:
         tool_name: str,
     ) -> None:
         # D12.2: deny-list only scopes Bash; other tools pass through.
-        decision = checker.evaluate(tool_name, _DummyArgs(value="rm -rf /"), ctx)
-        assert decision is Decision.ALLOW
+        result = checker.evaluate(tool_name, _DummyArgs(value="rm -rf /"), ctx)
+        assert result.decision is Decision.ALLOW
 
     def test_bash_args_without_command_attribute_allowed(
         self, checker: DenyListChecker, ctx: ToolExecutionContext
     ) -> None:
         # Defensive duck-typing path: shouldn't happen in practice (loop
         # validates BashInput before evaluate), but behaves gracefully.
-        decision = checker.evaluate("Bash", _DummyArgs(value="anything"), ctx)
-        assert decision is Decision.ALLOW
+        result = checker.evaluate("Bash", _DummyArgs(value="anything"), ctx)
+        assert result.decision is Decision.ALLOW

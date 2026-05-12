@@ -391,7 +391,10 @@ class TestRunQueryRecoveryPaths:
             event for event in events if isinstance(event, ToolExecutionCompletedEvent)
         )
         assert completed.is_error is True
-        assert "permission denied: Fake" in completed.output
+        # P3-T3.3d:reason now comes from DecisionResult,not the tool name.
+        # _DenyChecker stub returns "stub denial for test" as the reason.
+        assert "permission denied" in completed.output
+        assert "stub denial for test" in completed.output
 
     async def test_tool_returning_is_error_passes_through(self) -> None:
         from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
