@@ -191,3 +191,93 @@ class TestMatchesTier2:
         # 绝对 pattern 仍然 work(在 absolute_pattern test 里覆盖了)。
         patterns = ("secrets/**",)
         assert _matches_tier2("/tmp/other/secrets/x", patterns, tmp_path) is None
+
+
+class TestInsideProjectRoot:
+    """``_inside_project_root(path, cwd)`` — Tier 3 boundary check helper.
+
+    Mirrors the logic currently in ``edit.py`` (P3-T3.3f will delete that
+    copy and the framework's Checker becomes the single source).
+    """
+
+    def test_path_directly_under_cwd_is_inside(self, tmp_path: Path) -> None:
+        from openharness.permissions.tier_based import _inside_project_root
+
+        assert _inside_project_root(tmp_path / "foo.txt", tmp_path) is True
+
+    def test_path_nested_under_cwd_is_inside(self, tmp_path: Path) -> None:
+        from openharness.permissions.tier_based import _inside_project_root
+
+        assert _inside_project_root(tmp_path / "src" / "deep" / "main.py", tmp_path) is True
+
+    def test_cwd_itself_is_inside(self, tmp_path: Path) -> None:
+        from openharness.permissions.tier_based import _inside_project_root
+
+        assert _inside_project_root(tmp_path, tmp_path) is True
+
+    def test_path_outside_cwd_is_outside(self, tmp_path: Path) -> None:
+        from openharness.permissions.tier_based import _inside_project_root
+
+        assert _inside_project_root("/etc/passwd", tmp_path) is False
+
+    def test_path_with_traversal_climbing_out(self, tmp_path: Path) -> None:
+        from openharness.permissions.tier_based import _inside_project_root
+
+        # `tmp_path/../../etc/foo` resolves outside cwd.
+        sneaky = tmp_path / ".." / ".." / "etc" / "passwd"
+        assert _inside_project_root(sneaky, tmp_path) is False
+
+    def test_path_with_traversal_staying_in(self, tmp_path: Path) -> None:
+        from openharness.permissions.tier_based import _inside_project_root
+
+        # `tmp_path/sub/../foo` resolves to `tmp_path/foo` → inside.
+        roundtrip = tmp_path / "sub" / ".." / "foo.txt"
+        assert _inside_project_root(roundtrip, tmp_path) is True
+
+    def test_accepts_str_or_path(self, tmp_path: Path) -> None:
+        from openharness.permissions.tier_based import _inside_project_root
+
+        target_str = str(tmp_path / "foo.txt")
+        assert _inside_project_root(target_str, tmp_path) is True
+
+
+class TestMatchesTier3:
+    """``_matches_tier3(is_read_only, path, cwd)`` — mode-based check.
+
+    Per Three-Axis Micro-Decision C:read-only tools skip Tier 3
+    entirely; strict tools (is_read_only=False) require the path to be
+    inside the project root.
+
+    Per Three-Axis Micro-Decision G:Tier 3 matches map to ASK in the
+    final DecisionResult (not DENY) — but that mapping happens in the
+    Checker layer (3e). This sub-unit returns a reason string when the
+    boundary is crossed, ``None`` otherwise.
+    """
+
+    def test_read_only_tool_skips_tier3(self, tmp_path: Path) -> None:
+        from openharness.permissions.tier_based import _matches_tier3
+
+        # Read on a path outside cwd is FINE (Tier 3 lax for read-only).
+        assert _matches_tier3(True, "/etc/passwd", tmp_path) is None
+
+    def test_strict_tool_path_inside_cwd_passes(self, tmp_path: Path) -> None:
+        from openharness.permissions.tier_based import _matches_tier3
+
+        target = tmp_path / "src" / "main.py"
+        assert _matches_tier3(False, str(target), tmp_path) is None
+
+    def test_strict_tool_path_outside_cwd_returns_reason(self, tmp_path: Path) -> None:
+        from openharness.permissions.tier_based import _matches_tier3
+
+        # Write/Edit/Bash with a path outside cwd → reason string explains it.
+        reason = _matches_tier3(False, "/tmp/elsewhere.txt", tmp_path)
+        assert reason is not None
+        assert "outside project root" in reason
+        assert str(tmp_path) in reason  # cwd 显示在 reason 里让 LLM 理解
+
+    def test_no_path_returns_none_even_for_strict_tool(self, tmp_path: Path) -> None:
+        from openharness.permissions.tier_based import _matches_tier3
+
+        # Bash 不带 path 字段(args 没 path) → Tier 3 跳过,Bash 的安全
+        # 完全在 Tier 1/2/Hook 那一层。
+        assert _matches_tier3(False, None, tmp_path) is None

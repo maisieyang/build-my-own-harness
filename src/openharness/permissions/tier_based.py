@@ -95,6 +95,56 @@ def _matches_tier1(path: str) -> str | None:
     return None
 
 
+def _inside_project_root(path: Path | str, cwd: Path) -> bool:
+    """True iff ``path`` (after symlink + ``..`` normalization) is the same
+    as ``cwd`` or one of its descendants.
+
+    Tier 3 boundary helper (P3-T3.3c). Mirrors the historical logic from
+    ``edit.py`` — P3-T3.3f deletes that copy and centralizes here.
+
+    ``resolve(strict=False)`` works on non-existent paths — important
+    because permission checks happen *before* the tool runs, so the
+    target may not exist yet (e.g., Write creating a new file).
+    """
+    p = Path(path) if isinstance(path, str) else path
+    try:
+        p.resolve(strict=False).relative_to(cwd.resolve(strict=False))
+    except ValueError:
+        return False
+    return True
+
+
+def _matches_tier3(
+    is_read_only: bool,
+    path: str | None,
+    cwd: Path,
+) -> str | None:
+    """Tier 3 mode-based check (P3-T3.3c).
+
+    Per Three-Axis Micro-Decision C:
+
+    - Read-only tools (``is_read_only=True``) skip Tier 3 entirely.
+      Reading files outside cwd (e.g., ``~/Documents/notes.md``) is a
+      legitimate use case.
+    - Strict tools (``is_read_only=False``) must operate within cwd.
+      A path outside cwd returns a reason string.
+    - No path (``path=None``, e.g., Bash's ``command`` field) skips
+      Tier 3 — Bash safety lives in Tier 1/2 + Hook layer.
+
+    Per Three-Axis Micro-Decision G:Tier 3 matches map to **ASK** in
+    the final DecisionResult (not DENY) — but that mapping is in the
+    Checker layer (3e). This function returns a reason string for the
+    boundary violation; the caller decides ASK vs DENY semantics.
+    """
+    if is_read_only:
+        return None
+    if path is None:
+        return None
+    if _inside_project_root(path, cwd):
+        return None
+    return f"path {path!r} is outside project root (cwd: {cwd})"
+
+
 def _matches_tier2(path: str, patterns: tuple[str, ...], cwd: Path) -> str | None:
     """Return the Tier 2 user pattern that matched, or ``None`` if no match.
 
