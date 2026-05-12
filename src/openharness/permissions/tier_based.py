@@ -28,6 +28,16 @@ from __future__ import annotations
 import fnmatch
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+from openharness.permissions.checker import DecisionResult
+
+if TYPE_CHECKING:
+    from pydantic import BaseModel
+
+    from openharness.config import Settings
+    from openharness.tools import ToolRegistry
+    from openharness.tools.base import ToolExecutionContext
 
 # Per decisions/08 D13.2 + P3-T3 Three-Axis Micro-Decision A:
 # 8 hardcoded patterns covering universally-sensitive paths. Adding
@@ -180,3 +190,116 @@ def _matches_tier2(path: str, patterns: tuple[str, ...], cwd: Path) -> str | Non
         elif rel_path is not None and _glob_match(rel_path, pattern):
             return pattern
     return None
+
+
+# Bash catastrophic substring deny-list — carry-over from Phase 2
+# DenyListChecker. These patterns are a small framework-owned safety floor
+# for the Bash tool;P3-T4 Hook lets users add custom command-level checks
+# (e.g., LLM-as-judge on the shell command for ambiguous cases).
+_BASH_DENY_PATTERNS: tuple[str, ...] = (
+    "rm -rf /",
+    "rm -rf /*",
+    ":(){ :|:& };:",  # classic fork bomb
+    "mkfs",
+    "dd if=/dev/zero of=/dev/",
+    "> /dev/sda",
+    "chmod -R 777 /",
+)
+
+
+def _matches_bash_deny(command: str) -> str | None:
+    """Return the catastrophic Bash pattern that matched, or None."""
+    for pattern in _BASH_DENY_PATTERNS:
+        if pattern in command:
+            return pattern
+    return None
+
+
+def _extract_path_arg(args: BaseModel) -> str | None:
+    """Best-effort extraction of a path-bearing field from validated args.
+
+    Conventions across our tools (Read/Write/Edit use ``path``; Bash uses
+    ``command`` which is shell syntax not a path; Grep uses ``pattern``
+    + ``glob`` neither of which is a single path to gate).
+    Returns ``None`` when no recognizable path field — Tier 1/2/3 then
+    auto-skip (correct:Bash safety is on ``command``, not path).
+    """
+    for attr in ("path", "file_path"):
+        value = getattr(args, attr, None)
+        if isinstance(value, str):
+            return value
+    return None
+
+
+class TierBasedPermissionChecker:
+    """P3-T3.3e:full three-Tier AuthZ checker composing all building blocks.
+
+    Replaces Phase 2's ``DenyListChecker`` once cli.py wires this in.
+    Implements the :class:`PermissionChecker` Protocol structurally — no
+    inheritance.
+
+    Resolution order (first-match-wins):
+
+    1. **Bash deny-list** (carry-over for catastrophic shell patterns)
+    2. **Tier 1**:hardcoded sensitive paths → DENY
+    3. **Tier 2**:user-config glob patterns from ``Settings.deny_paths`` → DENY
+    4. **Tier 3**:mode-based — write/exec tools outside cwd → **ASK** (G)
+    5. fallthrough → ALLOW
+
+    Dependencies injected at construction (per Three-Axis):
+
+    - ``registry``:to look up ``tool.is_read_only`` for Tier 3
+    - ``settings``:to read ``deny_paths`` for Tier 2
+
+    evaluate() signature stays minimal (matches the Protocol from
+    ``checker.py``) — per-call data only;config / registry are state.
+    """
+
+    def __init__(self, registry: ToolRegistry, settings: Settings) -> None:
+        self._registry = registry
+        self._deny_paths = settings.deny_paths
+
+    def evaluate(
+        self,
+        tool_name: str,
+        args: BaseModel,
+        context: ToolExecutionContext,
+    ) -> DecisionResult:
+        # 1. Bash catastrophic deny-list (Phase 2 carry-over).
+        if tool_name == "Bash":
+            command = getattr(args, "command", None)
+            if isinstance(command, str):
+                bash_pat = _matches_bash_deny(command)
+                if bash_pat is not None:
+                    return DecisionResult.deny(f"matches catastrophic Bash pattern {bash_pat!r}")
+
+        # Path-bearing tools enter the 3-Tier path filter.
+        path = _extract_path_arg(args)
+
+        if path is not None:
+            # 2. Tier 1 hardcoded sensitive paths.
+            t1 = _matches_tier1(path)
+            if t1 is not None:
+                return DecisionResult.deny(f"path {path!r} matches sensitive system path ({t1})")
+            # 3. Tier 2 user globs.
+            t2 = _matches_tier2(path, self._deny_paths, context.cwd)
+            if t2 is not None:
+                return DecisionResult.deny(f"path {path!r} matches deny rule {t2!r}")
+
+        # 4. Tier 3 mode-based (needs tool.is_read_only).
+        try:
+            tool = self._registry.get(tool_name)
+        except KeyError:
+            # Tool not found:return ALLOW;the loop will catch this via
+            # registry.get separately and produce a "tool not found" error.
+            # AuthZ shouldn't second-guess that.
+            return DecisionResult.allow()
+
+        t3 = _matches_tier3(tool.is_read_only, path, context.cwd)
+        if t3 is not None:
+            # Tier 3 maps to ASK (Three-Axis G):writing outside cwd is a
+            # plausible legitimate intent;loop layer + PermissionMode
+            # decide final outcome.
+            return DecisionResult.ask(t3)
+
+        return DecisionResult.allow()

@@ -56,7 +56,7 @@ from openharness.api import (
 from openharness.config import Settings
 from openharness.engine import QueryContext, run_query
 from openharness.errors import LoopError, OpenHarnessError
-from openharness.permissions import DenyListChecker, PermissionMode
+from openharness.permissions import PermissionMode, TierBasedPermissionChecker
 from openharness.prompts import build_system_prompt, detect_environment
 from openharness.protocols import (
     ConversationMessage,
@@ -139,7 +139,10 @@ async def _run_ask(
     context = QueryContext(
         api_client=client,
         tool_registry=registry,
-        permission_checker=DenyListChecker(),
+        # P3-T3.3e:replaced Phase 2 DenyListChecker (Bash-only) with the
+        # full three-Tier checker (hardcoded paths + user globs + mode-based +
+        # carry-over Bash deny-list).
+        permission_checker=TierBasedPermissionChecker(registry, settings),
         system_prompt=system_prompt,
         cwd=env.cwd,
         model=model,

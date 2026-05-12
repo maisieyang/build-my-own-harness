@@ -30,6 +30,7 @@ from openharness.permissions.checker import (
     PermissionChecker,
     PermissionMode,
 )
+from openharness.permissions.tier_based import TierBasedPermissionChecker
 
 __all__ = [
     "Decision",
@@ -37,4 +38,5 @@ __all__ = [
     "DenyListChecker",
     "PermissionChecker",
     "PermissionMode",
+    "TierBasedPermissionChecker",
 ]
