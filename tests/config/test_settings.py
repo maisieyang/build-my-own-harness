@@ -171,3 +171,46 @@ class TestDotEnvFile:
         # Real env wins for the field it sets; file fills in what's missing.
         assert settings.api_key == "key-from-real-env"
         assert settings.base_url == "https://file.example.com/v1"
+
+
+class TestDenyPaths:
+    """``deny_paths`` (P3-T3.3b) — comma-separated env var for Tier 2 globs.
+
+    Parsed from ``OPENHARNESS_DENY_PATHS``. Empty value (or unset) yields
+    an empty tuple — the AuthZ Tier 2 layer treats this as "no user rules".
+    """
+
+    def test_default_is_empty_tuple_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        settings = Settings()
+        assert settings.deny_paths == ()
+
+    def test_single_pattern_parsed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_DENY_PATHS", "secrets/**")
+        settings = Settings()
+        assert settings.deny_paths == ("secrets/**",)
+
+    def test_multiple_patterns_comma_separated(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_DENY_PATHS", "secrets/**,*.env,private/")
+        settings = Settings()
+        assert settings.deny_paths == ("secrets/**", "*.env", "private/")
+
+    def test_whitespace_around_commas_stripped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_DENY_PATHS", " secrets/** , *.env ")
+        settings = Settings()
+        assert settings.deny_paths == ("secrets/**", "*.env")
+
+    def test_empty_segments_dropped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Trailing comma / double comma / pure whitespace yields no entry.
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_DENY_PATHS", "secrets/**,,*.env,")
+        settings = Settings()
+        assert settings.deny_paths == ("secrets/**", "*.env")

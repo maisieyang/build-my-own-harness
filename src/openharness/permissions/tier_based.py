@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+from pathlib import Path
 
 # Per decisions/08 D13.2 + P3-T3 Three-Axis Micro-Decision A:
 # 8 hardcoded patterns covering universally-sensitive paths. Adding
@@ -90,5 +91,42 @@ def _matches_tier1(path: str) -> str | None:
     """
     for pattern in HARDCODED_SENSITIVE_PATHS:
         if _glob_match(path, pattern):
+            return pattern
+    return None
+
+
+def _matches_tier2(path: str, patterns: tuple[str, ...], cwd: Path) -> str | None:
+    """Return the Tier 2 user pattern that matched, or ``None`` if no match.
+
+    P3-T3.3b. Mirrors :func:`_matches_tier1` but with user-supplied patterns
+    (from ``Settings.deny_paths``) and ``.gitignore``-style cwd-relative
+    semantics:
+
+    - **Absolute or tilde patterns** (``/etc/foo`` / ``~/proj/x``):
+      matched against the path directly (after ``~`` expansion).
+    - **Relative patterns** (``secrets/**`` / ``*.env``):
+      matched against the path **relative to cwd**. Lets a user write
+      ``OPENHARNESS_DENY_PATHS='secrets/**'`` and have it work without
+      hardcoding their project root.
+
+    First-match-wins: the returned pattern (original form) feeds the
+    deny reason so the LLM can see why it was denied.
+    """
+    abs_path = os.path.abspath(os.path.expanduser(path))
+
+    # Compute cwd-relative form if path is under cwd; else None.
+    rel_path: str | None
+    try:
+        rel_path = str(Path(abs_path).relative_to(cwd.resolve()))
+    except ValueError:
+        rel_path = None  # path is outside cwd — relative patterns can't match
+
+    for pattern in patterns:
+        # Absolute/tilde patterns: match the path directly.
+        if pattern.startswith(("/", "~")):
+            if _glob_match(abs_path, pattern):
+                return pattern
+        # Relative patterns: match against cwd-relative path (.gitignore style).
+        elif rel_path is not None and _glob_match(rel_path, pattern):
             return pattern
     return None

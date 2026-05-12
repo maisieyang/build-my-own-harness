@@ -19,9 +19,12 @@ from openharness.permissions.tier_based import (
     HARDCODED_SENSITIVE_PATHS,
     _glob_match,
     _matches_tier1,
+    _matches_tier2,
 )
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     import pytest
 
 
@@ -143,3 +146,48 @@ class TestMatchesTier1:
     def test_ssh_lookalike_directory_returns_none(self) -> None:
         # ~/.sshtools (similar prefix) must not match ~/.ssh/**.
         assert _matches_tier1("/fake/home/.sshtools/foo") is None
+
+
+class TestMatchesTier2:
+    """``_matches_tier2(path, patterns, cwd)`` — user-config patterns with
+    ``.gitignore``-style cwd-relative semantics. P3-T3.3b.
+
+    Tests use the pytest ``tmp_path`` fixture as cwd; targets are constructed
+    under it so ``Path.relative_to`` succeeds without needing real files.
+    """
+
+    def test_empty_patterns_returns_none(self, tmp_path: Path) -> None:
+        # No user rules ⇒ no match.
+        assert _matches_tier2("/anywhere", (), tmp_path) is None
+
+    def test_matches_relative_pattern_under_cwd(self, tmp_path: Path) -> None:
+        # User writes ``secrets/**``; expects cwd-local matching.
+        target = tmp_path / "secrets" / "keys.txt"
+        patterns = ("secrets/**", "*.env")
+        assert _matches_tier2(str(target), patterns, tmp_path) == "secrets/**"
+
+    def test_matches_env_glob_relative(self, tmp_path: Path) -> None:
+        target = tmp_path / ".env"
+        assert _matches_tier2(str(target), ("*.env",), tmp_path) == "*.env"
+
+    def test_first_match_wins(self, tmp_path: Path) -> None:
+        # Multiple patterns hit ⇒ first wins (deny-first, returns first match).
+        target = tmp_path / "secrets" / "keys.txt"
+        patterns = ("secrets/**", "secrets/keys.*")
+        assert _matches_tier2(str(target), patterns, tmp_path) == "secrets/**"
+
+    def test_no_match_returns_none(self, tmp_path: Path) -> None:
+        target = tmp_path / "README.md"
+        patterns = ("secrets/**", "*.env")
+        assert _matches_tier2(str(target), patterns, tmp_path) is None
+
+    def test_absolute_pattern_matches_directly(self, tmp_path: Path) -> None:
+        # Absolute pattern is NOT cwd-translated — user explicitly anchored it.
+        patterns = ("/etc/secret_config",)
+        assert _matches_tier2("/etc/secret_config", patterns, tmp_path) == "/etc/secret_config"
+
+    def test_path_outside_cwd_skips_relative_patterns(self, tmp_path: Path) -> None:
+        # path 在 cwd 外 ⇒ 相对 pattern 算不出 rel,不命中。
+        # 绝对 pattern 仍然 work(在 absolute_pattern test 里覆盖了)。
+        patterns = ("secrets/**",)
+        assert _matches_tier2("/tmp/other/secrets/x", patterns, tmp_path) is None

@@ -26,8 +26,10 @@ relies on:
 
 from __future__ import annotations
 
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Annotated, Any
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from openharness.permissions import PermissionMode
 
@@ -71,3 +73,31 @@ class Settings(BaseSettings):
             "events instead. Overridden by --auto / --dry-run CLI flags."
         ),
     )
+    # ``Annotated[..., NoDecode]`` tells pydantic-settings:do NOT try to
+    # JSON-decode this env value;hand the raw string to our validator.
+    # Without NoDecode, ``OPENHARNESS_DENY_PATHS='secrets/**'`` triggers a
+    # JSON parse error before our ``_parse_deny_paths`` runs.
+    deny_paths: Annotated[tuple[str, ...], NoDecode] = Field(
+        default=(),
+        description=(
+            "User-configured Tier 2 deny patterns for the AuthZ subsystem "
+            "(P3-T3.3b). Comma-separated in env var: "
+            "OPENHARNESS_DENY_PATHS='secrets/**,*.env'. Matches via "
+            "openharness.permissions.tier_based._glob_match (fnmatch + "
+            "`dir/**` recursive suffix). Empty tuple = no user rules."
+        ),
+    )
+
+    @field_validator("deny_paths", mode="before")
+    @classmethod
+    def _parse_deny_paths(cls, value: Any) -> Any:
+        """Parse comma-separated env strings into a tuple of patterns.
+
+        - ``"a,b,c"`` -> ``("a", "b", "c")``
+        - ``"a, b ,c"`` -> ``("a", "b", "c")`` (whitespace stripped)
+        - ``"a,,b,"`` -> ``("a", "b")`` (empty segments dropped)
+        - already-tuple input passes through (programmatic construction)
+        """
+        if isinstance(value, str):
+            return tuple(p.strip() for p in value.split(",") if p.strip())
+        return value
