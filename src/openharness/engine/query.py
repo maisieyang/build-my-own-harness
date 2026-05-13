@@ -30,16 +30,19 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
+from openharness.api.errors import OpenHarnessApiError
 from openharness.engine.errors import LoopLimitExceeded
 from openharness.engine.messages import (
     append_assistant_message,
     append_tool_results,
     extract_tool_uses,
 )
-from openharness.errors import ToolError
+from openharness.errors import LoopError, ToolError
 from openharness.hooks import (
     OnErrorContext,
+    PostApiCallContext,
     PostToolUseContext,
+    PreApiCallContext,
     PreToolUseContext,
     execute_hook_chain,
 )
@@ -89,16 +92,57 @@ async def run_query(
             tools=context.tool_registry.to_api_schema() or None,
         )
 
+        # P3-T4.4g:PreApiCall hook chain — can deny the whole turn or modify
+        # the request (e.g., memory injection in Phase 4).
+        pre_api_result = await execute_hook_chain(
+            context.hook_registry,
+            "PreApiCall",
+            PreApiCallContext(request=request, turn=_turn),
+        )
+        if pre_api_result is not None:
+            if pre_api_result.decision == "deny":
+                raise LoopError(
+                    f"PreApiCall hook denied turn {_turn}: "
+                    f"{pre_api_result.message or 'unspecified'}"
+                )
+            if (
+                pre_api_result.decision == "modify"
+                and pre_api_result.new_request is not None
+                and isinstance(pre_api_result.new_request, ApiMessageRequest)
+            ):
+                request = pre_api_result.new_request
+
         complete_event: ApiMessageCompleteEvent | None = None
-        async for event in context.api_client.stream_message(request):
-            yield event
-            if isinstance(event, ApiMessageCompleteEvent):
-                complete_event = event
+        try:
+            async for event in context.api_client.stream_message(request):
+                yield event
+                if isinstance(event, ApiMessageCompleteEvent):
+                    complete_event = event
+        except OpenHarnessApiError as exc:
+            await execute_hook_chain(
+                context.hook_registry,
+                "OnError",
+                OnErrorContext(exception=exc, where="api"),
+            )
+            raise
 
         # ``stream_message`` always emits exactly one terminal event
         # (api/client.py docstring); if it didn't, we have a contract bug
         # and the assertion surfaces it loudly rather than silently looping.
         assert complete_event is not None, "stream_message yielded no terminal event"
+
+        # P3-T4.4g:PostApiCall hook chain (observe in Phase 3 — modify is P4+).
+        await execute_hook_chain(
+            context.hook_registry,
+            "PostApiCall",
+            PostApiCallContext(
+                request=request,
+                response_message=complete_event.message,
+                usage=complete_event.usage,
+                stop_reason=complete_event.stop_reason,
+                turn=_turn,
+            ),
+        )
 
         if complete_event.stop_reason != "tool_use":
             return  # end_turn / max_tokens / stop_sequence -> clean exit
