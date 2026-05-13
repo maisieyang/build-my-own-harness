@@ -532,12 +532,18 @@ class TestRunQueryProgrammingErrorPropagation:
         )
         context = _make_context(api_client=client, tool_registry=registry)
 
-        with pytest.raises(RuntimeError, match="boom"):
+        # P3-T4.4f: tool exception is wrapped in ToolError (per Three-Axis G)
+        # and the original RuntimeError chains via __cause__.
+        from openharness.errors import ToolError
+
+        with pytest.raises(ToolError, match="Fake") as exc_info:
             async for _ in run_query(
                 [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
                 context,
             ):
                 pass
+        assert isinstance(exc_info.value.__cause__, RuntimeError)
+        assert "boom" in str(exc_info.value.__cause__)
 
 
 class TestRunQueryDryRunMode:

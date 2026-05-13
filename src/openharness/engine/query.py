@@ -36,6 +36,13 @@ from openharness.engine.messages import (
     append_tool_results,
     extract_tool_uses,
 )
+from openharness.errors import ToolError
+from openharness.hooks import (
+    OnErrorContext,
+    PostToolUseContext,
+    PreToolUseContext,
+    execute_hook_chain,
+)
 from openharness.permissions import Decision, PermissionMode
 from openharness.protocols import (
     ApiMessageCompleteEvent,
@@ -44,7 +51,7 @@ from openharness.protocols import (
     ToolExecutionStartedEvent,
     ToolResultBlock,
 )
-from openharness.tools.base import ToolExecutionContext
+from openharness.tools.base import ToolExecutionContext, ToolResult
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -150,10 +157,13 @@ async def _dispatch_one(
     Recovery paths (all return ``is_error=True``, output names the failure):
     - Tool not in registry
     - Pydantic ValidationError on the tool's input model
-    - Permission checker returns ``Decision.DENY``
+    - Permission checker returns ``Decision.DENY`` or ``Decision.ASK`` 不通过
+    - PreToolUse hook returns deny
     - Tool itself returns ``ToolResult(is_error=True)``
 
-    Programming errors (anything ``execute`` raises) propagate -- not caught.
+    P3-T4.4f:PreToolUse hooks run between AuthZ and execute;PostToolUse
+    after execute and before LLM sees result. Hook crashes wrap as
+    ``ToolError`` after firing OnError chain (one-level).
     """
     try:
         tool = context.tool_registry.get(tool_use.name)
@@ -183,5 +193,54 @@ async def _dispatch_one(
                 True,
             )
 
-    result = await tool.execute(args, exec_context)
+    # PreToolUse hook chain — can deny / modify input / observe.
+    # Hooks run AFTER AuthZ so they can't bypass framework safety baseline.
+    pre_ctx = PreToolUseContext(
+        tool_name=tool_use.name,
+        tool_input=dict(tool_use.input),
+        exec_context=exec_context,
+    )
+    pre_result = await execute_hook_chain(context.hook_registry, "PreToolUse", pre_ctx)
+    current_input = tool_use.input
+    if pre_result is not None:
+        if pre_result.decision == "deny":
+            return f"hook denied: {pre_result.message or tool_use.name}", True
+        if pre_result.decision == "modify" and pre_result.new_input is not None:
+            current_input = pre_result.new_input
+            # Re-validate the modified input against the tool's schema.
+            try:
+                args = tool.input_model.model_validate(current_input)
+            except ValidationError as exc:
+                return f"hook-modified input invalid for {tool_use.name}: {exc}", True
+
+    # Execute the tool. Programming errors fire OnError + wrap as ToolError.
+    try:
+        result = await tool.execute(args, exec_context)
+    except Exception as exc:
+        await execute_hook_chain(
+            context.hook_registry,
+            "OnError",
+            OnErrorContext(exception=exc, where="tool", tool_name=tool_use.name),
+        )
+        raise ToolError(f"tool {tool_use.name} crashed: {exc}") from exc
+
+    # PostToolUse hook chain — can modify output / metadata / is_error.
+    post_ctx = PostToolUseContext(
+        tool_name=tool_use.name,
+        tool_input=current_input,
+        exec_context=exec_context,
+        result=result,
+    )
+    post_result = await execute_hook_chain(context.hook_registry, "PostToolUse", post_ctx)
+    if post_result is not None and post_result.decision == "modify":
+        result = ToolResult(
+            output=post_result.new_output if post_result.new_output is not None else result.output,
+            is_error=post_result.new_is_error
+            if post_result.new_is_error is not None
+            else result.is_error,
+            metadata=post_result.new_metadata
+            if post_result.new_metadata is not None
+            else result.metadata,
+        )
+
     return result.output, result.is_error
