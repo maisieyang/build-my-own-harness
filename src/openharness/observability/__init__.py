@@ -34,6 +34,7 @@ from __future__ import annotations
 
 from openharness.observability.context import bind_run, bind_turn, new_run_id
 from openharness.observability.logging import configure_logging, get_logger
+from openharness.observability.sanitize import sanitize_command, sanitize_path
 
 __all__ = [
     "bind_run",
@@ -41,4 +42,6 @@ __all__ = [
     "configure_logging",
     "get_logger",
     "new_run_id",
+    "sanitize_command",
+    "sanitize_path",
 ]

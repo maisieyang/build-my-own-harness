@@ -13,7 +13,8 @@ chain ordering matters:
 2. ``add_log_level`` — adds the canonical ``level`` field.
 3. ``TimeStamper`` — ISO-8601 ``timestamp``;tests parse this so render
    order matters.
-4. (5b inserts ``sanitize_processor`` here — between timestamp and renderer.)
+4. ``sanitize_processor`` — redacts known-sensitive keys + token patterns
+   before either renderer sees the event (5b).
 5. Renderer — :class:`structlog.dev.ConsoleRenderer` (human) or
    :class:`structlog.processors.JSONRenderer` (machine / JSONL pipe).
 
@@ -29,6 +30,8 @@ import sys
 from typing import TYPE_CHECKING, Literal
 
 import structlog
+
+from openharness.observability.sanitize import sanitize_processor
 
 if TYPE_CHECKING:
     from typing import TextIO
@@ -81,7 +84,7 @@ def configure_logging(
             structlog.contextvars.merge_contextvars,
             structlog.stdlib.add_log_level,
             structlog.processors.TimeStamper(fmt="iso", utc=True),
-            # 5b: sanitize_processor lands here.
+            sanitize_processor,  # 5b — runs before renderer so JSON / console both sanitized
             renderer,
         ],
         wrapper_class=structlog.stdlib.BoundLogger,
