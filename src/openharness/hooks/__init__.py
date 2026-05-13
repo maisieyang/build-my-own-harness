@@ -30,10 +30,26 @@ Public API:
 
 from __future__ import annotations
 
+from openharness.hooks.context import (
+    Hook,
+    HookContext,
+    OnErrorContext,
+    PostApiCallContext,
+    PostToolUseContext,
+    PreApiCallContext,
+    PreToolUseContext,
+)
 from openharness.hooks.events import HookEvent
 from openharness.hooks.result import HookResult
 
 __all__ = [
+    "Hook",
+    "HookContext",
     "HookEvent",
     "HookResult",
+    "OnErrorContext",
+    "PostApiCallContext",
+    "PostToolUseContext",
+    "PreApiCallContext",
+    "PreToolUseContext",
 ]
