@@ -25,6 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from openharness.hooks import HookRegistry
 from openharness.permissions import PermissionMode
 
 if TYPE_CHECKING:
@@ -53,3 +54,8 @@ class QueryContext:
     max_tokens: int = 1024
     max_turns: int = 20
     permission_mode: PermissionMode = field(default=PermissionMode.DEFAULT)
+    # P3-T4.4e: hook registry for middleware (Pre/PostToolUse, Pre/PostApiCall,
+    # OnError). Default empty registry = no hooks = zero dispatch overhead.
+    # Users programmatically register hooks before constructing the context
+    # (Phase 3:no plugin discovery,that's Phase 5).
+    hook_registry: HookRegistry = field(default_factory=HookRegistry)

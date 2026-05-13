@@ -56,6 +56,7 @@ from openharness.api import (
 from openharness.config import Settings
 from openharness.engine import QueryContext, run_query
 from openharness.errors import LoopError, OpenHarnessError
+from openharness.hooks import HookRegistry
 from openharness.permissions import PermissionMode, TierBasedPermissionChecker
 from openharness.prompts import build_system_prompt, detect_environment
 from openharness.protocols import (
@@ -143,6 +144,10 @@ async def _run_ask(
         # full three-Tier checker (hardcoded paths + user globs + mode-based +
         # carry-over Bash deny-list).
         permission_checker=TierBasedPermissionChecker(registry, settings),
+        # P3-T4.4e:empty registry — Phase 3 has no plugin discovery,users
+        # programmatically register hooks before constructing the context.
+        # Phase 5 will add file-based discovery (a la decisions/09).
+        hook_registry=HookRegistry(),
         system_prompt=system_prompt,
         cwd=env.cwd,
         model=model,
