@@ -40,6 +40,7 @@ from openharness.hooks.context import (
     PreToolUseContext,
 )
 from openharness.hooks.events import HookEvent
+from openharness.hooks.executor import execute_hook_chain
 from openharness.hooks.registry import HookRegistry
 from openharness.hooks.result import HookResult
 
@@ -54,4 +55,5 @@ __all__ = [
     "PostToolUseContext",
     "PreApiCallContext",
     "PreToolUseContext",
+    "execute_hook_chain",
 ]
