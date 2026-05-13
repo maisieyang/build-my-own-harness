@@ -146,6 +146,13 @@ class DenyListChecker:
     for every other tool name and for Bash commands that don't match.
 
     Structurally satisfies :class:`PermissionChecker` -- no inheritance needed.
+
+    .. deprecated:: P3-T3.3f
+       Phase 2's checker, kept as a simpler stub for tests + as the smaller
+       behavioral floor. Production ``cli.py`` now wires
+       :class:`TierBasedPermissionChecker` instead (full Tier 1/2/3 +
+       Bash deny-list inherited from here). Will be removed when no test
+       depends on the smaller surface.
     """
 
     def evaluate(

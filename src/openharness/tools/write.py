@@ -1,12 +1,15 @@
-"""Write tool -- P2-T3 sub-unit 3b.
+"""Write tool -- P2-T3 sub-unit 3b + P3-T3.3f (project-root check moved out).
 
-Creates or overwrites a text file. Per D9.2: writes are scoped to
-``context.cwd`` (the "project root"). Resolved paths outside the cwd are
-rejected with an error result; the ``--auto`` flag from P2-T6 will plumb
-through to relax this for power users.
+Creates or overwrites a text file. Per D9.1:relative paths resolve
+against ``context.cwd``;absolute paths are used as-is.
 
-Per D9.1: relative paths resolve against ``context.cwd``; absolute paths
-are used as-is (then immediately checked against the scope rule).
+The **project-root scope guard** that used to live in this file is gone
+as of P3-T3.3f. The Tier 3 mode-based check in
+:class:`TierBasedPermissionChecker` runs before ``execute`` and returns
+``DecisionResult.ask`` for paths outside cwd —— single-point enforcement,
+framework-side, with ASK semantics that ``--auto`` can override.
+Same migration as Edit;principle (avoid double-defense, single source of
+truth for boundary policy) is universal.
 """
 
 from __future__ import annotations
@@ -48,12 +51,9 @@ class Write(BaseTool[WriteInput]):
     ) -> ToolResult:
         path = _resolve(args.path, context.cwd)
 
-        if not _inside_project_root(path, context.cwd):
-            return ToolResult(
-                is_error=True,
-                output=f"path resolves outside project root: {path}",
-            )
-
+        # P3-T3.3f:project-root scope check moved to AuthZ Tier 3
+        # (TierBasedPermissionChecker) — Write no longer double-checks here.
+        # Same migration as Edit;principle (single-point enforcement) is universal.
         if path.exists() and path.is_dir():
             return ToolResult(
                 is_error=True,
@@ -83,20 +83,6 @@ def _resolve(raw: str, cwd: Path) -> Path:
     if candidate.is_absolute():
         return candidate
     return cwd / candidate
-
-
-def _inside_project_root(path: Path, cwd: Path) -> bool:
-    """True iff ``path`` (after symlink + ``..`` normalization) is the same
-    as ``cwd`` or one of its descendants.
-
-    ``resolve(strict=False)`` works on non-existent paths -- important because
-    Write's whole job is creating files that don't yet exist.
-    """
-    try:
-        path.resolve(strict=False).relative_to(cwd.resolve(strict=False))
-    except ValueError:
-        return False
-    return True
 
 
 def _write_utf8(path: Path, content: str) -> int:

@@ -1,4 +1,5 @@
-"""Edit tool -- P2-T3 sub-unit 3c + P3-T1.1c (atomic write).
+"""Edit tool -- P2-T3 sub-unit 3c + P3-T1.1c (atomic write) + P3-T3.3f
+(project-root check moved out).
 
 Exact-string replacement in a text file. ``replace_all=False`` (default)
 substitutes the first occurrence only; ``replace_all=True`` substitutes
@@ -8,8 +9,13 @@ Per phase-2-plan.md: no implicit uniqueness check (callers may want to
 replace the first of many duplicates). Multi-line ``old_str`` is supported
 -- bytes-equivalent match, no whitespace or case normalization.
 
-Path resolution + project-root scope guard mirror :mod:`openharness.tools.write`
-(D9.1 / D9.2).
+Path resolution stays here (D9.1) but the **project-root scope guard**
+that used to live in this file is gone as of P3-T3.3f. The Tier 3
+mode-based check in :class:`TierBasedPermissionChecker` runs before
+``execute`` and returns ``DecisionResult.ask`` for paths outside cwd —
+single-point enforcement, framework-side, with ASK semantics that
+``--auto`` can override. Double-defense was tempting (Phase 2 D9.2)
+but couples Edit's invariants to the AuthZ layer; centralizing wins.
 
 P3-T1.1c: writes go through ``_atomic_write_text`` (tempfile + fsync + rename
 in the target's directory). A mid-write crash leaves the original file
@@ -68,12 +74,8 @@ class Edit(BaseTool[EditInput]):
     ) -> ToolResult:
         path = _resolve(args.path, context.cwd)
 
-        if not _inside_project_root(path, context.cwd):
-            return ToolResult(
-                is_error=True,
-                output=f"path resolves outside project root: {path}",
-            )
-
+        # P3-T3.3f:project-root scope check moved to AuthZ Tier 3
+        # (TierBasedPermissionChecker) — Edit no longer double-checks here.
         if not path.exists():
             return ToolResult(is_error=True, output=f"file not found: {path}")
         if not path.is_file():
@@ -113,14 +115,6 @@ def _resolve(raw: str, cwd: Path) -> Path:
     if candidate.is_absolute():
         return candidate
     return cwd / candidate
-
-
-def _inside_project_root(path: Path, cwd: Path) -> bool:
-    try:
-        path.resolve(strict=False).relative_to(cwd.resolve(strict=False))
-    except ValueError:
-        return False
-    return True
 
 
 def _atomic_write_text(path: Path, content: str) -> None:

@@ -15,15 +15,12 @@ Coverage:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path  # runtime use in scope-guard cleanup tests
 
 import pytest
 
 from openharness.tools.base import ToolExecutionContext
 from openharness.tools.write import Write, WriteInput
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 @pytest.fixture
@@ -66,27 +63,44 @@ class TestWriteHappyPath:
         assert (tmp_path / "under_cwd.txt").read_text() == "x"
 
 
-class TestWriteScopeGuard:
-    async def test_absolute_path_outside_cwd_rejected(self, tool: Write, tmp_path: Path) -> None:
-        # tmp_path lives under /tmp/...; /tmp itself is not inside it.
-        result = await tool.execute(
-            WriteInput(path="/tmp/escape.txt", content="x"),
-            _ctx(tmp_path),
-        )
-        assert result.is_error is True
-        assert "outside project root" in result.output
+class TestWriteScopeGuardMovedToAuthZ:
+    """P3-T3.3f:Write's project-root self-check moved to AuthZ Tier 3.
 
-    async def test_relative_dotdot_escape_rejected(self, tool: Write, tmp_path: Path) -> None:
-        # cwd is tmp_path/inner; "../escape.txt" lands in tmp_path itself,
-        # which is outside cwd.
+    Direct ``execute`` calls now write where they're told;
+    :class:`TierBasedPermissionChecker` is the framework-side enforcement
+    (tested in ``tests/permissions/test_tier_based_checker.py::TestTier3ModeBased``).
+    These tests confirm the new behavior — Write no longer self-rejects.
+    """
+
+    async def test_absolute_path_outside_cwd_no_longer_self_rejects(
+        self, tool: Write, tmp_path: Path
+    ) -> None:
+        # Write to /tmp/escape.txt under tmp_path cwd — used to be rejected.
+        # Now Write happily writes; AuthZ Tier 3 is the production gate.
+        target = Path("/tmp/openharness-test-escape.txt")
+        try:
+            result = await tool.execute(
+                WriteInput(path=str(target), content="x"),
+                _ctx(tmp_path),
+            )
+            assert result.is_error is False
+            assert target.read_text() == "x"
+        finally:
+            target.unlink(missing_ok=True)
+
+    async def test_relative_dotdot_no_longer_self_rejects(
+        self, tool: Write, tmp_path: Path
+    ) -> None:
+        # cwd is tmp_path/inner; "../escape.txt" used to fail in Write.
+        # Now Write writes; AuthZ Tier 3 prevents this in production.
         inner = tmp_path / "inner"
         inner.mkdir()
         result = await tool.execute(
             WriteInput(path="../escape.txt", content="x"),
             _ctx(inner),
         )
-        assert result.is_error is True
-        assert "outside project root" in result.output
+        assert result.is_error is False
+        assert (tmp_path / "escape.txt").read_text() == "x"
 
 
 class TestWriteFailures:

@@ -111,20 +111,27 @@ class TestEditFailures:
         assert result.is_error is True
         assert "file not found" in result.output
 
-    async def test_path_outside_cwd_rejected(self, tool: Edit, tmp_path: Path) -> None:
+    async def test_path_outside_cwd_no_longer_self_rejects(
+        self, tool: Edit, tmp_path: Path
+    ) -> None:
+        # P3-T3.3f: Edit no longer checks project-root boundary itself.
+        # The check moved to TierBasedPermissionChecker Tier 3, which runs
+        # BEFORE execute() in the normal dispatch chain. A direct call to
+        # ``execute`` with an outside-cwd path now actually writes the file
+        # (single-point enforcement, framework-side). The AuthZ-level
+        # protection is exercised in
+        # tests/permissions/test_tier_based_checker.py::TestTier3ModeBased.
         inner = tmp_path / "inner"
         inner.mkdir()
-        # Create a file in tmp_path itself (parent of cwd).
         outside = tmp_path / "outside.txt"
         outside.write_text("anything")
         result = await tool.execute(
             EditInput(path="../outside.txt", old_str="any", new_str="X"),
             _ctx(inner),
         )
-        assert result.is_error is True
-        assert "outside project root" in result.output
-        # File untouched.
-        assert outside.read_text() == "anything"
+        # Edit happily writes — boundary enforcement is the AuthZ layer's job.
+        assert result.is_error is False
+        assert outside.read_text() == "Xthing"
 
     async def test_non_utf8_file_returns_error(self, tool: Edit, tmp_path: Path) -> None:
         target = tmp_path / "binary.bin"
