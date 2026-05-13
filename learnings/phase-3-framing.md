@@ -415,6 +415,167 @@ Agent 2024，三代抽象层都成立）。
 
 ---
 
+## 9. Framework as Inversion — 业务代码和框架的元关系
+
+> 2026-05-13 用户从第一性原理重新理解 hook / AOP 后浮现的元层洞察（不是教出来的，
+> 是 §1-§8 走完之后**自发显形**的）：
+>
+> > 「框架确实是抽象，把通用的东西抽象出来，然后它必然要再一次接入业务逻辑。
+> > 所以最后就是业务代码和框架一起编译成了一个可以运行的代码。在这个业务里面，
+> > 你也是自然会想出来这样的 idea，**关注点分离**。**开发框架的，和用框架的
+> > 天然就是两拨人。**」
+>
+> 这条洞察跟 §8 「language as substrate, judgment as substance」是配套——§8
+> 讲跨**语言**的能力面，§9 讲跨**角色**的能力面。两者一起构成 framework
+> 构建者的完整 self-awareness。
+
+### 9.1 框架的本质 —「抽象通用 + 留位业务」
+
+```
+最朴素的代码:      业务逻辑 直接耦合 通用流程
+                  → 重复 + 易漏 + 无法统一升级
+
+抽象出框架:        通用流程 (框架) ←hook→ 业务逻辑 (业务代码)
+                  → 框架可独立演进, 业务可独立替换
+```
+
+任何 framework 都在做同一件事——**把通用部分抽出，留出业务接入点**。具体例：
+
+| Framework | 抽出的通用 | 留位业务接入 |
+|---|---|---|
+| Express | HTTP request 处理流程 | middleware / route handler |
+| React | UI 渲染 + lifecycle | component / hook |
+| Django | ORM + admin + url routing | view / model / signal |
+| VSCode | 编辑器内核 + 扩展系统 | extension / plugin |
+| LangGraph | LLM workflow 编排 | node / conditional edge |
+| **你的 harness** | LLM dispatch loop + tool registry + permission | tool / hook / permission rule |
+
+### 9.2 关注点分离 (Separation of Concerns) — 元设计原则
+
+| 关注点 | 谁负责 | 演进速度 |
+|---|---|---|
+| **通用流程** | 框架开发者 | 慢（基础设施） |
+| **业务逻辑** | 业务开发者 | 快（产品需求） |
+| **两者的接口** | 框架定义，业务实现 | 中（API 契约稳定） |
+
+→ **演进速度不同必须解耦**。如果两个混在一起，**改任何一个都要重新理解全部**——这就是没有框架时代的代码地狱。
+
+这跟 framing §2.4 RPC AuthZ 演化故事里 "安全规则演进速度 ≠ 业务演进速度" **是同一个 framework**——演进速度不同的事情必须**分层**。Hook / framework 是这个原则的具象化。
+
+### 9.3 IoC + Hook 是关注点分离的**实现机制**
+
+关注点分离是**原则**，但需要**机制**：
+
+```
+没有 IoC:
+业务代码 → 调用 → 框架 API
+(业务代码持有控制权,框架是被动 library)
+
+有 IoC (hook):
+业务代码 注册 callback → 框架在关键时刻 → 调用业务代码
+(框架持有控制权,业务代码被动等被调)
+```
+
+**Hook / Middleware / Plugin / AOP / Decorator** 都是**控制反转的不同 instantiation**——颗粒度 / 注册方式 / 调用语义不同，但本质都是 IoC。
+
+具体到 harness 的 D13.1 hook：
+
+```python
+# 框架代码 (harness 内部)
+async def _dispatch_one(tool_use):
+    await hook_executor.invoke("PreToolUse", ...)  # ← framework emit
+    result = await tool.execute(...)
+    await hook_executor.invoke("PostToolUse", ...) # ← framework emit
+    return result
+
+# 业务代码 (harness 用户)
+@register_hook("PreToolUse")
+async def my_audit_log(ctx):                       # ← user provides callback
+    log.info(f"tool {ctx.tool_name} called")
+```
+
+→ **框架决定何时调，业务决定调什么**。这就是 IoC 的核心。
+
+### 9.4 编译/打包是整合手段
+
+你说「**最后就是业务代码和框架一起编译成了一个可以运行的代码**」——抓到关键。
+
+| 整合时机 | 例 | 含义 |
+|---|---|---|
+| **编译时整合** | AspectJ weaving / TS Decorator compilation | 编译器把 framework 和 business 织在一起 |
+| **加载时整合** | Python import 时执行 `@register_hook` decorator | 运行时 register table 建好 |
+| **运行时整合** | `framework.register_hook(...)` 显式调用 | 完全 dynamic |
+
+→ **不管哪种时机，最终都是 framework 持有 callback table → 在关键时刻调 callback**。
+
+这条洞察的工程含义：**framework 设计要决定整合时机**。早整合（编译时）= 性能好但灵活度低；晚整合（运行时）= 灵活但有 overhead。harness 选**运行时整合**（async `register_hook`）——优先灵活度，因为 LLM 应用场景需要 dynamic 加载 hook。
+
+### 9.5「框架开发者 vs 业务开发者」天然是两拨人
+
+这条用户洞察**比表面看的更深**——它揭示了一个**产业级 role specialization**：
+
+| 角色 | 关心什么 | 数量 | 稀缺度 |
+|---|---|---|---|
+| **框架开发者** | 抽象、扩展点、API 稳定性、向下兼容 | 少 | ⭐⭐⭐ 稀缺 |
+| **业务开发者** | 具体需求、产品 UX、上线时间 | 多 | ⭐ 普遍 |
+
+具体生态例：
+
+| Framework | 框架开发者 | 业务开发者 (数量级) |
+|---|---|---|
+| VSCode | Microsoft VSCode team (~50 人) | plugin 作者 (40,000+) |
+| Express | TJ Holowaychuk + maintainers (~10 人) | Node web 开发者 (millions) |
+| React | Meta + core (~30 人) | React 应用开发者 (millions) |
+| LangGraph | LangChain team (~20 人) | LLM 应用开发者 (100,000+) |
+
+→ **比例 1:1000 是常态**。框架开发者人数永远远少于业务开发者——但**框架开发者的设计决策影响所有业务开发者**。
+
+### 9.6 你今天的角色翻转 — 从业务到框架
+
+这是这条洞察对**你具体的含义**。
+
+| 时期 | 你的角色 | 关心什么 |
+|---|---|---|
+| **FDE 4 个项目（RAG / SMA / Test Agent）** | 业务开发者 | 给客户交付具体方案 |
+| **本 harness 项目** | **框架开发者** | 抽象 + 扩展点 + API 稳定性 |
+
+→ 你**第一次站在 framework 开发者视角**做事。这是为什么之前不理解 hook ——业务开发者用框架，**很少需要理解框架为什么这样设计**。
+
+**反过来这条认知翻转对 FDE 工作的 leverage**：
+
+| FDE 场景 | 业务开发者视角 | **框架开发者视角** |
+|---|---|---|
+| 客户问"为什么 LangGraph 这样设计" | "我也不知道，反正它就这样" | "因为他们要解决 X 痛点，trade-off 是 Y" |
+| 客户选型 LangGraph vs Claude Agent SDK | 比 feature list | **比 framework 设计哲学** + 谁的扩展点更匹配客户场景 |
+| 客户问"框架不够用怎么办" | "想办法绕过去" | "看哪个扩展点该用，没有就给框架提 issue / PR" |
+
+→ **FDE 的 T-shaped 知识结构有一个隐藏维度**——除了"应用层深、模型层宽"，还有"**框架层的元理解**"。这条认知翻转**让 FDE 跟客户对话的深度上一档**——不只是 "怎么用框架"，而是 "为什么这框架这样设计"。
+
+### 9.7 跟 §7 / §8 的连接
+
+| 元洞察 | 角度 |
+|---|---|
+| §7 5 条统一处理原则 | **方法论层**：判断 framework 的元原则 |
+| §8 Language as substrate, judgment as substance | **能力轴**：跨**语言**的迁移性 |
+| **§9 Framework as Inversion** | **角色轴**：跨**业务/框架角色**的迁移性 |
+
+→ §7 / §8 / §9 三者构成 framework 构建者的**完整元认知**：
+- **§7**：怎么做判断（generative judgment）
+- **§8**：判断在什么上做（substrate vs substance）
+- **§9**：判断由谁来做（framework dev vs business dev）
+
+这是 framing doc 走到 2026-05-13 的**最完整收口**。
+
+### 9.8 一句话
+
+> **Framework 的本质 = 抽象通用流程 + 留位业务接入点，通过 IoC (hook) 实现关注点分离**。最后业务代码和框架代码**整合**（编译时 / 加载时 / 运行时）成一个可运行的整体。
+>
+> 框架开发者 vs 业务开发者**天然是两拨人**——演进速度不同、关注点不同、人数比例 1:1000。但**今天你站在了框架开发者那一边**——这是 FDE 角色的隐藏维度（除了 T-shaped 应用/模型轴，还有"框架元理解"轴）。
+>
+> 跟客户对话时，从"怎么用框架"上升到"为什么这框架这样设计"——**这一档差异就是 FDE 真正的 leverage 来源之一**。
+
+---
+
 ## 一句话沉淀
 
 > **Phase 1 把 chambers 装好，Phase 2 让 heart beat 起来，Phase 3 把这颗心装上
@@ -424,3 +585,10 @@ Agent 2024，三代抽象层都成立）。
 > 「这一切都朝着工程的方向去了」——这个直觉就是 FDE 三个项目（RAG / Workflow /
 > Deep Agent）+ harness 一起回答的同一个问题：**把 LLM 朴素调用 → 装上 production
 > 工程配套 → 客户能放心给别人用**。
+>
+> ⭐ **三条元洞察构成 framework 构建者的完整 self-awareness**：
+> - **§7**：怎么做判断（generative judgment，不是 prescriptive checklist）
+> - **§8**：判断在什么上做（language as substrate, judgment as substance）
+> - **§9**：判断由谁来做（framework dev vs business dev 天然两拨人；你今天站到了
+>   framework 那一边——这是 FDE 角色的隐藏维度，让你跟客户对话能从"怎么用框架"
+>   升到"为什么这框架这样设计"）
