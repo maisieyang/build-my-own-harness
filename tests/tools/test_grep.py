@@ -138,3 +138,58 @@ class TestGrepValidation:
     def test_line_cap_above_hard_ceiling_rejected(self) -> None:
         with pytest.raises(ValidationError):
             GrepInput(pattern="x", line_cap=HARD_LINE_CAP + 1)
+
+
+# P3-T6.6b — close the per-module 90% gate by covering edge branches.
+
+
+@pytestmark_rg_required
+class TestGrepEdgeBranches:
+    """Three branches missed by the happy-path tests above:
+
+    - ``--hidden`` flag append (line 88 of grep.py)
+    - rg exit code >= 2 (real failure, not just "no match") (lines 109-110)
+    - ``_resolve`` absolute-path branch (lines 130-133)
+    """
+
+    async def test_hidden_flag_includes_dotfiles(self, tool: Grep, tmp_path: Path) -> None:
+        hidden = tmp_path / ".secret.txt"
+        hidden.write_text("needle\n")
+
+        # Without --hidden: rg ignores dotfiles, returns NO_MATCHES.
+        result = await tool.execute(
+            GrepInput(pattern="needle", hidden=False),
+            _ctx(tmp_path),
+        )
+        assert "no matches" in result.output.lower()
+
+        # With --hidden: dotfile is searched.
+        result = await tool.execute(
+            GrepInput(pattern="needle", hidden=True),
+            _ctx(tmp_path),
+        )
+        assert "needle" in result.output
+        assert ".secret.txt" in result.output
+
+    async def test_rg_invalid_regex_returns_error_result(self, tool: Grep, tmp_path: Path) -> None:
+        # An unbalanced character class is a ripgrep regex parse error
+        # → exit code 2 → ``ToolResult(is_error=True, output="rg failed: ...")``
+        result = await tool.execute(
+            GrepInput(pattern="[unbalanced"),
+            _ctx(tmp_path),
+        )
+        assert result.is_error is True
+        assert "rg failed" in result.output
+
+    async def test_absolute_path_arg_used_verbatim(self, tool: Grep, tmp_path: Path) -> None:
+        """``_resolve`` should leave absolute paths alone (not prepend cwd)."""
+        target = tmp_path / "abs_file.txt"
+        target.write_text("findme\n")
+
+        # cwd is a sibling tmp dir so cwd-relative resolution would miss.
+        sibling = tmp_path.parent
+        result = await tool.execute(
+            GrepInput(pattern="findme", path=str(target)),
+            _ctx(sibling),
+        )
+        assert "findme" in result.output

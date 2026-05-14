@@ -102,7 +102,7 @@ class SupportsStreamingMessages(Protocol):
     ) -> AsyncIterator[ApiStreamEvent]:
         """Stream a single LLM response. See :meth:`OpenAICompatibleApiClient.stream_message`
         for the canonical event-order contract."""
-        ...
+        ...  # pragma: no cover - Protocol method body
 
 
 class OpenAICompatibleApiClient:
