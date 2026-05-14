@@ -61,6 +61,15 @@ def configure_logging(
         stream: where to write. ``None`` → ``sys.stderr`` (production).
             Tests inject :class:`io.StringIO`.
     """
+    # 0. Clear structlog's lazy-bind cache. ``cache_logger_on_first_use=True``
+    #    means BoundLoggers are bound to the active configuration at first
+    #    access. Without ``reset_defaults()``, a re-configure (CLI flag at
+    #    runtime, test reconfigure between cases) silently no-ops for any
+    #    already-cached logger — root.handlers gets the new stream but the
+    #    cached logger keeps writing to the old one. ``reset_defaults()``
+    #    drops the cache so the next ``get_logger()`` rebinds.
+    structlog.reset_defaults()
+
     # 1. Configure stdlib logging — structlog rides on top of it so users
     #    can :meth:`logging.getLogger("openharness").addHandler(...)` to
     #    forward records anywhere (file / syslog / etc.).
@@ -89,7 +98,15 @@ def configure_logging(
         ],
         wrapper_class=structlog.stdlib.BoundLogger,
         logger_factory=structlog.stdlib.LoggerFactory(),
-        cache_logger_on_first_use=True,
+        # ``cache_logger_on_first_use=False`` — module-level ``logger =
+        # get_logger("engine")`` in callers (engine / api / permissions /
+        # hooks) is evaluated at import time. With cache=True, each such
+        # logger would bind processors ONCE at first ``.info()`` call and
+        # never re-bind. CLI / test re-configures (5e flag, fixture
+        # reconfigure) need re-binding — set cache=False so every call
+        # picks up the current global processor chain. Cost: a small
+        # per-call function dispatch; negligible vs. JSON serialization.
+        cache_logger_on_first_use=False,
     )
 
 

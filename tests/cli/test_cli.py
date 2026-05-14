@@ -398,3 +398,113 @@ class TestPermissionFlags:
         assert result.exit_code == 0
         # Env var takes effect even without --dry-run flag.
         assert captured.context.permission_mode is PermissionMode.DRY_RUN  # type: ignore[attr-defined]
+
+
+# --------------------------------------------------------------------------- #
+# Logging flags (P3-T5.5e)                                                    #
+# --------------------------------------------------------------------------- #
+
+
+class _CapturedLoggingConfig:
+    """Records the (level, format) configure_logging was invoked with."""
+
+    def __init__(self) -> None:
+        self.level: str | None = None
+        self.format: str | None = None
+
+
+def _patch_configure_logging(
+    monkeypatch: pytest.MonkeyPatch, captured: _CapturedLoggingConfig
+) -> None:
+    """Replace ``cli.configure_logging`` with a spy. The original would also
+    work (it goes to stderr, no side-effects we care about), but the spy
+    lets us assert on level/format propagation without parsing stderr."""
+
+    def _spy(*, level: str, format: str, stream: object = None) -> None:
+        del stream
+        captured.level = level
+        captured.format = format
+
+    monkeypatch.setattr(cli_module, "configure_logging", _spy)
+
+
+class TestLoggingFlags:
+    """``--log-level`` / ``--log-format`` propagate from CLI → settings → configure_logging."""
+
+    def test_default_level_and_format_when_no_flags_no_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedLoggingConfig()
+        _patch_configure_logging(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi"])
+
+        assert result.exit_code == 0
+        assert captured.level == "WARNING"
+        assert captured.format == "console"
+
+    def test_env_var_log_level_propagates_when_no_flag(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("OPENHARNESS_LOG_LEVEL", "INFO")
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedLoggingConfig()
+        _patch_configure_logging(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi"])
+
+        assert result.exit_code == 0
+        assert captured.level == "INFO"
+        assert captured.format == "console"  # format env not set → default
+
+    def test_cli_log_level_overrides_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("OPENHARNESS_LOG_LEVEL", "INFO")
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedLoggingConfig()
+        _patch_configure_logging(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi", "--log-level", "DEBUG"])
+
+        assert result.exit_code == 0
+        assert captured.level == "DEBUG"
+
+    def test_log_format_json_flag_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedLoggingConfig()
+        _patch_configure_logging(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi", "--log-format", "json"])
+
+        assert result.exit_code == 0
+        assert captured.format == "json"
+
+    def test_invalid_log_level_rejected_by_typer(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _set_minimum_env(monkeypatch)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi", "--log-level", "TRACE"])
+
+        # Typer's Literal handling rejects unknown choices with exit 2
+        # (Click's standard "Usage error" code).
+        assert result.exit_code == 2
+
+    def test_invalid_log_format_rejected_by_typer(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _set_minimum_env(monkeypatch)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi", "--log-format", "xml"])
+
+        assert result.exit_code == 2

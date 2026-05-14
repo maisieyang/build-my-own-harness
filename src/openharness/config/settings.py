@@ -31,6 +31,7 @@ from typing import Annotated, Any
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from openharness.observability.logging import LogFormat, LogLevel
 from openharness.permissions import PermissionMode
 
 
@@ -85,6 +86,24 @@ class Settings(BaseSettings):
             "OPENHARNESS_DENY_PATHS='secrets/**,*.env'. Matches via "
             "openharness.permissions.tier_based._glob_match (fnmatch + "
             "`dir/**` recursive suffix). Empty tuple = no user rules."
+        ),
+    )
+
+    log_level: LogLevel = Field(
+        default="WARNING",
+        description=(
+            "Minimum log level. ``WARNING`` keeps the terminal quiet on normal "
+            "runs; ``INFO`` shows turn / tool dispatch trace; ``DEBUG`` adds "
+            "hook_invoke (verbose). Overridden by --log-level CLI flag."
+        ),
+    )
+    log_format: LogFormat = Field(
+        default="console",
+        description=(
+            "Log renderer. ``console`` for human reading (auto-no-color in "
+            "non-TTY); ``json`` for one-JSON-per-line on stderr — "
+            "jq / OTel / LangSmith exporter friendly. Overridden by "
+            "--log-format CLI flag."
         ),
     )
 

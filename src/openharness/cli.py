@@ -57,6 +57,12 @@ from openharness.config import Settings
 from openharness.engine import QueryContext, run_query
 from openharness.errors import LoopError, OpenHarnessError
 from openharness.hooks import HookRegistry
+from openharness.observability import configure_logging
+
+# Typer reflects ``Literal[...]`` types at RUNTIME to build Click Choice
+# constraints — moving these into ``TYPE_CHECKING`` would break ``--log-level
+# TRACE``-rejection and the corresponding test.
+from openharness.observability.logging import LogFormat, LogLevel  # noqa: TC001
 from openharness.permissions import PermissionMode, TierBasedPermissionChecker
 from openharness.prompts import build_system_prompt, detect_environment
 from openharness.protocols import (
@@ -118,6 +124,8 @@ async def _run_ask(
     model_override: str | None,
     max_tokens: int,
     permission_mode_override: PermissionMode | None,
+    log_level_override: LogLevel | None,
+    log_format_override: LogFormat | None,
 ) -> None:
     """Build the QueryContext, run the loop, render the events.
 
@@ -131,6 +139,12 @@ async def _run_ask(
         if permission_mode_override is not None
         else settings.permission_mode
     )
+    log_level = log_level_override or settings.log_level
+    log_format = log_format_override or settings.log_format
+
+    # P3-T5.5e:configure logging FIRST so any subsequent error path
+    # (client build / system prompt build) is observable.
+    configure_logging(level=log_level, format=log_format)
 
     client = _build_client(settings)
     registry = create_default_tool_registry()
@@ -214,6 +228,23 @@ def ask(
         "--dry-run",
         help="List tool calls the loop would make without executing them.",
     ),
+    log_level: LogLevel | None = typer.Option(
+        None,
+        "--log-level",
+        help=(
+            "Minimum log level [DEBUG|INFO|WARNING|ERROR]. Overrides "
+            "OPENHARNESS_LOG_LEVEL and the WARNING default. Logs go to stderr."
+        ),
+    ),
+    log_format: LogFormat | None = typer.Option(
+        None,
+        "--log-format",
+        help=(
+            "Log renderer [console|json]. Overrides OPENHARNESS_LOG_FORMAT and "
+            "the console default. ``json`` emits one JSON object per line — "
+            "pipe stderr through jq / OTel / LangSmith exporter."
+        ),
+    ),
 ) -> None:
     """Stream a single LLM response (with tool dispatch) to stdout."""
     if auto and dry_run:
@@ -236,6 +267,8 @@ def ask(
                 model_override=model,
                 max_tokens=max_tokens,
                 permission_mode_override=permission_mode_override,
+                log_level_override=log_level,
+                log_format_override=log_format,
             )
         )
     except ValidationError as exc:
