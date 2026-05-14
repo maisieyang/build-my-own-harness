@@ -108,7 +108,93 @@ uv run oh ask "list 5 git commands" | tee transcript.txt
 | Server error | `Request failed (HTTP <status>): <message>` |
 | Loop hit `max_turns` | `Loop error: loop hit turn limit (N); raise --max-turns or simplify the prompt` |
 
-No Python tracebacks in the default mode. Coverage 94.81%.
+No Python tracebacks in the default mode. Coverage 96.9% (gate 95%).
+
+### Phase 3 features — safety + observability
+
+Phase 3 layered four production-grade capabilities onto the Phase 2 base.
+Full retro at [`learnings/phase-3.md`](./learnings/phase-3.md); the quick
+tour:
+
+#### Tools and permissions
+
+The Phase 2 `Read` / `Write` / `Edit` / `Bash` / `Grep` tools are gated
+by a **three-tier permission system**:
+
+- **Tier 1 (hardcoded)** — denies `~/.ssh/**`, `/etc/passwd`, `~/.aws/**`,
+  etc. Framework-owned, not configurable.
+- **Tier 2 (user globs)** — `OPENHARNESS_DENY_PATHS="*.env,secrets/**"`
+  in env or `.env`. Cwd-relative semantics like `.gitignore`.
+- **Tier 3 (mode-based)** — write/exec tools restricted to project root
+  unless `--auto` opts in.
+- Plus the carryover **Bash catastrophic deny-list** (`rm -rf /`,
+  fork-bomb, `mkfs`, etc.).
+
+```bash
+# Tier 1 blocks reading SSH keys regardless of mode
+uv run oh ask "show me my ~/.ssh/id_rsa"
+
+# Tier 2 lets you scope the harness to its project root
+OPENHARNESS_DENY_PATHS="secrets/**,*.env" uv run oh ask "..."
+
+# --dry-run lets you observe what tools the LLM would call, zero side effect
+uv run oh ask --dry-run "edit my README to add a license header"
+```
+
+#### Hooks — middleware for the dispatch loop
+
+5 lifecycle events (`PreToolUse` / `PostToolUse` / `PreApiCall` /
+`PostApiCall` / `OnError`) let users plug in observability / cost
+tracking / content moderation / memory injection without touching the
+engine. Registration is programmatic in Phase 3; plugin discovery lands
+in Phase 5.
+
+```python
+from openharness.hooks import HookRegistry, HookResult, PreToolUseContext
+
+registry = HookRegistry()
+
+async def cost_track(ctx):
+    if isinstance(ctx, PreToolUseContext):
+        print(f"about to call {ctx.tool_name}")
+    return None  # observe-only, no decision
+
+registry.register("PreToolUse", cost_track)
+# Pass `registry` into QueryContext when constructing your harness.
+```
+
+Chain semantics: **modify accumulates, first-deny-wins** (Express-style).
+See [`src/openharness/hooks/executor.py`](./src/openharness/hooks/executor.py)
+for the algorithm + 10 micro-decisions in commit `c69ef4c`.
+
+#### Observability — structured logs + 3-ID trace
+
+```bash
+# Default WARNING — terminal stays quiet
+uv run oh ask "hello"
+
+# Turn on INFO trace
+uv run oh ask --log-level INFO "explain async iterators"
+
+# JSONL on stderr for jq / OTel exporter consumption
+uv run oh ask --log-level INFO --log-format json "..." 2> trace.jsonl
+cat trace.jsonl | jq -c '{event, run_id, turn_id, tool_use_id}'
+```
+
+8 log points: `turn_start` / `tool_dispatch` / `tool_complete` /
+`loop_limit_exceeded` / `retry` / `permission_denied` / `hook_invoke` /
+`hook_failed`. Every record carries `run_id` (the trace ID) + `turn_id`
+when in scope. Sanitize processor auto-redacts credentials by key name
+(`api_key` / `password` / ...) and value patterns (`sk-...` / GitHub
+PAT / AWS Access Key / JWT). Path / command fields are reduced to
+cwd-relative paths or first-token + length.
+
+Logs go to **stderr** — `stdout` stays clean for the LLM response, so
+pipe-friendly:
+
+```bash
+oh ask --log-format json "..." > answer.txt 2> trace.jsonl
+```
 
 ### Want to verify the wire path against your account?
 
