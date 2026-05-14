@@ -40,6 +40,24 @@ LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 LogFormat = Literal["console", "json"]
 
 
+# Third-party libraries that emit at INFO level into the stdlib root logger.
+# Their records bypass structlog's JSONRenderer (they're raw stdlib LogRecords,
+# not structlog event dicts), so they show up as plain-text lines on stderr —
+# breaking JSONL purity for ``jq`` / OTel exporters. Silenced to WARNING so
+# normal ``oh ask`` runs emit only our structlog JSON.
+#
+# Trade-off: ``--log-level DEBUG`` will not show httpx/openai internals.
+# Users debugging those should set the levels manually:
+#   logging.getLogger("httpx").setLevel(logging.DEBUG)
+# *after* configure_logging.
+_NOISY_THIRD_PARTY_LOGGERS: tuple[str, ...] = (
+    "httpx",
+    "httpcore",
+    "openai",
+    "urllib3",
+)
+
+
 def configure_logging(
     *,
     level: LogLevel = "WARNING",
@@ -78,6 +96,11 @@ def configure_logging(
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(level)
+
+    # Silence noisy third-party loggers — their plain-text records would
+    # otherwise leak into the JSONL stream on stderr (see module constant).
+    for name in _NOISY_THIRD_PARTY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
 
     # 2. Configure structlog processor chain.
     renderer: structlog.types.Processor

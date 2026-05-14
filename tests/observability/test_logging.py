@@ -91,6 +91,39 @@ class TestConfigureLogging:
         assert captured.out == ""
 
 
+class TestThirdPartyLoggerSilencing:
+    """Noisy third-party loggers (httpx / openai / etc.) get pinned to
+    WARNING so their plain-text stdlib records don't leak into the JSONL
+    stream on stderr. Real-world bug surfaced during P3-T5.5f end-to-end
+    smoke against Qwen: openai SDK emits ``HTTP Request: POST ... 200 OK``
+    at INFO via httpx, breaking ``jq`` parsing of the trace stream.
+    """
+
+    @pytest.mark.parametrize("name", ["httpx", "httpcore", "openai", "urllib3"])
+    def test_known_noisy_logger_pinned_to_warning(self, stream: io.StringIO, name: str) -> None:
+        configure_logging(level="DEBUG", format="json", stream=stream)
+        assert logging.getLogger(name).level == logging.WARNING
+
+    def test_third_party_info_record_not_in_stream(self, stream: io.StringIO) -> None:
+        configure_logging(level="DEBUG", format="json", stream=stream)
+        # Emulate what openai/httpx do at INFO — should be filtered.
+        logging.getLogger("httpx").info("HTTP Request: POST /v1/...")
+        logging.getLogger("openai").info("response received")
+
+        # Stream stays empty because the noisy loggers are at WARNING.
+        assert stream.getvalue() == ""
+
+    def test_third_party_warning_still_passes_through(self, stream: io.StringIO) -> None:
+        # WARNING from a noisy logger is real signal — must still surface.
+        configure_logging(level="DEBUG", format="json", stream=stream)
+        logging.getLogger("httpx").warning("connection refused")
+        # The record goes through the root handler — appears in stream.
+        # (We don't assert JSON shape: stdlib records don't carry our
+        # structlog event_dict, so they render via the default Formatter.
+        # The contract here is just "not silenced when severity warrants".)
+        assert "connection refused" in stream.getvalue()
+
+
 class TestGetLogger:
     def test_default_name_is_openharness(self, stream: io.StringIO) -> None:
         configure_logging(level="DEBUG", format="json", stream=stream)
