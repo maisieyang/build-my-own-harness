@@ -26,7 +26,8 @@ serially within a turn.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import time
+from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
 
@@ -46,6 +47,13 @@ from openharness.hooks import (
     PreToolUseContext,
     execute_hook_chain,
 )
+from openharness.observability import (
+    bind_run,
+    bind_turn,
+    get_logger,
+    sanitize_command,
+    sanitize_path,
+)
 from openharness.permissions import Decision, PermissionMode
 from openharness.protocols import (
     ApiMessageCompleteEvent,
@@ -58,6 +66,7 @@ from openharness.tools.base import ToolExecutionContext, ToolResult
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from pathlib import Path
 
     from openharness.engine.context import QueryContext
     from openharness.protocols import (
@@ -65,6 +74,33 @@ if TYPE_CHECKING:
         ConversationMessage,
         ToolUseBlock,
     )
+
+
+logger = get_logger("engine")
+
+
+def _sanitize_tool_input(tool_input: dict[str, Any], cwd: Path) -> dict[str, Any]:
+    """Apply field-specific sanitization to ``tool_input`` before logging.
+
+    Per Three-Axis 轴 2 (5b): semantic redaction is the call-site's job.
+    ``sanitize_processor`` only knows about key names + value token shapes;
+    fields whose value is a filesystem path / shell command need a helper
+    that understands the field semantics.
+
+    - ``path`` / ``file_path`` → :func:`sanitize_path` (cwd-relative or redacted)
+    - ``command`` → :func:`sanitize_command` (first token + length)
+
+    Other fields pass through; ``sanitize_processor`` still catches
+    credentials by key (``api_key`` / ``password`` / ...) and embedded tokens
+    (``sk-...`` / JWT / ...) before the renderer.
+    """
+    out = dict(tool_input)
+    for path_key in ("path", "file_path"):
+        if path_key in out and isinstance(out[path_key], str):
+            out[path_key] = sanitize_path(out[path_key], cwd)
+    if "command" in out and isinstance(out["command"], str):
+        out["command"] = sanitize_command(out["command"])
+    return out
 
 
 async def run_query(
@@ -76,119 +112,167 @@ async def run_query(
 
     Yields events in the order they arrive: API events from
     ``stream_message`` (retry / text-delta / message-complete) interleaved
-    with engine events from tool dispatch (started / completed) once 4e+
-    fills the tool path.
+    with engine events from tool dispatch (started / completed).
+
+    P3-T5.5c: every log call inside the generator body carries ``run_id``
+    (auto-minted by :func:`bind_run`) and, inside the per-turn block,
+    ``turn_id`` (1-indexed for human reading). The 4 log points landed here:
+
+    - ``turn_start`` (info) — top of each turn
+    - ``tool_dispatch`` (info) — before each ``_dispatch_one`` call
+    - ``tool_complete`` (info) — after ``_dispatch_one``, with ``duration_ms``
+      + ``output_len`` (output content itself is **not** logged per D13.6)
+    - ``loop_limit_exceeded`` (warning) — before raising ``LoopLimitExceeded``
     """
     # Defensive copy: the caller's list must not be mutated even though the
     # messages helpers (engine.messages) all return new lists.
     messages = list(initial_messages)
 
-    for _turn in range(context.max_turns):
-        request = ApiMessageRequest(
-            model=context.model,
-            max_tokens=context.max_tokens,
-            system=context.system_prompt or None,
-            messages=messages,
-            tools=context.tool_registry.to_api_schema() or None,
-        )
-
-        # P3-T4.4g:PreApiCall hook chain — can deny the whole turn or modify
-        # the request (e.g., memory injection in Phase 4).
-        pre_api_result = await execute_hook_chain(
-            context.hook_registry,
-            "PreApiCall",
-            PreApiCallContext(request=request, turn=_turn),
-        )
-        if pre_api_result is not None:
-            if pre_api_result.decision == "deny":
-                raise LoopError(
-                    f"PreApiCall hook denied turn {_turn}: "
-                    f"{pre_api_result.message or 'unspecified'}"
+    with bind_run():
+        for _turn in range(context.max_turns):
+            with bind_turn(_turn + 1):  # 1-indexed: humans count turns from 1
+                logger.info(
+                    "turn_start",
+                    model=context.model,
+                    max_tokens=context.max_tokens,
                 )
-            if (
-                pre_api_result.decision == "modify"
-                and pre_api_result.new_request is not None
-                and isinstance(pre_api_result.new_request, ApiMessageRequest)
-            ):
-                request = pre_api_result.new_request
 
-        complete_event: ApiMessageCompleteEvent | None = None
-        try:
-            async for event in context.api_client.stream_message(request):
-                yield event
-                if isinstance(event, ApiMessageCompleteEvent):
-                    complete_event = event
-        except OpenHarnessApiError as exc:
-            await execute_hook_chain(
-                context.hook_registry,
-                "OnError",
-                OnErrorContext(exception=exc, where="api"),
-            )
-            raise
+                request = ApiMessageRequest(
+                    model=context.model,
+                    max_tokens=context.max_tokens,
+                    system=context.system_prompt or None,
+                    messages=messages,
+                    tools=context.tool_registry.to_api_schema() or None,
+                )
 
-        # ``stream_message`` always emits exactly one terminal event
-        # (api/client.py docstring); if it didn't, we have a contract bug
-        # and the assertion surfaces it loudly rather than silently looping.
-        assert complete_event is not None, "stream_message yielded no terminal event"
+                # P3-T4.4g:PreApiCall hook chain — can deny the whole turn or
+                # modify the request (e.g., memory injection in Phase 4).
+                pre_api_result = await execute_hook_chain(
+                    context.hook_registry,
+                    "PreApiCall",
+                    PreApiCallContext(request=request, turn=_turn),
+                )
+                if pre_api_result is not None:
+                    if pre_api_result.decision == "deny":
+                        raise LoopError(
+                            f"PreApiCall hook denied turn {_turn}: "
+                            f"{pre_api_result.message or 'unspecified'}"
+                        )
+                    if (
+                        pre_api_result.decision == "modify"
+                        and pre_api_result.new_request is not None
+                        and isinstance(pre_api_result.new_request, ApiMessageRequest)
+                    ):
+                        request = pre_api_result.new_request
 
-        # P3-T4.4g:PostApiCall hook chain (observe in Phase 3 — modify is P4+).
-        await execute_hook_chain(
-            context.hook_registry,
-            "PostApiCall",
-            PostApiCallContext(
-                request=request,
-                response_message=complete_event.message,
-                usage=complete_event.usage,
-                stop_reason=complete_event.stop_reason,
-                turn=_turn,
-            ),
-        )
+                complete_event: ApiMessageCompleteEvent | None = None
+                try:
+                    async for event in context.api_client.stream_message(request):
+                        yield event
+                        if isinstance(event, ApiMessageCompleteEvent):
+                            complete_event = event
+                except OpenHarnessApiError as exc:
+                    await execute_hook_chain(
+                        context.hook_registry,
+                        "OnError",
+                        OnErrorContext(exception=exc, where="api"),
+                    )
+                    raise
 
-        if complete_event.stop_reason != "tool_use":
-            return  # end_turn / max_tokens / stop_sequence -> clean exit
+                # ``stream_message`` always emits exactly one terminal event
+                # (api/client.py docstring); if it didn't, we have a contract
+                # bug and the assertion surfaces it loudly rather than
+                # silently looping.
+                assert complete_event is not None, "stream_message yielded no terminal event"
 
-        # Tool dispatch (D6.3 serial). Per D10.4, four recovery paths all
-        # produce ``is_error=True`` results that go back to the LLM:
-        # tool-not-found / Pydantic validation / permission denied / tool's
-        # own is_error. Programming exceptions propagate (D8.5 / D10.5).
-        tool_uses = extract_tool_uses(complete_event.message)
-        exec_context = ToolExecutionContext(cwd=context.cwd)
-        tool_results: list[ToolResultBlock] = []
+                # P3-T4.4g:PostApiCall hook chain (observe in Phase 3 — modify
+                # is P4+).
+                await execute_hook_chain(
+                    context.hook_registry,
+                    "PostApiCall",
+                    PostApiCallContext(
+                        request=request,
+                        response_message=complete_event.message,
+                        usage=complete_event.usage,
+                        stop_reason=complete_event.stop_reason,
+                        turn=_turn,
+                    ),
+                )
 
-        for tool_use in tool_uses:
-            yield ToolExecutionStartedEvent(
-                tool_use_id=tool_use.id,
-                tool_name=tool_use.name,
-                tool_input=tool_use.input,
-            )
-            # D12.5: DRY_RUN bypasses both permission_checker and execute(),
-            # emitting a synthetic "would call X with Y" result so the LLM
-            # sees the loop progressing but no side effects occur.
-            if context.permission_mode is PermissionMode.DRY_RUN:
-                output = f"would call {tool_use.name} with {tool_use.input}"
-                is_error = False
-            else:
-                output, is_error = await _dispatch_one(tool_use, context, exec_context)
-            yield ToolExecutionCompletedEvent(
-                tool_use_id=tool_use.id,
-                tool_name=tool_use.name,
-                output=output,
-                is_error=is_error,
-            )
-            tool_results.append(
-                ToolResultBlock(
-                    tool_use_id=tool_use.id,
-                    content=output,
-                    is_error=is_error,
-                ),
-            )
+                if complete_event.stop_reason != "tool_use":
+                    return  # end_turn / max_tokens / stop_sequence -> exit
 
-        # Append the assistant turn (with the tool_use block) and the bundled
-        # tool_results -- mirrors the loop pseudocode in messages.py docstring.
-        messages = append_assistant_message(messages, list(complete_event.message.content))
-        messages = append_tool_results(messages, tool_results)
+                # Tool dispatch (D6.3 serial). Per D10.4, four recovery paths
+                # all produce ``is_error=True`` results that go back to the
+                # LLM: tool-not-found / Pydantic validation / permission
+                # denied / tool's own is_error. Programming exceptions
+                # propagate (D8.5 / D10.5).
+                tool_uses = extract_tool_uses(complete_event.message)
+                exec_context = ToolExecutionContext(cwd=context.cwd)
+                tool_results: list[ToolResultBlock] = []
 
-    raise LoopLimitExceeded(max_turns=context.max_turns)
+                for tool_use in tool_uses:
+                    yield ToolExecutionStartedEvent(
+                        tool_use_id=tool_use.id,
+                        tool_name=tool_use.name,
+                        tool_input=tool_use.input,
+                    )
+
+                    # 5c: log dispatch-start with sanitized input + start clock
+                    # for duration_ms on tool_complete.
+                    logger.info(
+                        "tool_dispatch",
+                        tool=tool_use.name,
+                        tool_use_id=tool_use.id,
+                        input=_sanitize_tool_input(tool_use.input, context.cwd),
+                    )
+                    t0 = time.monotonic()
+
+                    # D12.5: DRY_RUN bypasses both permission_checker and
+                    # execute(), emitting a synthetic "would call X with Y"
+                    # result so the LLM sees the loop progressing but no side
+                    # effects occur.
+                    if context.permission_mode is PermissionMode.DRY_RUN:
+                        output = f"would call {tool_use.name} with {tool_use.input}"
+                        is_error = False
+                    else:
+                        output, is_error = await _dispatch_one(tool_use, context, exec_context)
+
+                    # 5c: log dispatch-complete. Per D13.6, output content
+                    # itself is NOT logged (size + PII risk); only its length.
+                    duration_ms = round((time.monotonic() - t0) * 1000, 2)
+                    logger.info(
+                        "tool_complete",
+                        tool=tool_use.name,
+                        tool_use_id=tool_use.id,
+                        is_error=is_error,
+                        duration_ms=duration_ms,
+                        output_len=len(output),
+                    )
+
+                    yield ToolExecutionCompletedEvent(
+                        tool_use_id=tool_use.id,
+                        tool_name=tool_use.name,
+                        output=output,
+                        is_error=is_error,
+                    )
+                    tool_results.append(
+                        ToolResultBlock(
+                            tool_use_id=tool_use.id,
+                            content=output,
+                            is_error=is_error,
+                        ),
+                    )
+
+                # Append the assistant turn (with the tool_use block) and the
+                # bundled tool_results -- mirrors the loop pseudocode in
+                # messages.py docstring.
+                messages = append_assistant_message(messages, list(complete_event.message.content))
+                messages = append_tool_results(messages, tool_results)
+
+        # Fell through max_turns without an end_turn:loop budget exhausted.
+        logger.warning("loop_limit_exceeded", max_turns=context.max_turns)
+        raise LoopLimitExceeded(max_turns=context.max_turns)
 
 
 async def _dispatch_one(
