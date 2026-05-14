@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from openharness.errors import HookError
 from openharness.hooks.context import OnErrorContext, PreToolUseContext
 from openharness.hooks.result import HookResult
+from openharness.observability import get_logger
 
 if TYPE_CHECKING:
     from openharness.hooks.context import HookContext
@@ -38,6 +39,9 @@ if TYPE_CHECKING:
 
 
 _POST_EVENTS: frozenset[HookEvent] = frozenset({"PostToolUse", "PostApiCall"})
+
+
+logger = get_logger("hooks")
 
 
 async def execute_hook_chain(
@@ -71,9 +75,26 @@ async def execute_hook_chain(
     any_modify = False
 
     for hook in hooks:
+        hook_name = getattr(hook, "__name__", repr(hook))
+        # P3-T5.5d: log every invocation at DEBUG. Default WARNING level
+        # hides this — hook fan-out can be high (5+ hooks x 5 events), so
+        # users opt into the noise via ``--log-level DEBUG``.
+        # NB: structlog reserves ``event`` as the message name (first
+        # positional);our HookEvent fact ships as ``hook_event``.
+        logger.debug("hook_invoke", hook=hook_name, hook_event=event)
         try:
             result = await hook(current_ctx)
         except Exception as exc:
+            # P3-T5.5d: hook crash is exceptional — log at WARNING so it
+            # surfaces under default level. Only the exception class name
+            # is logged; the full exception still propagates via
+            # ``raise HookError(...) from exc`` for callers / tests.
+            logger.warning(
+                "hook_failed",
+                hook=hook_name,
+                hook_event=event,
+                error=type(exc).__name__,
+            )
             # Three-Axis G:fire OnError chain (one-level deep), then re-raise.
             if event != "OnError":
                 await _fire_on_error_one_level(
@@ -82,9 +103,7 @@ async def execute_hook_chain(
                     where="hook",
                     tool_name=_tool_name_from_ctx(current_ctx),
                 )
-            raise HookError(
-                f"hook {getattr(hook, '__name__', repr(hook))!r} crashed: {exc}"
-            ) from exc
+            raise HookError(f"hook {hook_name!r} crashed: {exc}") from exc
 
         if result is None:
             continue

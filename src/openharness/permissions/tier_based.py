@@ -30,6 +30,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from openharness.observability import get_logger, sanitize_command, sanitize_path
 from openharness.permissions.checker import DecisionResult
 
 if TYPE_CHECKING:
@@ -38,6 +39,9 @@ if TYPE_CHECKING:
     from openharness.config import Settings
     from openharness.tools import ToolRegistry
     from openharness.tools.base import ToolExecutionContext
+
+
+logger = get_logger("permissions")
 
 # Per decisions/08 D13.2 + P3-T3 Three-Axis Micro-Decision A:
 # 8 hardcoded patterns covering universally-sensitive paths. Adding
@@ -271,6 +275,17 @@ class TierBasedPermissionChecker:
             if isinstance(command, str):
                 bash_pat = _matches_bash_deny(command)
                 if bash_pat is not None:
+                    # P3-T5.5d: log every DENY at WARNING. ``pattern`` is the
+                    # matched framework-owned pattern (safe). ``command`` is
+                    # reduced via ``sanitize_command`` (first-token + len);
+                    # the full command never enters the log.
+                    logger.warning(
+                        "permission_denied",
+                        tool="Bash",
+                        tier="bash_denylist",
+                        pattern=bash_pat,
+                        command=sanitize_command(command),
+                    )
                     return DecisionResult.deny(f"matches catastrophic Bash pattern {bash_pat!r}")
 
         # Path-bearing tools enter the 3-Tier path filter.
@@ -280,10 +295,24 @@ class TierBasedPermissionChecker:
             # 2. Tier 1 hardcoded sensitive paths.
             t1 = _matches_tier1(path)
             if t1 is not None:
+                logger.warning(
+                    "permission_denied",
+                    tool=tool_name,
+                    tier="tier1_hardcoded",
+                    pattern=t1,
+                    path=sanitize_path(path, context.cwd),
+                )
                 return DecisionResult.deny(f"path {path!r} matches sensitive system path ({t1})")
             # 3. Tier 2 user globs.
             t2 = _matches_tier2(path, self._deny_paths, context.cwd)
             if t2 is not None:
+                logger.warning(
+                    "permission_denied",
+                    tool=tool_name,
+                    tier="tier2_user_glob",
+                    pattern=t2,
+                    path=sanitize_path(path, context.cwd),
+                )
                 return DecisionResult.deny(f"path {path!r} matches deny rule {t2!r}")
 
         # 4. Tier 3 mode-based (needs tool.is_read_only).

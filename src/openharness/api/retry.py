@@ -29,11 +29,15 @@ from openharness.api.errors import (
     RateLimitFailure,
     RequestFailure,
 )
+from openharness.observability import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
 T = TypeVar("T")
+
+
+logger = get_logger("api")
 
 
 def _system_random() -> float:
@@ -145,6 +149,16 @@ async def with_retry(
 
             if on_retry is not None:
                 await on_retry(attempt, delay, e)
+
+            # P3-T5.5d: structured retry log. Only the exception *class name*
+            # is logged — the message may carry server-returned cred fragments
+            # or PII. Callers see the full exception via on_retry / re-raise.
+            logger.info(
+                "retry",
+                attempt=attempt,
+                delay_seconds=delay,
+                error=type(e).__name__,
+            )
 
             await sleep(delay)
 
