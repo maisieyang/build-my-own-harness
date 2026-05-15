@@ -33,6 +33,12 @@ Public API (so far):
 
 from __future__ import annotations
 
+from openharness.mcp.client import McpCallError, McpClient, McpInitError
 from openharness.mcp.config import McpServerConfig
 
-__all__ = ["McpServerConfig"]
+__all__ = [
+    "McpCallError",
+    "McpClient",
+    "McpInitError",
+    "McpServerConfig",
+]
