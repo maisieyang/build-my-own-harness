@@ -270,11 +270,21 @@ async def run_query(
 
                     # 5c: log dispatch-start with sanitized input + start clock
                     # for duration_ms on tool_complete.
+                    # P5-T5: trust_source from tool.trust_source for the
+                    # observability trail (local / trusted-server /
+                    # strict-default). Lookup uses try/except since
+                    # _dispatch_one will also do a registry.get() — the
+                    # cost of one extra lookup is negligible.
+                    try:
+                        trust_source = context.tool_registry.get(tool_use.name).trust_source
+                    except KeyError:
+                        trust_source = "unknown"
                     logger.info(
                         "tool_dispatch",
                         tool=tool_use.name,
                         tool_use_id=tool_use.id,
                         input=_sanitize_tool_input(tool_use.input, context.cwd),
+                        trust_source=trust_source,
                     )
                     t0 = time.monotonic()
 

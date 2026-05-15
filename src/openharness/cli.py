@@ -58,6 +58,7 @@ from openharness.config import Settings
 from openharness.engine import QueryContext, run_query
 from openharness.errors import LoopError, OpenHarnessError
 from openharness.hooks import HookRegistry
+from openharness.mcp import McpClientPool
 from openharness.observability import configure_logging
 
 # Typer reflects ``Literal[...]`` types at RUNTIME to build Click Choice
@@ -159,42 +160,57 @@ async def _run_ask(
 
     client = _build_client(settings)
     registry = create_default_tool_registry()
-    env = detect_environment()
-    system_prompt = build_system_prompt(registry.to_api_schema(), env)
 
-    # P4-T4.4b:Layer 1 default registration. When ``auto_truncate`` is on
-    # AND the cap is positive, the framework auto-registers
-    # ``TruncateToolResultHook`` so users get sensible compaction without
-    # touching code. Users disable via ``--no-auto-truncate`` or
-    # ``OPENHARNESS_AUTO_TRUNCATE=false``;Layer 2 reactive guard remains
-    # in either case.
-    hook_registry = HookRegistry()
-    if auto_truncate and tool_result_cap > 0:
-        hook_registry.register(
-            "PostToolUse",
-            TruncateToolResultHook(cap_tokens=tool_result_cap, model=model),
+    # P5-T5: bootstrap MCP servers from Settings.mcp_servers (D15.2). Pool
+    # lives for the lifetime of the query — adapters' McpClient references
+    # must stay valid through run_query. Empty config (no MCP servers) is
+    # a no-op pool.
+    pool = McpClientPool(
+        settings.mcp_servers,
+        trusted_servers=settings.trusted_mcp_servers,
+    )
+    async with pool:
+        for adapter in pool.adapters:
+            registry.register(adapter)
+
+        # System prompt is built AFTER MCP tools register so the LLM's
+        # catalog includes them.
+        env = detect_environment()
+        system_prompt = build_system_prompt(registry.to_api_schema(), env)
+
+        # P4-T4.4b:Layer 1 default registration. When ``auto_truncate`` is on
+        # AND the cap is positive, the framework auto-registers
+        # ``TruncateToolResultHook`` so users get sensible compaction without
+        # touching code. Users disable via ``--no-auto-truncate`` or
+        # ``OPENHARNESS_AUTO_TRUNCATE=false``;Layer 2 reactive guard remains
+        # in either case.
+        hook_registry = HookRegistry()
+        if auto_truncate and tool_result_cap > 0:
+            hook_registry.register(
+                "PostToolUse",
+                TruncateToolResultHook(cap_tokens=tool_result_cap, model=model),
+            )
+
+        context = QueryContext(
+            api_client=client,
+            tool_registry=registry,
+            # P3-T3.3e:replaced Phase 2 DenyListChecker (Bash-only) with the
+            # full three-Tier checker (hardcoded paths + user globs + mode-based +
+            # carry-over Bash deny-list).
+            permission_checker=TierBasedPermissionChecker(registry, settings),
+            hook_registry=hook_registry,
+            system_prompt=system_prompt,
+            cwd=env.cwd,
+            model=model,
+            max_tokens=max_tokens,
+            permission_mode=permission_mode,
         )
 
-    context = QueryContext(
-        api_client=client,
-        tool_registry=registry,
-        # P3-T3.3e:replaced Phase 2 DenyListChecker (Bash-only) with the
-        # full three-Tier checker (hardcoded paths + user globs + mode-based +
-        # carry-over Bash deny-list).
-        permission_checker=TierBasedPermissionChecker(registry, settings),
-        hook_registry=hook_registry,
-        system_prompt=system_prompt,
-        cwd=env.cwd,
-        model=model,
-        max_tokens=max_tokens,
-        permission_mode=permission_mode,
-    )
-
-    initial_messages = [
-        ConversationMessage(role="user", content=[TextBlock(text=prompt)]),
-    ]
-    events = run_query(initial_messages, context)
-    await render_stream(events)
+        initial_messages = [
+            ConversationMessage(role="user", content=[TextBlock(text=prompt)]),
+        ]
+        events = run_query(initial_messages, context)
+        await render_stream(events)
 
 
 # --------------------------------------------------------------------------- #

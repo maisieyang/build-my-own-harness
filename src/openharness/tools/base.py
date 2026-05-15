@@ -98,6 +98,20 @@ class BaseTool(ABC, Generic[InputT]):
     # ``rm``, so we err conservative.
     is_read_only: bool = False
 
+    # P5-T5 (D15.6 / boundary 11): provenance of the ``is_read_only`` value
+    # — observability shows where the trust decision came from.
+    #   "local"           — built-in tools (Read / Write / Bash / ...)
+    #   "trusted-server"  — MCP adapter whose server is in
+    #                       Settings.trusted_mcp_servers (server's
+    #                       readOnlyHint was honored)
+    #   "strict-default"  — MCP adapter whose server is NOT trusted
+    #                       (is_read_only forced to False regardless of
+    #                       what the server claimed)
+    # ``engine/query.py`` reads this on each dispatch into the
+    # ``tool_dispatch`` log event's ``trust_source`` field — the only
+    # engine change Phase 5 needs (boundary cross-cutting invariant).
+    trust_source: str = "local"
+
     @abstractmethod
     async def execute(
         self,
