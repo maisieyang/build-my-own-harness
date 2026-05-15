@@ -40,6 +40,7 @@ touching Typer internals.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import typer
 from openai import AsyncOpenAI
@@ -71,7 +72,8 @@ from openharness.protocols import (
     ConversationMessage,
     TextBlock,
 )
-from openharness.tools import create_default_tool_registry
+from openharness.skills.store import EmptySkillStore, FilesystemSkillStore, SkillStore
+from openharness.tools import LoadSkillTool, create_default_tool_registry
 
 # Phase 1 default. Lifted into a CLI flag (``--max-tokens``) so users can
 # tune for short prompts or longer essays without editing code; kept
@@ -130,6 +132,7 @@ async def _run_ask(
     log_format_override: LogFormat | None,
     tool_result_cap_override: int | None,
     auto_truncate_override: bool | None,
+    no_skills: bool = False,
 ) -> None:
     """Build the QueryContext, run the loop, render the events.
 
@@ -173,10 +176,31 @@ async def _run_ask(
         for adapter in pool.adapters:
             registry.register(adapter)
 
-        # System prompt is built AFTER MCP tools register so the LLM's
-        # catalog includes them.
+        # P5c-T3: Skills bootstrap. Convention-driven storage (no Settings
+        # field per decisions/12 L2):global = ~/.openharness/skills/,
+        # project = cwd/.openharness/skills/, project overrides global on
+        # same name. ``--no-skills`` swaps in :class:`EmptySkillStore` for
+        # testing / debug; default scans both layers.
         env = detect_environment()
-        system_prompt = build_system_prompt(registry.to_api_schema(), env)
+        skill_store: SkillStore
+        if no_skills:
+            skill_store = EmptySkillStore()
+        else:
+            skill_store = FilesystemSkillStore(
+                global_dir=Path.home() / ".openharness" / "skills",
+                project_dir=env.cwd / ".openharness" / "skills",
+            )
+        # Register LoadSkill iff at least one skill is discovered — keeps
+        # the tool catalog clean when no skills are authored. Discovery
+        # warms the store's cache,so subsequent ``build_system_prompt``
+        # and per-call ``store.get`` are O(1) lookups.
+        if skill_store.discover():
+            registry.register(LoadSkillTool(skill_store))
+
+        # System prompt is built AFTER MCP tools + LoadSkill register so
+        # the LLM's tool catalog includes them. Skill catalog is injected
+        # by ``build_system_prompt`` itself via the ``skill_store`` kwarg.
+        system_prompt = build_system_prompt(registry.to_api_schema(), env, skill_store=skill_store)
 
         # P4-T4.4b:Layer 1 default registration. When ``auto_truncate`` is on
         # AND the cap is positive, the framework auto-registers
@@ -204,6 +228,7 @@ async def _run_ask(
             model=model,
             max_tokens=max_tokens,
             permission_mode=permission_mode,
+            skill_store=skill_store,
         )
 
         initial_messages = [
@@ -301,6 +326,16 @@ def ask(
             "remains active."
         ),
     ),
+    no_skills: bool = typer.Option(
+        False,
+        "--no-skills",
+        help=(
+            "Skip scanning ~/.openharness/skills/ + .openharness/skills/ at "
+            "bootstrap. LoadSkill tool is not registered and the 'Available "
+            "Skills' system-prompt section is omitted. Useful for testing "
+            "or when the skill catalog interferes with a one-shot run."
+        ),
+    ),
 ) -> None:
     """Stream a single LLM response (with tool dispatch) to stdout."""
     if auto and dry_run:
@@ -331,6 +366,7 @@ def ask(
                 log_format_override=log_format,
                 tool_result_cap_override=tool_result_cap,
                 auto_truncate_override=auto_truncate_override,
+                no_skills=no_skills,
             )
         )
     except ValidationError as exc:

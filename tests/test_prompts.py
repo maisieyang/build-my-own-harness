@@ -157,3 +157,119 @@ class TestBuildSystemPrompt:
         # natural language so the LLM knows is_error=True isn't fatal.
         prompt = build_system_prompt(tools, env)
         assert "recoverable" in prompt
+
+
+class TestSkillsCatalogSection:
+    """P5c-T3 (decisions/12 L3) — Skills catalog injection.
+
+    Contract:
+
+    - ``skill_store=None`` → byte-identical prompt to pre-Phase-5c
+      (backward compat for callers that don't care about Skills).
+    - ``skill_store`` empty → no Skills section at all (don't pollute
+      LLM with empty header).
+    - ``skill_store`` with entries → ``## Available Skills`` section
+      between Tools and Environment, bullet list of ``name -- description``.
+    """
+
+    @pytest.fixture
+    def env(self) -> EnvironmentInfo:
+        return EnvironmentInfo(
+            os_name="Darwin",
+            os_version="25.4.0",
+            shell="/bin/zsh",
+            cwd=Path("/work"),
+            python_version="3.12.3",
+        )
+
+    @pytest.fixture
+    def tools(self) -> list[ToolSpec]:
+        return [
+            ToolSpec(
+                name="LoadSkill",
+                description="Load a named skill's body.",
+                input_schema={"type": "object", "properties": {}},
+            ),
+        ]
+
+    def test_skill_store_none_omits_section(
+        self, tools: list[ToolSpec], env: EnvironmentInfo
+    ) -> None:
+        prompt = build_system_prompt(tools, env)
+        assert "Available Skills" not in prompt
+
+    def test_empty_store_omits_section(self, tools: list[ToolSpec], env: EnvironmentInfo) -> None:
+        from openharness.skills.store import EmptySkillStore
+
+        prompt = build_system_prompt(tools, env, skill_store=EmptySkillStore())
+        # Empty store ≠ "(no skills available)" — the section just isn't there.
+        assert "Available Skills" not in prompt
+
+    def test_populated_store_renders_section(
+        self, tools: list[ToolSpec], env: EnvironmentInfo, tmp_path: Path
+    ) -> None:
+        from openharness.skills.store import FilesystemSkillStore
+
+        (tmp_path / "react.md").write_text(
+            "---\nname: react-testing\ndescription: When to write React tests\n---\nbody\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "sql.md").write_text(
+            "---\nname: sql-tuning\ndescription: Postgres performance tuning\n---\nbody\n",
+            encoding="utf-8",
+        )
+        store = FilesystemSkillStore(global_dir=tmp_path)
+        prompt = build_system_prompt(tools, env, skill_store=store)
+        # Section header + both bullets present.
+        assert "## Available Skills" in prompt
+        assert "LoadSkill" in prompt  # the tool itself in ## Tools section
+        assert "react-testing" in prompt
+        assert "When to write React tests" in prompt
+        assert "sql-tuning" in prompt
+        assert "Postgres performance tuning" in prompt
+
+    def test_section_order_is_tools_then_skills_then_environment(
+        self, tools: list[ToolSpec], env: EnvironmentInfo, tmp_path: Path
+    ) -> None:
+        from openharness.skills.store import FilesystemSkillStore
+
+        (tmp_path / "x.md").write_text(
+            "---\nname: x\ndescription: y\n---\nbody\n",
+            encoding="utf-8",
+        )
+        store = FilesystemSkillStore(global_dir=tmp_path)
+        prompt = build_system_prompt(tools, env, skill_store=store)
+        tools_idx = prompt.index("## Tools")
+        skills_idx = prompt.index("## Available Skills")
+        env_idx = prompt.index("## Environment")
+        assert tools_idx < skills_idx < env_idx
+
+    def test_skills_section_sorted_deterministically(
+        self, tools: list[ToolSpec], env: EnvironmentInfo, tmp_path: Path
+    ) -> None:
+        # Insertion order doesn't determine output — sorted name does.
+        # Tests + LLM parsing both benefit from stability.
+        from openharness.skills.store import FilesystemSkillStore
+
+        (tmp_path / "zebra.md").write_text(
+            "---\nname: zebra\ndescription: z desc\n---\nbody\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "alpha.md").write_text(
+            "---\nname: alpha\ndescription: a desc\n---\nbody\n",
+            encoding="utf-8",
+        )
+        store = FilesystemSkillStore(global_dir=tmp_path)
+        prompt = build_system_prompt(tools, env, skill_store=store)
+        alpha_idx = prompt.index("alpha")
+        zebra_idx = prompt.index("zebra")
+        assert alpha_idx < zebra_idx
+
+    def test_byte_identical_when_skill_store_omitted_vs_none(
+        self, tools: list[ToolSpec], env: EnvironmentInfo
+    ) -> None:
+        # Backward compat: existing callers writing build_system_prompt(t, e)
+        # get the same string as build_system_prompt(t, e, skill_store=None).
+        without_kwarg = build_system_prompt(tools, env)
+        with_none = build_system_prompt(tools, env, skill_store=None)
+        assert without_kwarg == with_none

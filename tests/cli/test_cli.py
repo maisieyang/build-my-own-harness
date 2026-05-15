@@ -38,6 +38,7 @@ from openharness.protocols.usage import UsageSnapshot
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from pathlib import Path
 
     import pytest
 
@@ -661,3 +662,188 @@ class TestCompactionFlags:
         runner = CliRunner()
         result = runner.invoke(cli_module.app, ["ask", "hi", "--tool-result-cap", "-5"])
         assert result.exit_code == 2
+
+
+# --------------------------------------------------------------------------- #
+# Skills bootstrap (P5c-T3)                                                   #
+# --------------------------------------------------------------------------- #
+
+
+def _isolate_skills_dirs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Redirect both global and project skill dirs into ``tmp_path``.
+
+    - ``Path.home()`` resolves via ``HOME`` env on Unix → reroute to
+      ``tmp_path / "home"`` so the user's real ``~/.openharness/skills/``
+      can't contaminate the test.
+    - chdir into ``tmp_path / "project"`` so ``detect_environment().cwd``
+      lands there → project skills go under ``tmp_path / "project" /
+      ".openharness" / "skills"``.
+
+    Returns the project root for caller convenience.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(project)
+    return project
+
+
+def _write_skill_file(directory: Path, name: str, description: str) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{name}.md").write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\nbody for {name}\n",
+        encoding="utf-8",
+    )
+
+
+class TestSkillsBootstrap:
+    """``--no-skills`` flag and default skill discovery thread through to
+    QueryContext + ToolRegistry + system_prompt. Verifies the L3+L4 bootstrap
+    contract: catalog injected only when skills exist, LoadSkillTool
+    registered only when skills exist, ``--no-skills`` short-circuits both.
+    """
+
+    def test_default_no_skill_dirs_skips_registration(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from openharness.skills.store import FilesystemSkillStore
+
+        _set_minimum_env(monkeypatch)
+        _isolate_skills_dirs(monkeypatch, tmp_path)
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        assert result.exit_code == 0
+
+        ctx = captured.context
+        # Default: filesystem store wired (not Empty) but empty dirs →
+        # discover() yields nothing.
+        assert isinstance(ctx.skill_store, FilesystemSkillStore)  # type: ignore[attr-defined]
+        assert ctx.skill_store.discover() == {}  # type: ignore[attr-defined]
+        # LoadSkill NOT registered when no skills found.
+        names = [t.name for t in ctx.tool_registry.list_tools()]  # type: ignore[attr-defined]
+        assert "LoadSkill" not in names
+        # System prompt has no skills section.
+        assert "Available Skills" not in ctx.system_prompt  # type: ignore[attr-defined]
+
+    def test_project_skills_register_LoadSkill(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        project = _isolate_skills_dirs(monkeypatch, tmp_path)
+        _write_skill_file(
+            project / ".openharness" / "skills",
+            "team-style",
+            "Team coding conventions",
+        )
+
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        assert result.exit_code == 0
+
+        ctx = captured.context
+        # Skill discovered, LoadSkill registered, catalog in prompt.
+        assert "team-style" in ctx.skill_store.discover()  # type: ignore[attr-defined]
+        names = [t.name for t in ctx.tool_registry.list_tools()]  # type: ignore[attr-defined]
+        assert "LoadSkill" in names
+        assert "Available Skills" in ctx.system_prompt  # type: ignore[attr-defined]
+        assert "team-style" in ctx.system_prompt  # type: ignore[attr-defined]
+        assert "Team coding conventions" in ctx.system_prompt  # type: ignore[attr-defined]
+
+    def test_global_skill_visible_when_no_project_skill(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        _isolate_skills_dirs(monkeypatch, tmp_path)
+        # Only global skill, no project skill.
+        _write_skill_file(
+            tmp_path / "home" / ".openharness" / "skills",
+            "global-skill",
+            "User-wide expertise",
+        )
+
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        assert result.exit_code == 0
+
+        ctx = captured.context
+        assert "global-skill" in ctx.skill_store.discover()  # type: ignore[attr-defined]
+
+    def test_project_overrides_global(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        project = _isolate_skills_dirs(monkeypatch, tmp_path)
+        # Same name in both layers.
+        _write_skill_file(
+            tmp_path / "home" / ".openharness" / "skills",
+            "shared",
+            "global version of shared",
+        )
+        _write_skill_file(
+            project / ".openharness" / "skills",
+            "shared",
+            "project version of shared",
+        )
+
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        assert result.exit_code == 0
+
+        ctx = captured.context
+        # System prompt carries the project description, not the global one.
+        assert "project version of shared" in ctx.system_prompt  # type: ignore[attr-defined]
+        assert "global version of shared" not in ctx.system_prompt  # type: ignore[attr-defined]
+
+    def test_no_skills_flag_uses_empty_store(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from openharness.skills.store import EmptySkillStore
+
+        _set_minimum_env(monkeypatch)
+        project = _isolate_skills_dirs(monkeypatch, tmp_path)
+        # Put a skill on disk — --no-skills must still ignore it.
+        _write_skill_file(
+            project / ".openharness" / "skills",
+            "should-not-appear",
+            "ignored by --no-skills",
+        )
+
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi", "--no-skills"])
+        assert result.exit_code == 0
+
+        ctx = captured.context
+        # ``--no-skills`` swaps in :class:`EmptySkillStore` regardless of
+        # filesystem state.
+        assert isinstance(ctx.skill_store, EmptySkillStore)  # type: ignore[attr-defined]
+        names = [t.name for t in ctx.tool_registry.list_tools()]  # type: ignore[attr-defined]
+        assert "LoadSkill" not in names
+        assert "should-not-appear" not in ctx.system_prompt  # type: ignore[attr-defined]
+        assert "Available Skills" not in ctx.system_prompt  # type: ignore[attr-defined]

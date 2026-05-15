@@ -130,36 +130,35 @@ store, returns body as `ToolResult`. `is_read_only=True` per L5.
 
 ---
 
-### P5c-T3: `prompts.py` catalog injection + CLI bootstrap 🔜 NEXT
+### P5c-T3: `prompts.py` catalog injection + CLI bootstrap ✅
 
-**Description**: Bridge layer. `prompts.py` learns to take a `SkillStore` and
-inject the "Available Skills" section into the system prompt. `cli.py` at
-bootstrap: instantiates `FilesystemSkillStore`, passes to QueryContext,
-registers `LoadSkillTool`.
+**Description**: Bridge layer. `prompts.py` takes an optional `SkillStore`
+and injects the "Available Skills" section into the system prompt. `cli.py`
+at bootstrap: instantiates `FilesystemSkillStore`, passes to QueryContext,
+registers `LoadSkillTool` iff skills are discovered.
 
 **Acceptance**:
-- [ ] `prompts.py` `build_system_prompt(ctx)` adds an optional "## Available
-  Skills" section iff `ctx.skill_store.discover()` returns ≥ 1 skill:
-  ```
-  ## Available Skills (call LoadSkill to expand)
-
-  - <name>: <description>
-  - ...
-  ```
-- [ ] Empty store → section omitted entirely (no header noise)
-- [ ] `cli.py _run_ask`:
-  - Resolves global dir (`~/.openharness/skills/`) and project dir
-    (`cwd/.openharness/skills/`)
+- [x] `prompts.py` `build_system_prompt(tools, env, *, skill_store=None)`
+  adds an optional `## Available Skills (call LoadSkill to expand)` section
+  between Tools and Environment, sorted-by-name bullet list
+- [x] Empty store / `None` store → section omitted entirely (no header
+  noise; mirrors how MCP doesn't emit "(no servers)")
+- [x] Backward compat: `build_system_prompt(t, e) == build_system_prompt(t, e, skill_store=None)`
+- [x] `cli.py _run_ask`:
+  - Resolves global dir (`~/.openharness/skills/`) via `Path.home()` and
+    project dir (`env.cwd / .openharness / skills`)
   - Instantiates `FilesystemSkillStore(global_dir, project_dir)`
-  - Adds `LoadSkillTool(store)` to the default ToolRegistry
-  - Passes store to `QueryContext.skill_store`
-- [ ] Optional CLI flag `--no-skills` to skip skill loading entirely
-  (testing escape hatch; defer Settings field to Phase 5d if needed)
-- [ ] Tests:
-  - `build_system_prompt` with empty store → no skills section
-  - `build_system_prompt` with 2 skills → section present, both listed
-  - cli unit test: `_run_ask` registers LoadSkillTool when store non-empty
-  - cli unit test: `--no-skills` flag skips registration
+  - Discovers skills; if ≥ 1 found, registers `LoadSkillTool(store)`
+  - Passes store to `QueryContext.skill_store` (default `EmptySkillStore`
+    from T1; threaded through)
+- [x] `--no-skills` CLI flag swaps in `EmptySkillStore` and skips
+  registration, regardless of filesystem state
+- [x] Tests (11 new):
+  - `TestSkillsCatalogSection` (6): None / empty / populated / section
+    order / sort determinism / byte-identical backward compat
+  - `TestSkillsBootstrap` (5): empty dirs → no LoadSkill; project skill
+    registers LoadSkill + catalog in prompt; global-only visible;
+    project overrides global; `--no-skills` short-circuits everything
 
 **Files**:
 - `src/openharness/prompts.py` (+catalog section)
@@ -173,7 +172,7 @@ registers `LoadSkillTool`.
 
 ---
 
-### P5c-T4: End-to-end smoke + invariant verification
+### P5c-T4: End-to-end smoke + invariant verification 🔜 NEXT
 
 **Description**: Mirror P5-T5 invariant verification — run a real `oh ask`
 flow that loads a skill, assert the trace shows the full lifecycle, and

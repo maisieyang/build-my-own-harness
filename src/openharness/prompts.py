@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from openharness.protocols import ToolSpec
+    from openharness.skills.store import SkillStore
 
 
 @dataclass(frozen=True)
@@ -76,25 +77,38 @@ _NO_TOOLS_SENTINEL = "(no tools registered)"
 def build_system_prompt(
     tools: list[ToolSpec],
     env: EnvironmentInfo,
+    *,
+    skill_store: SkillStore | None = None,
 ) -> str:
-    """Assemble the system prompt from base instructions, tool catalog, and
-    environment block.
+    """Assemble the system prompt from base instructions, tool catalog,
+    optional skill catalog, and environment block.
 
     Per ``decisions/06`` D6.5: this function's signature is the load-bearing
     contract; Phase 3 personalization and Phase 4 memory both extend the
     body by appending more sections, not by changing the call surface.
+    P5c-T3 keeps the contract: ``skill_store`` is keyword-only, defaults
+    to ``None``, and an empty store contributes no section — existing
+    callers that ignore Phase 5c get byte-identical prompts.
 
     Sections are joined by blank lines and use Markdown ``##`` headers
-    (D11.3) so future additions read naturally and snapshot tests can match
-    on section markers.
+    (D11.3). Skill catalog (when present) lands between Tools and
+    Environment so the LLM reads "here are the tools (LoadSkill among
+    them), here are the named skills LoadSkill can expand, here is your
+    environment."
+
+    Per ``decisions/12`` L3:catalog is **always-on** (names + descriptions
+    only, no bodies) — bodies arrive on demand via :class:`LoadSkillTool`.
     """
-    return "\n\n".join(
-        [
-            _BASE_INSTRUCTIONS,
-            _format_tools_section(tools),
-            _format_environment_section(env),
-        ]
-    )
+    sections = [
+        _BASE_INSTRUCTIONS,
+        _format_tools_section(tools),
+    ]
+    if skill_store is not None:
+        skills_section = _format_skills_section(skill_store)
+        if skills_section is not None:
+            sections.append(skills_section)
+    sections.append(_format_environment_section(env))
+    return "\n\n".join(sections)
 
 
 def _format_tools_section(tools: list[ToolSpec]) -> str:
@@ -116,3 +130,26 @@ def _format_environment_section(env: EnvironmentInfo) -> str:
         f"- Python: {env.python_version}"
     )
     return f"## Environment\n\n{body}"
+
+
+def _format_skills_section(store: SkillStore) -> str | None:
+    """Render the skill catalog as a Markdown bullet list,or ``None`` when
+    the store is empty.
+
+    Returning ``None`` lets :func:`build_system_prompt` skip the section
+    entirely on an empty store — no "(no skills available)" sentinel
+    because empty == "user hasn't authored any skills" is the default
+    state, not a degenerate one. Mirrors how MCP doesn't emit a "no MCP
+    servers" line when the user hasn't configured any.
+
+    Bullet format matches :func:`_format_tools_section` so the LLM
+    parses both sections with the same mental model.
+    """
+    skills = store.discover()
+    if not skills:
+        return None
+    # Sorted for deterministic output — snapshot tests and trace consumers
+    # benefit from stable ordering; LLM's catalog parsing doesn't depend
+    # on insertion order.
+    body = "\n".join(f"- **{name}** -- {skills[name].description}" for name in sorted(skills))
+    return f"## Available Skills (call LoadSkill to expand)\n\n{body}"
