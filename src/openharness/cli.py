@@ -53,6 +53,7 @@ from openharness.api import (
     RateLimitFailure,
     RequestFailure,
 )
+from openharness.compaction import TruncateToolResultHook
 from openharness.config import Settings
 from openharness.engine import QueryContext, run_query
 from openharness.errors import LoopError, OpenHarnessError
@@ -126,6 +127,8 @@ async def _run_ask(
     permission_mode_override: PermissionMode | None,
     log_level_override: LogLevel | None,
     log_format_override: LogFormat | None,
+    tool_result_cap_override: int | None,
+    auto_truncate_override: bool | None,
 ) -> None:
     """Build the QueryContext, run the loop, render the events.
 
@@ -141,6 +144,14 @@ async def _run_ask(
     )
     log_level = log_level_override or settings.log_level
     log_format = log_format_override or settings.log_format
+    tool_result_cap = (
+        tool_result_cap_override
+        if tool_result_cap_override is not None
+        else settings.tool_result_cap
+    )
+    auto_truncate = (
+        auto_truncate_override if auto_truncate_override is not None else settings.auto_truncate
+    )
 
     # P3-T5.5e:configure logging FIRST so any subsequent error path
     # (client build / system prompt build) is observable.
@@ -151,6 +162,19 @@ async def _run_ask(
     env = detect_environment()
     system_prompt = build_system_prompt(registry.to_api_schema(), env)
 
+    # P4-T4.4b:Layer 1 default registration. When ``auto_truncate`` is on
+    # AND the cap is positive, the framework auto-registers
+    # ``TruncateToolResultHook`` so users get sensible compaction without
+    # touching code. Users disable via ``--no-auto-truncate`` or
+    # ``OPENHARNESS_AUTO_TRUNCATE=false``;Layer 2 reactive guard remains
+    # in either case.
+    hook_registry = HookRegistry()
+    if auto_truncate and tool_result_cap > 0:
+        hook_registry.register(
+            "PostToolUse",
+            TruncateToolResultHook(cap_tokens=tool_result_cap, model=model),
+        )
+
     context = QueryContext(
         api_client=client,
         tool_registry=registry,
@@ -158,10 +182,7 @@ async def _run_ask(
         # full three-Tier checker (hardcoded paths + user globs + mode-based +
         # carry-over Bash deny-list).
         permission_checker=TierBasedPermissionChecker(registry, settings),
-        # P3-T4.4e:empty registry — Phase 3 has no plugin discovery,users
-        # programmatically register hooks before constructing the context.
-        # Phase 5 will add file-based discovery (a la decisions/09).
-        hook_registry=HookRegistry(),
+        hook_registry=hook_registry,
         system_prompt=system_prompt,
         cwd=env.cwd,
         model=model,
@@ -245,6 +266,25 @@ def ask(
             "pipe stderr through jq / OTel / LangSmith exporter."
         ),
     ),
+    tool_result_cap: int | None = typer.Option(
+        None,
+        "--tool-result-cap",
+        min=0,
+        help=(
+            "Layer 1 per-tool-result token cap. Outputs above this cap are "
+            "head/tail truncated with a marker. Overrides "
+            "OPENHARNESS_TOOL_RESULT_CAP and the 10000 default. ``0`` disables."
+        ),
+    ),
+    no_auto_truncate: bool = typer.Option(
+        False,
+        "--no-auto-truncate",
+        help=(
+            "Disable Layer 1 truncation hook registration. Raw tool outputs "
+            "flow through unchanged;Layer 2 reactive (prompt-too-long retry) "
+            "remains active."
+        ),
+    ),
 ) -> None:
     """Stream a single LLM response (with tool dispatch) to stdout."""
     if auto and dry_run:
@@ -260,6 +300,10 @@ def ask(
     elif auto:
         permission_mode_override = PermissionMode.AUTO
 
+    # `--no-auto-truncate` is the only way to set ``auto_truncate=False`` via
+    # CLI;no positive ``--auto-truncate`` flag (it's the default).
+    auto_truncate_override: bool | None = False if no_auto_truncate else None
+
     try:
         asyncio.run(
             _run_ask(
@@ -269,6 +313,8 @@ def ask(
                 permission_mode_override=permission_mode_override,
                 log_level_override=log_level,
                 log_format_override=log_format,
+                tool_result_cap_override=tool_result_cap,
+                auto_truncate_override=auto_truncate_override,
             )
         )
     except ValidationError as exc:

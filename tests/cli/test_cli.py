@@ -508,3 +508,156 @@ class TestLoggingFlags:
         result = runner.invoke(cli_module.app, ["ask", "hi", "--log-format", "xml"])
 
         assert result.exit_code == 2
+
+
+# --------------------------------------------------------------------------- #
+# Compaction flags (P4-T4.4a/4b)                                              #
+# --------------------------------------------------------------------------- #
+
+
+class TestCompactionFlags:
+    """``--tool-result-cap`` / ``--no-auto-truncate`` thread through to the
+    QueryContext's hook_registry — verifying the Layer 1 default-registration
+    path."""
+
+    def test_default_registers_truncate_hook_on_post_tool_use(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from openharness.compaction import TruncateToolResultHook
+
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        assert result.exit_code == 0
+
+        # Default: TruncateToolResultHook registered on PostToolUse.
+        ctx = captured.context
+        hooks = ctx.hook_registry.get("PostToolUse")  # type: ignore[attr-defined]
+        assert len(hooks) == 1
+        assert isinstance(hooks[0], TruncateToolResultHook)
+
+    def test_no_auto_truncate_flag_skips_registration(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi", "--no-auto-truncate"])
+        assert result.exit_code == 0
+
+        ctx = captured.context
+        hooks = ctx.hook_registry.get("PostToolUse")  # type: ignore[attr-defined]
+        assert hooks == []  # no auto-registration
+
+    def test_env_var_auto_truncate_false_skips_registration(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # OPENHARNESS_AUTO_TRUNCATE=false should have the same effect as
+        # --no-auto-truncate.
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("OPENHARNESS_AUTO_TRUNCATE", "false")
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        assert result.exit_code == 0
+
+        ctx = captured.context
+        hooks = ctx.hook_registry.get("PostToolUse")  # type: ignore[attr-defined]
+        assert hooks == []
+
+    def test_tool_result_cap_zero_skips_registration(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # cap=0 is the documented "disabled" sentinel — no hook registered.
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi", "--tool-result-cap", "0"])
+        assert result.exit_code == 0
+
+        ctx = captured.context
+        hooks = ctx.hook_registry.get("PostToolUse")  # type: ignore[attr-defined]
+        assert hooks == []
+
+    def test_tool_result_cap_propagates_to_hook(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from openharness.compaction import TruncateToolResultHook
+
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi", "--tool-result-cap", "500"])
+        assert result.exit_code == 0
+
+        ctx = captured.context
+        hooks = ctx.hook_registry.get("PostToolUse")  # type: ignore[attr-defined]
+        assert len(hooks) == 1
+        hook = hooks[0]
+        assert isinstance(hook, TruncateToolResultHook)
+        # private but stable for tests: cap_tokens carries the override.
+        assert hook._cap_tokens == 500
+
+    def test_env_var_tool_result_cap_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from openharness.compaction import TruncateToolResultHook
+
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("OPENHARNESS_TOOL_RESULT_CAP", "3000")
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        assert result.exit_code == 0
+
+        ctx = captured.context
+        hooks = ctx.hook_registry.get("PostToolUse")  # type: ignore[attr-defined]
+        hook = hooks[0]
+        assert isinstance(hook, TruncateToolResultHook)
+        assert hook._cap_tokens == 3000
+
+    def test_cli_cap_overrides_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from openharness.compaction import TruncateToolResultHook
+
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("OPENHARNESS_TOOL_RESULT_CAP", "3000")
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi", "--tool-result-cap", "777"])
+        assert result.exit_code == 0
+
+        ctx = captured.context
+        hooks = ctx.hook_registry.get("PostToolUse")  # type: ignore[attr-defined]
+        hook = hooks[0]
+        assert isinstance(hook, TruncateToolResultHook)
+        assert hook._cap_tokens == 777
+
+    def test_negative_cap_rejected_by_typer(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _set_minimum_env(monkeypatch)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi", "--tool-result-cap", "-5"])
+        assert result.exit_code == 2

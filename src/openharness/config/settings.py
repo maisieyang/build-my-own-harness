@@ -107,6 +107,29 @@ class Settings(BaseSettings):
         ),
     )
 
+    # P4-T4 (D14.3): Compaction Layer 1 default behaviour.
+    tool_result_cap: int = Field(
+        default=10_000,
+        ge=0,
+        description=(
+            "Per-tool-result token cap for Layer 1 compaction "
+            "(``TruncateToolResultHook``). Outputs above this cap get "
+            "head/tail truncated with a marker. Codex-recommended 10k "
+            "default. ``0`` disables truncation (same as --no-auto-truncate)."
+        ),
+    )
+    auto_truncate: bool = Field(
+        default=True,
+        description=(
+            "When true (default), the CLI auto-registers "
+            "``TruncateToolResultHook`` so oversized tool outputs are "
+            "compacted before the LLM sees them. When false, raw outputs "
+            "flow through — Layer 2 reactive (prompt-too-long retry in "
+            "the engine) still guards against blow-up. Overridden by the "
+            "``--no-auto-truncate`` CLI flag."
+        ),
+    )
+
     @field_validator("deny_paths", mode="before")
     @classmethod
     def _parse_deny_paths(cls, value: Any) -> Any:

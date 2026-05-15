@@ -196,6 +196,44 @@ pipe-friendly:
 oh ask --log-format json "..." > answer.txt 2> trace.jsonl
 ```
 
+### Phase 4 features — context management (compaction)
+
+Long conversations + large tool outputs eventually blow the model's
+context window. Phase 4 ships two layers of defense (full design in
+[`decisions/10-phase-4-boundary.md`](./decisions/10-phase-4-boundary.md)):
+
+- **Layer 1 — per-tool-result truncation** (proactive). When a tool's
+  output exceeds `--tool-result-cap` (default 10000 tokens), the output
+  is head/tail truncated with a marker (Codex-style: the start and end
+  of a tool's output usually carry the LLM-actionable signal; the middle
+  is often bulk). Implemented as a default `PostToolUse` hook so it
+  dogfoods the Phase 3 hook system.
+- **Layer 2 — reactive prompt-too-long retry** (engine-internal). On a
+  provider 400 with a "context length exceeded"-style message, the engine
+  drops the oldest tool_use/tool_result pair from `messages` and retries
+  the same turn. Bounded to 3 retries before re-raising.
+
+```bash
+# Defaults: 10k cap on each tool_result, Layer 1 on, Layer 2 always on
+uv run oh ask "use Read to scan all source files and summarize"
+
+# Smaller cap — useful for short-context models or aggressive control
+uv run oh ask --tool-result-cap 2000 "..."
+
+# Disable Layer 1; rely only on Layer 2 reactive recovery
+uv run oh ask --no-auto-truncate "..."
+
+# Both env-var forms:
+OPENHARNESS_TOOL_RESULT_CAP=5000 OPENHARNESS_AUTO_TRUNCATE=true oh ask "..."
+```
+
+Two extra log events on top of the Phase 3 inventory:
+
+- `tool_truncated` (info) — Layer 1 fired on this `tool_use_id`; carries
+  `original_tokens` / `truncated_tokens` / `cap_tokens`.
+- `reactive_truncate` (warning) — Layer 2 fired on this turn; carries
+  `attempt` / `dropped_count` (how many messages were trimmed).
+
 ### Want to verify the wire path against your account?
 
 ```bash
