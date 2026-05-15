@@ -212,19 +212,36 @@ formally verify the four "zero diff" files.
 
 ---
 
-### P5c-T5: Coverage + retro 🔜 NEXT
+### P5c-T5: Coverage + retro ✅
 
 **Description**: Coverage gap audit; `learnings/phase-5c-skills.md`.
 
 **Acceptance**:
-- [ ] `skills/` module ≥ 95 % coverage
-- [ ] `tools/load_skill.py` ≥ 95 %
-- [ ] Total coverage stays ≥ 95 %
-- [ ] `learnings/phase-5c-skills.md` — focus: third invariant tenant
-  validation; the unifying pattern (Index/Lookup/Content/Recurse) as
-  Phase 5+ rosetta stone; why "Skills" needed only ~170 lines vs Phase 5a
-  MCP's much larger surface
-- [ ] Phase 5c DoD checklist all green
+- [x] `skills/` module 100 % coverage (model + store + __init__ all 100)
+- [x] `tools/load_skill.py` 100 %
+- [x] Total coverage 97 % (≥ 95 % gate)
+- [x] `learnings/phase-5c-skills.md` — 7 framework-level themes:
+  three-tenant cross-cutting invariant; LLM-as-RPC + tool-dispatch
+  as the unifying Turing machine; system-prompt-vs-messages split as
+  protocol-level (not Skills-specific); never-raise bootstrap
+  ontology; structural invariant tests vs unit tests; cross-phase
+  rosetta (5a / 5c / 6 preview); inputs for 5b / 6 / future phases
+- [x] Phase 5c DoD checklist all green (§7 of retro)
+
+---
+
+## Phase 5c DONE 🎉
+
+Coverage gate met, three-tenant invariant verified, framework abstraction
+delivers as predicted. Next milestones (per ARCHITECTURE.md §4):
+
+- **Phase 5b (Slash Command)** — preview in `tasks/phase-5-preview.md` D15;
+  formal boundary doc + plan when entered. Should reuse Skills'
+  markdown+frontmatter + global/project storage pattern verbatim.
+- **Phase 6 (Sandbox)** — boundary `decisions/13-phase-6-boundary.md` +
+  plan `tasks/phase-6-plan.md` already in place. Third invariant tenant
+  prediction will be tested.
+- **Phase 7 (Polish + release)** — README + tutorial + packaging.
 
 **Sub-units**:
 - 5a — Coverage gap audit + close
