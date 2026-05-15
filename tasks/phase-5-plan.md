@@ -61,7 +61,7 @@ plug into.
 
 ---
 
-### P5-T2: MCP SDK integration + single-server lifecycle 🔜 NEXT
+### P5-T2: MCP SDK integration + single-server lifecycle ✅ c7982ff
 
 **Description**: Wrap `mcp.client.stdio` to spawn one MCP server,
 complete the `initialize` handshake, expose `list_tools()` + `call_tool()`
@@ -97,7 +97,7 @@ async methods, support graceful shutdown. Add the 3 new log events
 
 ---
 
-### P5-T3: McpToolAdapter — BaseTool subclass
+### P5-T3: McpToolAdapter — BaseTool subclass ✅ 2600a00
 
 **Description**: Bridge layer — each MCP tool definition becomes a
 `BaseTool[InputT]` subclass dynamically. `inputSchema` (JSON Schema) →
@@ -134,7 +134,7 @@ calls `client.call_tool()`. `is_read_only` gated by D15.6 trust whitelist.
 
 ---
 
-### P5-T4: McpClientPool — N-server orchestration
+### P5-T4: McpClientPool — N-server orchestration ✅ 19a5d7e
 
 **Description**: Manage N MCP servers per `oh ask` invocation: start all
 in parallel, collect their tool catalogs, hand off the merged adapter
@@ -166,7 +166,7 @@ bounded auto-respawn from D15.4.
 
 ---
 
-### P5-T5: CLI bootstrap + trust_source log field
+### P5-T5: CLI bootstrap + trust_source log field ✅ 107d4ed (INVARIANT VERIFIED)
 
 **Description**: Wire `McpClientPool` into `cli._run_ask`:bootstrap
 servers before constructing `QueryContext`, merge MCP adapters into the
@@ -208,7 +208,7 @@ log event so trace consumers see the trust decision path.
 
 ---
 
-### P5-T6: End-to-end smoke
+### P5-T6: End-to-end smoke ✅ 0d33764
 
 **Description**: Real MCP server (`@modelcontextprotocol/server-
 filesystem` via `npx`) connected via JSON config; `oh ask` invokes
@@ -233,7 +233,7 @@ a filesystem tool; trace shows the full flow.
 
 ---
 
-### P5-T7: Coverage + retro
+### P5-T7: Coverage + retro ✅
 
 **Description**: Coverage stays ≥ 95 % total, ≥ 90 % per module.
 `learnings/phase-5.md` written — focus on whether Phase 3's "uniform
