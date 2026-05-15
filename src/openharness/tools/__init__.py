@@ -27,6 +27,7 @@ from openharness.tools.base import (
 from openharness.tools.bash import Bash
 from openharness.tools.edit import Edit
 from openharness.tools.grep import Grep
+from openharness.tools.load_skill import LoadSkillInput, LoadSkillTool
 from openharness.tools.read import Read
 from openharness.tools.write import Write
 
@@ -53,6 +54,8 @@ __all__ = [
     "Bash",
     "Edit",
     "Grep",
+    "LoadSkillInput",
+    "LoadSkillTool",
     "Read",
     "ToolExecutionContext",
     "ToolRegistry",

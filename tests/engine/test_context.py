@@ -91,3 +91,39 @@ class TestQueryContext:
         assert replaced.max_turns == 42
         assert replaced.system_prompt == "updated"
         assert replaced is not context
+
+
+class TestSkillStoreField:
+    """P5c-T2.2a — ``skill_store`` field default + injection.
+
+    Default is an :class:`EmptySkillStore` so callers who don't care
+    about Phase 5c don't pay any cost; setting it requires no API
+    changes beyond passing the kwarg.
+    """
+
+    def test_default_is_empty_store(self, context: QueryContext) -> None:
+        from openharness.skills.store import EmptySkillStore
+
+        assert isinstance(context.skill_store, EmptySkillStore)
+        # Empty by construction — discover() yields nothing.
+        assert context.skill_store.discover() == {}
+
+    def test_custom_store_injected(self, tmp_path: Path) -> None:
+        from openharness.skills.store import FilesystemSkillStore
+
+        (tmp_path / "x.md").write_text(
+            "---\nname: x\ndescription: y\n---\nbody\n",
+            encoding="utf-8",
+        )
+        store = FilesystemSkillStore(global_dir=tmp_path)
+        ctx = QueryContext(
+            api_client=_stub_client(),
+            tool_registry=ToolRegistry(),
+            permission_checker=_AllowAllChecker(),
+            system_prompt="",
+            cwd=tmp_path,
+            model="qwen-plus",
+            skill_store=store,
+        )
+        assert ctx.skill_store is store
+        assert "x" in ctx.skill_store.discover()

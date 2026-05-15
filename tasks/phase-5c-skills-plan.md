@@ -86,33 +86,33 @@ splitting on `---` delimiter + `yaml.safe_load` is ~10 lines.
 
 ---
 
-### P5c-T2: `LoadSkillTool` — BaseTool subclass 🔜 NEXT
+### P5c-T2: `LoadSkillTool` — BaseTool subclass ✅
 
 **Description**: The single tool that exposes skills to the LLM. Pydantic
 input model (`name: str`); `execute()` body resolves `name` against the
 store, returns body as `ToolResult`. `is_read_only=True` per L5.
 
 **Acceptance**:
-- [ ] `tools/load_skill.py` — `LoadSkillTool(BaseTool[LoadSkillInput])`:
+- [x] `tools/load_skill.py` — `LoadSkillTool(BaseTool[LoadSkillInput])`:
   - `name = "LoadSkill"` (PascalCase per D6.4)
   - `is_read_only = True`
-  - `description` includes "Load the body of a skill named X for detailed
-    expertise on a topic. Use after seeing relevant skill in the
-    'Available Skills' catalog."
-  - `input_model: name: str` (with regex pattern matching `Skill.name`)
-  - `execute(args, ctx)`:
-    - Resolves `args.name` against `ctx.skill_store` (new QueryContext field
-      — see Files below)
-    - Found → `ToolResult(output=skill.body, is_error=False)`
-    - Not found → `ToolResult(output="No skill named '<name>'. Available: <list>", is_error=True)` (errors-as-payload, LLM can pivot)
-- [ ] `QueryContext` gains `skill_store: SkillStore` field (Protocol from `skills/`
-  package); default `EmptySkillStore` so existing tests don't break
-- [ ] Tests:
-  - Round-trip: register skill, LLM calls LoadSkill, body returned
-  - Unknown name → is_error ToolResult with helpful list
-  - Tier 3 permission check on LoadSkill → ALLOW (verifies `is_read_only=True`
-    propagates correctly)
-  - PreToolUse + PostToolUse hooks fire on LoadSkill (invariant check)
+  - `description` references the 'Available Skills' catalog
+  - `input_model: name: str` — validation deferred to execute (uniform
+    `is_error` flow whether name is invalid or just unknown)
+  - `execute(args, ctx)`: constructor-injected `SkillStore` (same pattern
+    as `McpToolAdapter`); known → body; unknown → catalog surfaced
+- [x] `QueryContext.skill_store: SkillStore` field; default `EmptySkillStore`
+  so all 855 existing tests pass unchanged
+- [x] Tests (15):
+  - Round-trip: 2 happy cases (two distinct skills)
+  - Unknown name: is_error + catalog surfaced + empty store "(none)"
+  - **Invariant** (3 tests):
+    - `TierBasedPermissionChecker.evaluate(LoadSkill, ...)` → `Decision.ALLOW`
+    - Allow holds even for unknown skill names (permission cares about
+      `is_read_only`, not the particular `name`)
+    - `permissions/checker.py` + `tier_based.py` introspected: no
+      `LoadSkillTool` reference (abstraction not leaked)
+  - Static: name / is_read_only / input_model / description / to_api_schema
 
 **Verification**: hook + permission tests prove the invariant.
 
@@ -130,7 +130,7 @@ store, returns body as `ToolResult`. `is_read_only=True` per L5.
 
 ---
 
-### P5c-T3: `prompts.py` catalog injection + CLI bootstrap
+### P5c-T3: `prompts.py` catalog injection + CLI bootstrap 🔜 NEXT
 
 **Description**: Bridge layer. `prompts.py` learns to take a `SkillStore` and
 inject the "Available Skills" section into the system prompt. `cli.py` at

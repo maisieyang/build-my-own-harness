@@ -27,12 +27,14 @@ from typing import TYPE_CHECKING
 
 from openharness.hooks import HookRegistry
 from openharness.permissions import PermissionMode
+from openharness.skills.store import EmptySkillStore
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from openharness.api import SupportsStreamingMessages
     from openharness.permissions import PermissionChecker
+    from openharness.skills.store import SkillStore
     from openharness.tools import ToolRegistry
 
 
@@ -59,3 +61,9 @@ class QueryContext:
     # Users programmatically register hooks before constructing the context
     # (Phase 3:no plugin discovery,that's Phase 5).
     hook_registry: HookRegistry = field(default_factory=HookRegistry)
+    # P5c-T2 (decisions/12 L3): catalog source for the "Available Skills"
+    # section in build_system_prompt + lookup target for LoadSkillTool.
+    # Default ``EmptySkillStore`` keeps every existing test/CLI flow that
+    # ignores skills working unchanged — no field is required to flip Phase
+    # 5c on for callers who don't want it.
+    skill_store: SkillStore = field(default_factory=EmptySkillStore)
