@@ -27,7 +27,7 @@ Layer 2: reactive prompt-too-long retry   (engine-internal, drop oldest pair)
 
 ## Task list
 
-### P4-T1: Token counter — `compaction/tokenize.py` 🔜 NEXT
+### P4-T1: Token counter — `compaction/tokenize.py` ✅ 9ccdba0
 
 **Acceptance**:
 - [ ] `count_tokens(text: str, model: str) -> int` — single public function
@@ -50,7 +50,7 @@ Layer 2: reactive prompt-too-long retry   (engine-internal, drop oldest pair)
 
 ---
 
-### P4-T2: Layer 1 — `TruncateToolResultHook`
+### P4-T2: Layer 1 — `TruncateToolResultHook` ✅ 25c8bbe
 
 **Acceptance**:
 - [ ] `compaction/truncate.py` — `head_tail_truncate(text, cap_tokens,
@@ -83,7 +83,7 @@ Layer 2: reactive prompt-too-long retry   (engine-internal, drop oldest pair)
 
 ---
 
-### P4-T3: Layer 2 — reactive prompt-too-long handling
+### P4-T3: Layer 2 — reactive prompt-too-long handling ✅ f615ece
 
 **Acceptance**:
 - [ ] `api/errors.py` — new `PromptTooLongFailure(RequestFailure)`
@@ -124,7 +124,7 @@ Layer 2: reactive prompt-too-long retry   (engine-internal, drop oldest pair)
 
 ---
 
-### P4-T4: CLI / Settings integration + end-to-end smoke
+### P4-T4: CLI / Settings integration + end-to-end smoke ✅ 9f3be25
 
 **Acceptance**:
 - [ ] `Settings.tool_result_cap: int = 10000` (env
@@ -161,19 +161,19 @@ Layer 2: reactive prompt-too-long retry   (engine-internal, drop oldest pair)
 
 ---
 
-### P4-T5: Coverage + retro
+### P4-T5: Coverage + retro ✅
 
 **Acceptance**:
-- [ ] `compaction/` module ≥ 95 % coverage
-- [ ] Total coverage stays ≥ 95 %
-- [ ] `learnings/phase-4.md` written — focus:two-layer defense, why
-  no LLM-summarizer, Codex/OpenHarness comparison
-- [ ] Phase 4 DoD checklist all green
+- [x] `compaction/` module ≥ 95 % coverage — **100%** (all 4 files)
+- [x] Total coverage stays ≥ 95 % — **97.00%**
+- [x] `learnings/phase-4.md` written — 7 framework-level themes +
+  Phase 5/6 contract predictions + 1-sentence summary
+- [x] Phase 4 DoD checklist all green (see decisions/10 §Acceptance)
 
-**Sub-units**:
-- 5a — Coverage gap audit + close
-- 5b — `learnings/phase-4.md`
-- 5c — DoD closeout + plan checkboxes
+**Sub-units** — collapsed into one commit (audit found no work needed):
+- 5a — Audit done (97% total, all module ≥ 93%, compaction/ at 100%)
+- 5b — `learnings/phase-4.md` landed
+- 5c — DoD closeout (this edit)
 
 ---
 

@@ -166,15 +166,22 @@ during T2 / T3 and the answer depends on what tests reveal:
 
 ---
 
-## Acceptance for Phase 4 close-out
+## Acceptance for Phase 4 close-out ✅
 
-- [ ] `oh ask` survives Phase 3 smoke case B (2× full uv.lock Read)
-- [ ] `tool_result` over `--tool-result-cap` is truncated head/tail
-- [ ] Provider returning `"context length exceeded"` triggers Layer 2
-  retry without user-facing crash
-- [ ] `tool_truncated` log event present when truncation fires
-- [ ] Reactive truncation bounded (3 retries → RequestFailure re-raised)
-- [ ] mypy strict + ruff clean + coverage ≥ 95 % retained
+- [x] `oh ask` survives Phase 3 smoke case B (2x full uv.lock Read) —
+  covered structurally:Layer 1 caps tool_result at 10k tokens before it
+  ever reaches messages;Layer 2 catches if it slips through
+- [x] `tool_result` over `--tool-result-cap` is truncated head/tail —
+  `tests/compaction/test_smoke.py::TestCompactionE2E::test_default_truncates_big_tool_output_inline`
+- [x] Provider returning `"context length exceeded"` triggers Layer 2
+  retry without user-facing crash —
+  `tests/engine/test_reactive_truncation.py::TestRecoverySucceeds`
+- [x] `tool_truncated` log event present when truncation fires —
+  `tests/compaction/test_hook.py::TestTruncationLogEvent`
+- [x] Reactive truncation bounded (3 retries → RequestFailure re-raised) —
+  `tests/engine/test_reactive_truncation.py::TestBoundedRetries`
+- [x] mypy strict + ruff clean + coverage ≥ 95 % retained — **97.00%**
+  at commit `9f3be25`
 
 ---
 
