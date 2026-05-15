@@ -102,6 +102,7 @@ class TestRegistryEndToEnd:
         hooks = registry.get("PreToolUse")
         ctx = PreToolUseContext(
             tool_name="X",
+            tool_use_id="toolu_test",
             tool_input={},
             exec_context=ToolExecutionContext(cwd=Path("/tmp")),
         )

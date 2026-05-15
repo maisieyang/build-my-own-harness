@@ -29,9 +29,14 @@ class PreToolUseContext:
     by the dispatcher);hooks may return ``HookResult.modify_input(...)``
     with a replacement dict — the dispatcher re-validates after the chain
     finishes.
+
+    P4-T2:``tool_use_id`` lets observability hooks correlate Pre/Post
+    pairs and tie them back to the originating ``ToolUseBlock``;cross-
+    event log filtering depends on it.
     """
 
     tool_name: str
+    tool_use_id: str
     tool_input: dict[str, Any]
     exec_context: ToolExecutionContext
 
@@ -43,9 +48,15 @@ class PostToolUseContext:
     ``tool_input`` reflects any PreToolUse modifications;``result`` is
     the actual :class:`ToolResult`. Hooks may return
     ``HookResult.modify_output(...)`` to replace what the LLM sees.
+
+    P4-T2:``tool_use_id`` mirrors :class:`PreToolUseContext`'s field so
+    observability hooks can pair Pre/Post observations and so the
+    P4 ``TruncateToolResultHook`` can include it in the ``tool_truncated``
+    log event.
     """
 
     tool_name: str
+    tool_use_id: str
     tool_input: dict[str, Any]
     exec_context: ToolExecutionContext
     result: ToolResult

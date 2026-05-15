@@ -325,6 +325,7 @@ async def _dispatch_one(
     # Hooks run AFTER AuthZ so they can't bypass framework safety baseline.
     pre_ctx = PreToolUseContext(
         tool_name=tool_use.name,
+        tool_use_id=tool_use.id,
         tool_input=dict(tool_use.input),
         exec_context=exec_context,
     )
@@ -355,6 +356,7 @@ async def _dispatch_one(
     # PostToolUse hook chain — can modify output / metadata / is_error.
     post_ctx = PostToolUseContext(
         tool_name=tool_use.name,
+        tool_use_id=tool_use.id,
         tool_input=current_input,
         exec_context=exec_context,
         result=result,

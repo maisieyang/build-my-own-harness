@@ -273,6 +273,7 @@ class TestHookLogs:
 
         return PreToolUseContext(
             tool_name="Fake",
+            tool_use_id="toolu_test",
             tool_input={"value": "x"},
             exec_context=ToolExecutionContext(cwd=_Path("/tmp")),
         )

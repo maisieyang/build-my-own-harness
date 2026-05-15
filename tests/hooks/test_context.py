@@ -40,6 +40,7 @@ class TestPreToolUseContext:
     def test_carries_tool_name_input_exec_context(self) -> None:
         ctx = PreToolUseContext(
             tool_name="Read",
+            tool_use_id="toolu_test",
             tool_input={"path": "/tmp/foo.txt"},
             exec_context=_exec_ctx(),
         )
@@ -50,6 +51,7 @@ class TestPreToolUseContext:
     def test_frozen(self) -> None:
         ctx = PreToolUseContext(
             tool_name="Read",
+            tool_use_id="toolu_test",
             tool_input={},
             exec_context=_exec_ctx(),
         )
@@ -62,6 +64,7 @@ class TestPostToolUseContext:
         result = ToolResult(output="content")
         ctx = PostToolUseContext(
             tool_name="Read",
+            tool_use_id="toolu_test",
             tool_input={"path": "/x"},
             exec_context=_exec_ctx(),
             result=result,
@@ -72,6 +75,7 @@ class TestPostToolUseContext:
     def test_frozen(self) -> None:
         ctx = PostToolUseContext(
             tool_name="X",
+            tool_use_id="toolu_test",
             tool_input={},
             exec_context=_exec_ctx(),
             result=ToolResult(output=""),
@@ -175,6 +179,7 @@ class TestHookCallable:
         # Runtime call — verify shape.
         ctx = PreToolUseContext(
             tool_name="X",
+            tool_use_id="toolu_test",
             tool_input={},
             exec_context=_exec_ctx(),
         )
@@ -188,6 +193,11 @@ class TestHookCallable:
             return None
 
         hook: Hook = passthrough
-        ctx = PreToolUseContext(tool_name="X", tool_input={}, exec_context=_exec_ctx())
+        ctx = PreToolUseContext(
+            tool_name="X",
+            tool_use_id="toolu_test",
+            tool_input={},
+            exec_context=_exec_ctx(),
+        )
         result = await hook(ctx)
         assert result is None

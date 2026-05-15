@@ -28,6 +28,7 @@ from openharness.tools.base import ToolExecutionContext, ToolResult
 def _ctx_pre(tool_input: dict[str, object] | None = None) -> PreToolUseContext:
     return PreToolUseContext(
         tool_name="X",
+        tool_use_id="toolu_test",
         tool_input=dict(tool_input or {}),
         exec_context=ToolExecutionContext(cwd=Path("/tmp")),
     )
@@ -36,6 +37,7 @@ def _ctx_pre(tool_input: dict[str, object] | None = None) -> PreToolUseContext:
 def _ctx_post(result: ToolResult | None = None) -> PostToolUseContext:
     return PostToolUseContext(
         tool_name="X",
+        tool_use_id="toolu_test",
         tool_input={},
         exec_context=ToolExecutionContext(cwd=Path("/tmp")),
         result=result or ToolResult(output="raw output"),

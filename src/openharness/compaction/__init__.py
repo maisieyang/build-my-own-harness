@@ -25,6 +25,12 @@ Public API:
 
 from __future__ import annotations
 
+from openharness.compaction.hook import TruncateToolResultHook
 from openharness.compaction.tokenize import count_tokens
+from openharness.compaction.truncate import head_tail_truncate
 
-__all__ = ["count_tokens"]
+__all__ = [
+    "TruncateToolResultHook",
+    "count_tokens",
+    "head_tail_truncate",
+]
