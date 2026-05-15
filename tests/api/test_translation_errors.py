@@ -27,6 +27,7 @@ from api.conftest import (
 from openharness.api import (
     AuthenticationFailure,
     OpenAICompatibleApiClient,
+    PromptTooLongFailure,
     RateLimitFailure,
     RequestFailure,
 )
@@ -223,3 +224,75 @@ class TestErrorTranslation:
         assert exc_info.value.retry_after is None
         assert exc_info.value.status_code == 429
         assert sdk.chat_completions.call_count == 3  # all retries consumed
+
+
+class TestPromptTooLongRouting:
+    """``BadRequestError`` whose message matches a known phrasing is routed
+    to :class:`PromptTooLongFailure` so the engine's reactive truncation
+    layer (P4-T3.3c) can catch it specifically. P4-T3.3a contract."""
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            # OpenAI-style
+            "This model's maximum context length is 128000 tokens.",
+            "context_length_exceeded: prompt token count exceeds limit",
+            # Anthropic-style
+            "prompt is too long: 250000 tokens > 200000 maximum",
+            # Qwen / DashScope-style
+            "Range of input length should be (..., 30720]",
+            "Input is too long for requested model.",
+            # Generic phrasing
+            "Token usage exceeds maximum context length of 8192",
+        ],
+    )
+    async def test_known_phrasings_route_to_prompt_too_long(self, message: str) -> None:
+        bad_req = _make_status_error(openai.BadRequestError, 400, message)
+        sdk = _FakeAsyncOpenAI(
+            chat_completions=_FakeChatCompletions(responses=[bad_req]),
+        )
+        client = OpenAICompatibleApiClient(sdk=sdk, retry_policy=_FAST_POLICY)  # type: ignore[arg-type]
+
+        with pytest.raises(PromptTooLongFailure) as exc_info:
+            async for _ in client.stream_message(_simple_request()):
+                pass
+
+        # PromptTooLongFailure is a subclass of RequestFailure — backcompat.
+        assert isinstance(exc_info.value, RequestFailure)
+        assert exc_info.value.status_code == 400
+        # Not retried — same as regular BadRequest (400 is not in the 5xx
+        # retryable window).
+        assert sdk.chat_completions.call_count == 1
+
+    async def test_other_400_remains_plain_request_failure(self) -> None:
+        """Regression: BadRequestError NOT matching a prompt-too-long pattern
+        still raises plain ``RequestFailure`` (not a PromptTooLongFailure)."""
+        bad_req = _make_status_error(
+            openai.BadRequestError, 400, "Invalid value for parameter 'tools'"
+        )
+        sdk = _FakeAsyncOpenAI(
+            chat_completions=_FakeChatCompletions(responses=[bad_req]),
+        )
+        client = OpenAICompatibleApiClient(sdk=sdk, retry_policy=_FAST_POLICY)  # type: ignore[arg-type]
+
+        with pytest.raises(RequestFailure) as exc_info:
+            async for _ in client.stream_message(_simple_request()):
+                pass
+
+        # Must NOT be a PromptTooLongFailure (the more specific subclass).
+        assert not isinstance(exc_info.value, PromptTooLongFailure)
+        assert exc_info.value.status_code == 400
+
+    async def test_case_insensitive_match(self) -> None:
+        """Pattern matching is case-insensitive (provider phrasing varies)."""
+        bad_req = _make_status_error(
+            openai.BadRequestError, 400, "CONTEXT_LENGTH_EXCEEDED uppercase variant"
+        )
+        sdk = _FakeAsyncOpenAI(
+            chat_completions=_FakeChatCompletions(responses=[bad_req]),
+        )
+        client = OpenAICompatibleApiClient(sdk=sdk, retry_policy=_FAST_POLICY)  # type: ignore[arg-type]
+
+        with pytest.raises(PromptTooLongFailure):
+            async for _ in client.stream_message(_simple_request()):
+                pass

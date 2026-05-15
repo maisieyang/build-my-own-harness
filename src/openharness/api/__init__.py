@@ -31,6 +31,7 @@ from openharness.api.client import OpenAICompatibleApiClient, SupportsStreamingM
 from openharness.api.errors import (
     AuthenticationFailure,
     OpenHarnessApiError,
+    PromptTooLongFailure,
     RateLimitFailure,
     RequestFailure,
 )
@@ -41,6 +42,7 @@ __all__ = [
     "AuthenticationFailure",
     "OpenAICompatibleApiClient",
     "OpenHarnessApiError",
+    "PromptTooLongFailure",
     "RateLimitFailure",
     "RequestFailure",
     "RetryPolicy",

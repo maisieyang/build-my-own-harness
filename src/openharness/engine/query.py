@@ -31,11 +31,12 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
 
-from openharness.api.errors import OpenHarnessApiError
+from openharness.api.errors import OpenHarnessApiError, PromptTooLongFailure
 from openharness.engine.errors import LoopLimitExceeded
 from openharness.engine.messages import (
     append_assistant_message,
     append_tool_results,
+    drop_oldest_tool_pair,
     extract_tool_uses,
 )
 from openharness.errors import LoopError, ToolError
@@ -77,6 +78,13 @@ if TYPE_CHECKING:
 
 
 logger = get_logger("engine")
+
+
+# P4-T3.3c (D14.5):reactive prompt-too-long truncation is bounded.
+# After this many drop-and-retry cycles within one turn, surface the
+# underlying ``PromptTooLongFailure`` to the caller — at that point the
+# prompt is structurally too large for any one-shot recovery.
+_REACTIVE_TRUNCATE_MAX = 3
 
 
 def _sanitize_tool_input(tool_input: dict[str, Any], cwd: Path) -> dict[str, Any]:
@@ -165,19 +173,61 @@ async def run_query(
                     ):
                         request = pre_api_result.new_request
 
+                # P4-T3.3c:reactive truncation loop. On PromptTooLongFailure,
+                # drop the oldest tool_use/tool_result pair from ``messages``,
+                # rebuild ``request``, retry — bounded by ``_REACTIVE_TRUNCATE_MAX``.
+                # Other api errors (auth / 5xx / generic 400 / etc.) propagate
+                # immediately via the outer except.
                 complete_event: ApiMessageCompleteEvent | None = None
-                try:
-                    async for event in context.api_client.stream_message(request):
-                        yield event
-                        if isinstance(event, ApiMessageCompleteEvent):
-                            complete_event = event
-                except OpenHarnessApiError as exc:
-                    await execute_hook_chain(
-                        context.hook_registry,
-                        "OnError",
-                        OnErrorContext(exception=exc, where="api"),
-                    )
-                    raise
+                truncate_attempts = 0
+                while True:
+                    try:
+                        complete_event = None
+                        async for event in context.api_client.stream_message(request):
+                            yield event
+                            if isinstance(event, ApiMessageCompleteEvent):
+                                complete_event = event
+                        break  # success — exit retry loop
+                    except PromptTooLongFailure as ptl_exc:
+                        new_messages = drop_oldest_tool_pair(messages)
+                        # Two stop conditions:bounded retries OR nothing to drop.
+                        if truncate_attempts >= _REACTIVE_TRUNCATE_MAX or len(new_messages) == len(
+                            messages
+                        ):
+                            await execute_hook_chain(
+                                context.hook_registry,
+                                "OnError",
+                                OnErrorContext(exception=ptl_exc, where="api"),
+                            )
+                            raise
+                        truncate_attempts += 1
+                        # 10th log event in the observability inventory.
+                        # WARNING because compaction firing means we're at
+                        # a budget edge — useful default-level signal.
+                        logger.warning(
+                            "reactive_truncate",
+                            turn=_turn + 1,
+                            attempt=truncate_attempts,
+                            dropped_count=len(messages) - len(new_messages),
+                        )
+                        messages = new_messages
+                        # Rebuild request with the truncated messages list.
+                        # Other request fields (system / tools / max_tokens)
+                        # don't change between truncation retries.
+                        request = ApiMessageRequest(
+                            model=context.model,
+                            max_tokens=context.max_tokens,
+                            system=context.system_prompt or None,
+                            messages=messages,
+                            tools=context.tool_registry.to_api_schema() or None,
+                        )
+                    except OpenHarnessApiError as exc:
+                        await execute_hook_chain(
+                            context.hook_registry,
+                            "OnError",
+                            OnErrorContext(exception=exc, where="api"),
+                        )
+                        raise
 
                 # ``stream_message`` always emits exactly one terminal event
                 # (api/client.py docstring); if it didn't, we have a contract

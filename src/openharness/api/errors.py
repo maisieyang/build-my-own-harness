@@ -75,3 +75,20 @@ class RequestFailure(OpenHarnessApiError):
     request itself is malformed). The decision logic lives in retry.py
     (sub-unit 3b), not here.
     """
+
+
+class PromptTooLongFailure(RequestFailure):
+    """Provider rejected the request because the input prompt exceeds the
+    model's context window (P4-T3 / D14.1 Layer 2).
+
+    Distinct from generic :class:`RequestFailure` because the engine
+    layer can recover by truncating the oldest tool_use/tool_result pair
+    from ``messages`` and retrying the same turn. Routing happens in
+    :func:`api.client._translate_openai_error` by matching the provider
+    error message against known patterns (``_PROMPT_TOO_LONG_PATTERNS``).
+
+    Because it subclasses ``RequestFailure``, existing
+    ``except RequestFailure`` handlers still catch it (back-compat).
+    Engine code that wants to react specifically writes
+    ``except PromptTooLongFailure`` first.
+    """

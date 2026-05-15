@@ -21,6 +21,7 @@ import openai
 from openharness.api.errors import (
     AuthenticationFailure,
     OpenHarnessApiError,
+    PromptTooLongFailure,
     RateLimitFailure,
     RequestFailure,
 )
@@ -52,6 +53,31 @@ def _parse_retry_after(exc: openai.RateLimitError) -> float | None:
         return None
 
 
+# P4-T3.3a: provider-specific phrasings of "your input is too long".
+# Pattern match against the *lowercased* error message;extensible —
+# add new patterns as new providers / model families surface them.
+# Ordered most-common-first. Empirically observed phrasings:
+#   - OpenAI:    "context_length_exceeded"
+#   - Anthropic: "prompt is too long"
+#   - Qwen:      "Range of input length" (DashScope)
+#   - Generic:   "maximum context length"
+_PROMPT_TOO_LONG_PATTERNS: tuple[str, ...] = (
+    "context_length_exceeded",
+    "context length exceeded",
+    "maximum context length",
+    "prompt is too long",
+    "range of input length",
+    "input is too long",
+    "input length",
+)
+
+
+def _is_prompt_too_long(message: str) -> bool:
+    """True iff the message matches any known prompt-length-exceeded phrasing."""
+    lowered = message.lower()
+    return any(p in lowered for p in _PROMPT_TOO_LONG_PATTERNS)
+
+
 def _translate_openai_error(exc: Exception) -> OpenHarnessApiError:
     """Map an openai SDK exception to our error hierarchy.
 
@@ -69,8 +95,14 @@ def _translate_openai_error(exc: Exception) -> OpenHarnessApiError:
             retry_after=_parse_retry_after(exc),
         )
     if isinstance(exc, openai.APIStatusError):
+        # P4-T3.3a: route prompt-too-long to its dedicated subclass so the
+        # engine's reactive truncation layer can catch it without
+        # parsing the message itself.
+        message = str(exc)
+        if _is_prompt_too_long(message):
+            return PromptTooLongFailure(message, status_code=exc.status_code)
         # Other 4xx / 5xx -- BadRequestError / InternalServerError / etc.
-        return RequestFailure(str(exc), status_code=exc.status_code)
+        return RequestFailure(message, status_code=exc.status_code)
     if isinstance(exc, openai.APIConnectionError):
         # Network-level failure: no HTTP response, no status code.
         return RequestFailure(f"Connection error: {exc}", status_code=None)

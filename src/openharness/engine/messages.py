@@ -75,3 +75,41 @@ def extract_tool_uses(message: ConversationMessage) -> list[ToolUseBlock]:
     per-turn tool dispatch. Empty list when the message has none.
     """
     return [block for block in message.content if isinstance(block, ToolUseBlock)]
+
+
+def drop_oldest_tool_pair(
+    messages: list[ConversationMessage],
+) -> list[ConversationMessage]:
+    """Drop the oldest ``assistant(tool_use) + user`` message pair.
+
+    Used by P4-T3 Layer 2 reactive truncation: when the LLM provider
+    returns a "prompt too long" error, the engine calls this helper to
+    shrink ``messages`` while keeping the conversation **well-formed**
+    (Anthropic protocol forbids an assistant ``tool_use`` block without
+    a matching ``user`` ``tool_result`` following it — so we drop the
+    pair as a unit).
+
+    Algorithm:
+
+    - Scan from the beginning;find the first assistant message that
+      contains at least one :class:`ToolUseBlock`.
+    - If the immediately following message is a user message, drop both
+      as a pair.
+    - Otherwise (no companion user message — caller is mid-turn) leave
+      messages alone.
+
+    Returns:
+        A new list. If no eligible pair is found, the input is returned
+        unchanged — the caller is expected to detect this and re-raise
+        the underlying ``PromptTooLongFailure`` rather than retry forever.
+    """
+    for i in range(len(messages) - 1):
+        msg = messages[i]
+        next_msg = messages[i + 1]
+        if (
+            msg.role == "assistant"
+            and any(isinstance(b, ToolUseBlock) for b in msg.content)
+            and next_msg.role == "user"
+        ):
+            return messages[:i] + messages[i + 2 :]
+    return list(messages)
