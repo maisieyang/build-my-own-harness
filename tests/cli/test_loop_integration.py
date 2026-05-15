@@ -27,8 +27,8 @@ from typing import TYPE_CHECKING
 
 from typer.testing import CliRunner
 
+import openharness.cli as cli_module
 from engine.conftest import _StubApiClient
-from openharness import cli as cli_module
 from openharness.protocols.content import TextBlock, ToolUseBlock
 from openharness.protocols.messages import ConversationMessage
 from openharness.protocols.stream_events import (

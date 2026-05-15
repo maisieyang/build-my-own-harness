@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING
 
 from typer.testing import CliRunner
 
-from openharness import cli as cli_module
+import openharness.cli as cli_module
 from openharness.protocols.content import TextBlock
 from openharness.protocols.messages import ConversationMessage
 from openharness.protocols.stream_events import ApiMessageCompleteEvent

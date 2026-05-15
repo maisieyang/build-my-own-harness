@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 
 from typer.testing import CliRunner
 
-from openharness import cli as cli_module
+import openharness.cli as cli_module
 from openharness.api.errors import (
     AuthenticationFailure,
     RateLimitFailure,
