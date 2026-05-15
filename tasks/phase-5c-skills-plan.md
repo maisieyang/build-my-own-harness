@@ -172,26 +172,33 @@ registers `LoadSkillTool` iff skills are discovered.
 
 ---
 
-### P5c-T4: End-to-end smoke + invariant verification 🔜 NEXT
+### P5c-T4: End-to-end smoke + invariant verification ✅
 
 **Description**: Mirror P5-T5 invariant verification — run a real `oh ask`
 flow that loads a skill, assert the trace shows the full lifecycle, and
 formally verify the four "zero diff" files.
 
 **Acceptance**:
-- [ ] `tests/skills/test_e2e.py` — end-to-end test with stub LLM:
-  - Provide a project-level skill `test-helper.md`
-  - LLM (stubbed) emits `LoadSkill(name="test-helper")`
-  - Assert: catalog appears in system prompt, dispatch succeeds, body
-    returned as tool_result, `tool_dispatch` log captures it
-- [ ] **Invariant verification**: `git diff --stat <phase-5a-close-commit>...HEAD --` on:
-  - `src/openharness/permissions/`
-  - `src/openharness/hooks/`
-  - `src/openharness/engine/query.py`
-  - `src/openharness/observability/logging.py`
-  → **must be zero** (run as a CI check or manual gate at close-out)
-- [ ] README "Phase 5c — Skills" section: how to write a skill, where to put it,
-  how the LLM uses it
+- [x] `tests/skills/test_e2e.py` — end-to-end test with stub LLM (5 tests):
+  - Full load cycle: skill on disk → catalog in system prompt → LLM emits
+    `LoadSkill(name="test-helper")` → real engine dispatch → body in
+    next-turn `tool_result` → end_turn
+  - Unknown name returns `is_error=True` + catalog (errors-as-payload)
+  - LoadSkill appears in `to_api_schema()` (visible to LLM)
+- [x] **Invariant verification** (formal source introspection, not just
+  git diff):
+  - `TestCrossCuttingInvariant.test_protected_modules_do_not_reference_skills`
+    reads `permissions/checker.py` + `permissions/tier_based.py` +
+    `hooks/executor.py` + `engine/query.py` + `observability/logging.py`
+    source code (strips comments / docstrings) and asserts NO
+    `LoadSkill` / `LoadSkillTool` / `SkillStore` / `FilesystemSkillStore` /
+    `parse_skill` identifier appears anywhere
+  - `test_load_skill_satisfies_BaseTool_only` walks `LoadSkillTool.__mro__`
+    and asserts no `Permission` / `Hook` / `Engine` / `QueryContext` class
+    in the chain (Skills are a tenant of BaseTool only)
+- [x] README "Phase 5c features — Skills" section: how to write a skill,
+  where to put it, how the LLM uses it via LoadSkill + the Index/Lookup/
+  Content/Recurse pattern reference
 
 **Files**:
 - `tests/skills/test_e2e.py` (new)
@@ -205,7 +212,7 @@ formally verify the four "zero diff" files.
 
 ---
 
-### P5c-T5: Coverage + retro
+### P5c-T5: Coverage + retro 🔜 NEXT
 
 **Description**: Coverage gap audit; `learnings/phase-5c-skills.md`.
 

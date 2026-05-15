@@ -234,6 +234,72 @@ Two extra log events on top of the Phase 3 inventory:
 - `reactive_truncate` (warning) — Layer 2 fired on this turn; carries
   `attempt` / `dropped_count` (how many messages were trimmed).
 
+### Phase 5c features — Skills (lazy-loaded expertise)
+
+Skills let you capture domain expertise as markdown files that the LLM
+loads on demand — same shape as Claude Code Skills. Full design in
+[`decisions/12-phase-5c-skills-boundary.md`](./decisions/12-phase-5c-skills-boundary.md);
+the deep first-principles framing in
+[`tasks/phase-5c-skills-preview.md`](./tasks/phase-5c-skills-preview.md).
+
+**Authoring a skill** — drop a markdown file with YAML frontmatter into
+one of two layers (project overrides global):
+
+- Global: `~/.openharness/skills/<name>.md`
+- Project: `<project-root>/.openharness/skills/<name>.md`
+
+```markdown
+---
+name: react-testing
+description: When to write React component tests and what patterns to use
+---
+
+When writing tests for React components, follow these principles:
+1. Test behavior through user interactions, not implementation.
+2. ...
+```
+
+**How the LLM uses it** — at CLI bootstrap the harness scans both
+directories and injects a catalog (names + descriptions only) into the
+system prompt:
+
+```
+## Available Skills (call LoadSkill to expand)
+
+- **react-testing** -- When to write React component tests and what patterns to use
+- **sql-tuning** -- Postgres performance tuning playbook
+```
+
+When the user's task matches a description, the LLM calls
+`LoadSkill(name="react-testing")` like any other tool. The harness reads
+the markdown body, strips the frontmatter, returns it as a `tool_result`
+block. The LLM uses the loaded guidance in the next turn.
+
+This is the **Index → Lookup → Content → Recurse** pattern that also
+underlies MCP / RAG / Memory — the same `LLM + tool-call` machinery
+applied to "external knowledge lazy-load". Phase 5c verified the third
+tenant of Phase 3's cross-cutting invariant: `permissions/` / `hooks/` /
+`engine/` / `observability/` show **zero diff** vs. pre-Skills state.
+
+```bash
+# Skills auto-discovered when you run `oh ask`:
+mkdir -p .openharness/skills
+cat > .openharness/skills/test-helper.md <<'EOF'
+---
+name: test-helper
+description: Guidance for writing tests that don't flake
+---
+Always use stub clocks, not time.sleep().
+EOF
+
+uv run oh ask "help me write a flake-free test"
+# → LLM sees the 'test-helper' skill in its catalog and may call
+#   LoadSkill(name="test-helper") to expand it before answering.
+
+# Disable Skills entirely (testing / debug):
+uv run oh ask --no-skills "..."
+```
+
 ### Want to verify the wire path against your account?
 
 ```bash
