@@ -37,6 +37,11 @@ dependencies = [
     "structlog>=25.5.0",
     "tiktoken>=0.12.0",
     "mcp>=1.2.0",
+    # P5c-T1 — Skills frontmatter parsing. YAML is the industry-standard
+    # frontmatter format (Claude Code / Jekyll / Hugo / etc.); rolling our
+    # own parser would break on multi-line strings, lists, and edge cases
+    # users will hit. ``yaml.safe_load`` is the small, correct primitive.
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]
@@ -57,6 +62,8 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-cov>=5.0",
     "pre-commit>=3.7",
+    # P5c-T1 — type stubs for PyYAML; mypy --strict won't pass without them
+    "types-PyYAML>=6.0",
 ]
 
 [tool.hatch.build.targets.wheel]
