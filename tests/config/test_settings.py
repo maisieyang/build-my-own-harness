@@ -214,3 +214,114 @@ class TestDenyPaths:
         monkeypatch.setenv("OPENHARNESS_DENY_PATHS", "secrets/**,,*.env,")
         settings = Settings()
         assert settings.deny_paths == ("secrets/**", "*.env")
+
+
+class TestTrustedMcpServers:
+    """P5-T1.1c — env parsing mirrors deny_paths (D15.6 same shape)."""
+
+    def test_default_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        settings = Settings()
+        assert settings.trusted_mcp_servers == ()
+
+    def test_single_entry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_TRUSTED_MCP_SERVERS", "github")
+        settings = Settings()
+        assert settings.trusted_mcp_servers == ("github",)
+
+    def test_comma_separated(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_TRUSTED_MCP_SERVERS", "github,filesystem,brave-search")
+        settings = Settings()
+        assert settings.trusted_mcp_servers == ("github", "filesystem", "brave-search")
+
+    def test_whitespace_stripped_and_empty_segments_dropped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_TRUSTED_MCP_SERVERS", " github , , filesystem ,")
+        settings = Settings()
+        assert settings.trusted_mcp_servers == ("github", "filesystem")
+
+
+class TestMcpServers:
+    """P5-T1.1b — JSON-blob env parsing into tuple[McpServerConfig, ...]."""
+
+    def test_default_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        settings = Settings()
+        assert settings.mcp_servers == ()
+
+    def test_single_server_from_json_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from openharness.mcp import McpServerConfig
+
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv(
+            "OPENHARNESS_MCP_SERVERS",
+            '[{"name":"fs","command":["npx","-y","@modelcontextprotocol/server-filesystem","/tmp"]}]',
+        )
+        settings = Settings()
+        assert len(settings.mcp_servers) == 1
+        cfg = settings.mcp_servers[0]
+        assert isinstance(cfg, McpServerConfig)
+        assert cfg.name == "fs"
+        assert cfg.command == (
+            "npx",
+            "-y",
+            "@modelcontextprotocol/server-filesystem",
+            "/tmp",
+        )
+        assert cfg.env == {}
+
+    def test_multi_server_with_env_vars(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv(
+            "OPENHARNESS_MCP_SERVERS",
+            (
+                '[{"name":"fs","command":["x"]},'
+                '{"name":"gh","command":["node","gh.js"],'
+                '"env":{"GITHUB_TOKEN":"ghp_xxx"}}]'
+            ),
+        )
+        settings = Settings()
+        assert len(settings.mcp_servers) == 2
+        fs, gh = settings.mcp_servers
+        assert fs.name == "fs"
+        assert fs.env == {}
+        assert gh.name == "gh"
+        assert gh.env == {"GITHUB_TOKEN": "ghp_xxx"}
+
+    def test_programmatic_construction_passthrough(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from openharness.mcp import McpServerConfig
+
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        cfg = McpServerConfig(name="programmatic", command=("y",))
+        settings = Settings(mcp_servers=(cfg,))
+        assert settings.mcp_servers == (cfg,)
+
+    def test_invalid_json_blob_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_MCP_SERVERS", "not-valid-json{")
+        with pytest.raises(ValidationError, match="not valid JSON"):
+            Settings()
+
+    def test_invalid_server_name_in_blob_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        # The name "1invalid" starts with a digit — McpServerConfig rejects it.
+        monkeypatch.setenv(
+            "OPENHARNESS_MCP_SERVERS",
+            '[{"name":"1invalid","command":["x"]}]',
+        )
+        with pytest.raises(ValidationError, match="invalid MCP server name"):
+            Settings()

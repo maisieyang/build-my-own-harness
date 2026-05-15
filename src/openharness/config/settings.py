@@ -31,6 +31,7 @@ from typing import Annotated, Any
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from openharness.mcp import McpServerConfig
 from openharness.observability.logging import LogFormat, LogLevel
 from openharness.permissions import PermissionMode
 
@@ -130,6 +131,37 @@ class Settings(BaseSettings):
         ),
     )
 
+    # P5-T1 (D15.2): MCP servers to spawn at bootstrap. ``NoDecode``
+    # stops pydantic-settings from doing its own JSON parse — our
+    # validator handles both JSON-blob strings and tuples-of-McpServerConfig
+    # (programmatic construction).
+    mcp_servers: Annotated[tuple[McpServerConfig, ...], NoDecode] = Field(
+        default=(),
+        description=(
+            "External MCP servers to spawn and register at bootstrap "
+            "(Phase 5 federated tool registry, D15.2). Env var: "
+            'OPENHARNESS_MCP_SERVERS=\'[{"name":"fs","command":'
+            '["npx","-y","@modelcontextprotocol/server-filesystem",'
+            '"/tmp"]}]\'. Empty tuple = no MCP integration, harness behaves '
+            "as Phase 4."
+        ),
+    )
+    # P5-T1 (D15.6): per-server trust whitelist for ``is_read_only``.
+    # Untrusted servers' ``readOnlyHint`` claims are ignored — their tools
+    # are forced through AuthZ Tier 3 strict path.
+    trusted_mcp_servers: Annotated[tuple[str, ...], NoDecode] = Field(
+        default=(),
+        description=(
+            "Server names whose ``annotations.readOnlyHint`` we trust "
+            "(D15.6). Comma-separated env var: "
+            "OPENHARNESS_TRUSTED_MCP_SERVERS='github,filesystem'. "
+            "Servers not in this set get ``is_read_only=False`` forced "
+            "regardless of what they self-report, ensuring AuthZ Tier 3 "
+            "evaluates them as if they could mutate state. Same shape as "
+            "``deny_paths`` (P3-T3.3b)."
+        ),
+    )
+
     @field_validator("deny_paths", mode="before")
     @classmethod
     def _parse_deny_paths(cls, value: Any) -> Any:
@@ -142,4 +174,54 @@ class Settings(BaseSettings):
         """
         if isinstance(value, str):
             return tuple(p.strip() for p in value.split(",") if p.strip())
+        return value
+
+    @field_validator("trusted_mcp_servers", mode="before")
+    @classmethod
+    def _parse_trusted_mcp_servers(cls, value: Any) -> Any:
+        """Same shape as :meth:`_parse_deny_paths` — comma-separated env →
+        tuple of names. Mirrors P3-T3.3b precedent."""
+        if isinstance(value, str):
+            return tuple(p.strip() for p in value.split(",") if p.strip())
+        return value
+
+    @field_validator("mcp_servers", mode="before")
+    @classmethod
+    def _parse_mcp_servers(cls, value: Any) -> Any:
+        """Parse env-var JSON blob OR pass through programmatic input.
+
+        Env shape (JSON array of objects, each with ``name`` + ``command``
+        + optional ``env``)::
+
+            OPENHARNESS_MCP_SERVERS='[
+              {"name": "fs", "command": ["npx", "@.../server-filesystem"]},
+              {"name": "gh", "command": ["node", "gh.js"],
+               "env": {"GITHUB_TOKEN": "ghp_..."}}
+            ]'
+
+        Programmatic shape:tuple of :class:`McpServerConfig` (passes
+        through unchanged); also accepts list of dicts (for testing
+        convenience).
+
+        Returns a tuple of :class:`McpServerConfig` instances — pydantic
+        then accepts the tuple as the field's value.
+        """
+        import json
+
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"OPENHARNESS_MCP_SERVERS not valid JSON: {exc}") from exc
+        if isinstance(value, (list, tuple)):
+            return tuple(
+                item
+                if isinstance(item, McpServerConfig)
+                else McpServerConfig(
+                    name=item["name"],
+                    command=tuple(item["command"]),
+                    env=dict(item.get("env", {})),
+                )
+                for item in value
+            )
         return value

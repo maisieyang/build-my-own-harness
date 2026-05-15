@@ -25,7 +25,7 @@ Phase 5 is the test of Phase 3's abstraction.
 
 ## Task list
 
-### P5-T1: McpServerConfig + Settings + trust whitelist 🔜 NEXT
+### P5-T1: McpServerConfig + Settings + trust whitelist ✅
 
 **Description**: Foundation layer — config dataclass, two new Settings
 fields (`mcp_servers`, `trusted_mcp_servers`), env-var parsing, validation.
@@ -33,16 +33,18 @@ No subprocess management yet; just the data model the next capabilities
 plug into.
 
 **Acceptance**:
-- [ ] `mcp/config.py` — `McpServerConfig` frozen dataclass (`name`,
-  `command: list[str]`, `env: dict[str, str]`)
-- [ ] `Settings.mcp_servers: tuple[McpServerConfig, ...] = ()` —
-  `OPENHARNESS_MCP_SERVERS` env parses TOML or JSON blob into tuple
-- [ ] `Settings.trusted_mcp_servers: tuple[str, ...] = ()` —
+- [x] `mcp/config.py` — `McpServerConfig` frozen dataclass (`name`,
+  `command: tuple[str, ...]`, `env: dict[str, str]`) — tuple instead of
+  list to align with frozen-dataclass immutability intent
+- [x] `Settings.mcp_servers: tuple[McpServerConfig, ...] = ()` —
+  `OPENHARNESS_MCP_SERVERS` env parses JSON blob into tuple (TOML
+  deferred — JSON suffices for Phase 5 MVP)
+- [x] `Settings.trusted_mcp_servers: tuple[str, ...] = ()` —
   `OPENHARNESS_TRUSTED_MCP_SERVERS=github,filesystem` comma-separated
   (same parsing shape as `deny_paths` from P3-T3.3b)
-- [ ] Validation: `name` matches `^[A-Za-z][A-Za-z0-9_-]*$` (used in
+- [x] Validation: `name` matches `^[A-Za-z][A-Za-z0-9_-]*$` (used in
   namespacing, must be safe identifier); `command` non-empty
-- [ ] Tests: parametrized env-var parsing; validation rejection;
+- [x] Tests: parametrized env-var parsing; validation rejection;
   programmatic construction
 
 **Files**:
@@ -59,7 +61,7 @@ plug into.
 
 ---
 
-### P5-T2: MCP SDK integration + single-server lifecycle
+### P5-T2: MCP SDK integration + single-server lifecycle 🔜 NEXT
 
 **Description**: Wrap `mcp.client.stdio` to spawn one MCP server,
 complete the `initialize` handshake, expose `list_tools()` + `call_tool()`
