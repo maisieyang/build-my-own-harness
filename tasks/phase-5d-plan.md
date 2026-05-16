@@ -25,7 +25,7 @@ of production code.
 
 ## Task list
 
-### P5d-T1: `bundles/` package foundation 🔜 NEXT
+### P5d-T1: `bundles/` package foundation ✅
 
 **Description**: Pure data + parsing. `Bundle` dataclass + frontmatter
 parse + `FilesystemBundleStore` (global+project two-layer). Same shape
@@ -73,7 +73,7 @@ as `commands/` (Phase 5b) and `skills/` (Phase 5c).
 
 ---
 
-### P5d-T2: `BUILTIN_HOOKS` registry — `audit_log` + `deny_writes`
+### P5d-T2: `BUILTIN_HOOKS` registry — `audit_log` + `deny_writes` 🔜 NEXT
 
 **Description**: Phase 5d's 2 framework-provided hooks. Each is a small
 async callable (matches `Hook` Protocol from P3-T4) registered into a
