@@ -393,6 +393,84 @@ entirely in `commands/` + `cli.py`. Formal structural test in
 [`tests/commands/test_e2e.py`](./tests/commands/test_e2e.py)
 introspects 9 protected modules.
 
+### Phase 6 features — Sub-agent (recursive tool dispatch)
+
+Sub-agent (the `Agent` tool) lets the LLM delegate a sub-task to a fresh
+agent loop with isolated conversation context. The parent's conversation
+grows by exactly one `tool_use` / `tool_result` pair regardless of
+how many turns the sub-agent took — so a 50-turn research detour
+doesn't balloon the parent's token budget.
+
+Full design in
+[`decisions/13-phase-6-boundary.md`](./decisions/13-phase-6-boundary.md).
+The conceptual insight: **tool dispatch is the LLM's syscall interface,
+and the agent loop itself is one of the syscalls**. Sub-agent isn't a
+new mechanism — it's the recursive application of the primitive the
+harness already owns. ``run_query`` invokes itself through a single
+``BaseTool``, with no dispatch-side code knowing it's recursion.
+
+**How the LLM uses it** — the `Agent` tool is registered by default
+(catalog visible in the system prompt). The LLM calls it like any
+other tool:
+
+```python
+# LLM emits:
+tool_use(
+    name="Agent",
+    input={
+        "description": "research async patterns",
+        "prompt": "Survey common async patterns in this codebase and summarize.",
+    },
+)
+```
+
+The sub-agent receives `prompt` as its initial user message, runs
+independently through tool dispatch with its own turn budget, and
+returns its final text as the `tool_result`. The parent's LLM then
+continues with that one result in context.
+
+```bash
+# Bounded recursion — default 3 levels deep (supervisor → research → leaf):
+uv run oh ask "Use the Agent tool to count words in foo.txt and summarize the findings."
+
+# Override depth bound:
+OPENHARNESS_MAX_AGENT_DEPTH=5 uv run oh ask "..."
+
+# Disable spawning entirely (kill-switch):
+OPENHARNESS_MAX_AGENT_DEPTH=0 uv run oh ask "..."
+# → Any `Agent` invocation returns is_error=True with "max agent depth (0) reached".
+```
+
+**Trace stitching** — sub-agent log events carry two new fields:
+
+- `parent_run_id` — points at the immediate parent's `run_id`
+- `agent_depth` — 0 for top-level, +1 per nesting level
+
+JSONL consumers can self-join `run_id ↔ parent_run_id` to reconstruct
+the parent/sub-agent tree:
+
+```
+$ uv run oh ask --log-format json "..." 2> trace.jsonl
+$ jq -c 'select(.agent_depth > 0)' trace.jsonl
+{"event":"turn_start","run_id":"R2","parent_run_id":"R1","agent_depth":1,...}
+```
+
+**Cross-cutting invariant verified (third tenant test)** — Phase 6
+landed without any change to `permissions/`, `hooks/`, `mcp/`,
+`compaction/`, or `protocols/`. The engine dispatch loop gained exactly
+3 additive code lines:
+
+```python
+from openharness.observability import bind_agent_depth        # +1 import
+with bind_run(), bind_agent_depth(context.agent_depth):        # +1 line
+exec_context = ToolExecutionContext(cwd=..., parent_query=context)  # +1 kwarg
+```
+
+The recursion lives entirely inside `SpawnAgent.execute`. Structural
+test
+[`tests/tools/test_spawn_agent_invariant.py`](./tests/tools/test_spawn_agent_invariant.py)
+introspects 9 protected modules to confirm no leak.
+
 ### Want to verify the wire path against your account?
 
 ```bash

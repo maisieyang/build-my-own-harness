@@ -239,7 +239,49 @@ logic, `mcp/`, `compaction/`, `protocols/` all zero diff.
 
 ---
 
-### P6-T6: End-to-end smoke + retro 🔜 NEXT
+### P6-T6: End-to-end smoke + retro ✅
+
+---
+
+## Phase 6 DONE 🎉
+
+995 tests / 1 skipped / total coverage retained / mypy strict clean /
+ruff clean throughout. The **third tenant test** of Phase 3's
+abstraction is verified — sub-agent (a recursive control-flow shape)
+lands without polluting any of the four core "zero-diff" subsystems:
+
+  permissions/        → 0 lines diff vs Phase 5c close
+  hooks/              → 0 lines diff
+  mcp/                → 0 lines diff
+  compaction/         → 0 lines diff
+  protocols/          → 0 lines diff
+  engine/query.py     → 3 additive code lines only (import + with-stmt +
+                        kwarg). NO sub-agent-aware branch.
+
+Per the `learnings/phase-6.md` §3.1-§3.2 observations, this is the
+deepest validation of Phase 3's abstraction so far: a NEW CONTROL
+FLOW SHAPE (run_query invokes itself) landed as just another
+BaseTool. The framework's `tool dispatch` primitive is now proven
+sufficient to host recursion, federation, knowledge lookup, UX
+shortcuts, and external execution environments — all extensions to
+date land via the same `BaseTool → ToolRegistry → dispatch loop`
+chain.
+
+Next milestones (per ARCHITECTURE.md §4):
+
+- **Phase 7 (Sandbox / Execution Environment)** — preview already
+  on disk (`tasks/phase-7-preview.md`). Will add `ExecutionEnvironment`
+  abstraction with `HostExecution` + `SandboxExecution` substrates.
+  Phase 6's `ToolExecutionContext.parent_query` additive-field pattern
+  is the template; Phase 6's contextvar-nesting docstring records the
+  gotcha that Phase 7's substrate state will likely also encounter.
+- **Phase 5d (ModeBundle)** — preview in `tasks/phase-5-preview.md`
+  D15. Cross-layer tenant; needs entry-time Three-Axis to settle the
+  composition rules across Layer 0 (commands) + Layer 1 (skills/system
+  prompt) + Layer 2 (tool catalog filtering) + Layer 3 (hooks +
+  permission overlay).
+- **Phase 7 (Polish + release)** — `markdown_store/` shared mechanism
+  layer + README + tutorial + packaging.
 
 **Description**: Real Qwen run(opt-in via `OPENHARNESS_API_KEY` env,
 same gate as Phase 4 / 5 smokes)— parent prompts "use the Agent tool to
