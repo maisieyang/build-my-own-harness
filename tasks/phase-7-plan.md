@@ -125,7 +125,7 @@ for ToolExecutionContext, with engine populating from QueryContext) so
 
 ---
 
-### P7-T3: `BashTool` refactor + behavior parity 🔜 NEXT
+### P7-T3: `BashTool` refactor + behavior parity ✅
 
 **Description**: Replace the inline `asyncio.create_subprocess_exec`
 logic in `BashTool.execute` with `await ctx.execution_env.run_command(...)`.
@@ -163,7 +163,7 @@ cwd / env / timeout / stdin` arg packing + `ProcessResult` →
 
 ---
 
-### P7-T4: INVARIANT VERIFICATION + retro + README
+### P7-T4: INVARIANT VERIFICATION + retro + README 🔜 NEXT
 
 **Description**: The structural invariant verification (the fourth
 tenant test) + `learnings/phase-7a.md` + README section + DoD closeout.

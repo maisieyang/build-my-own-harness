@@ -1,16 +1,26 @@
-"""Bash tool -- P2-T3 sub-unit 3d.
+"""Bash tool -- P2-T3 sub-unit 3d; P7-T3 refactored to delegate.
 
-Executes a shell command via :func:`asyncio.create_subprocess_shell`, in
-``context.cwd``. Per phase-2-plan.md + D9.5:
+Executes a shell command via the substrate :class:`ExecutionEnvironment`
+configured on ``QueryContext.execution_env`` (defaults to
+``HostExecution``, swapped to ``SandboxExecution`` when Phase 7b
+lands). Per ``decisions/15-phase-7-boundary.md`` D17.4:**BashTool is
+the ONLY consumer of ``execution_env``**;Read/Write/Edit/Grep don't
+need substrate isolation because path-based AuthZ Tier 1-3 already
+covers them.
+
+Behavior contract(unchanged across the P7-T3 refactor):
 
 - Default timeout 600s (overridable per-call via ``timeout_seconds``).
-- ``stdout`` and ``stderr`` are merged into a single output stream.
-- On timeout: ``SIGTERM`` -> 2s grace -> ``SIGKILL``.
-- Output truncated at 12,000 chars (with a tail marker).
-- Empty stdout returns ``"(no output)"`` sentinel (P3-T1.1b) — aligns with
-  Read's ``(empty)`` and Grep's ``(no matches)``.
-- ``exit_code`` and ``duration_ms`` go to ``metadata`` (D9.5: output is for
-  the LLM, metadata is for programs).
+- ``stdout`` and ``stderr`` are merged into a single output stream
+  (handled by the substrate's pipe-level merge in :class:`HostExecution`).
+- On timeout:``SIGTERM`` -> 2s grace -> ``SIGKILL`` (handled by the
+  substrate).
+- Output truncated at 12,000 chars (with a tail marker) — handled here
+  in the tool layer because truncation is LLM-facing semantics, not
+  raw process I/O.
+- Empty stdout returns ``"(no output)"`` sentinel (P3-T1.1b) — same
+  reasoning, LLM-facing.
+- ``exit_code`` and ``duration_ms`` go to ``metadata`` (D9.5).
 
 Per D9.4: **no deny-list at this layer**. Bash trusts what it receives.
 P2-T6 ``PermissionChecker`` enforces safety one layer up.
@@ -18,12 +28,12 @@ P2-T6 ``PermissionChecker`` enforces safety one layer up.
 
 from __future__ import annotations
 
-import asyncio
 import time
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
+from openharness.execution.host import _HOST_EXECUTION
 from openharness.tools.base import BaseTool, ToolResult
 
 if TYPE_CHECKING:
@@ -31,7 +41,6 @@ if TYPE_CHECKING:
 
 
 DEFAULT_TIMEOUT_SECONDS = 600
-KILL_GRACE_PERIOD_SECONDS = 2.0
 MAX_OUTPUT_CHARS = 12_000
 
 # P3-T1.1b: empty-stdout sentinel. Aligns with Read's ``(empty)`` and Grep's
@@ -56,7 +65,19 @@ class BashInput(BaseModel):
 
 
 class Bash(BaseTool[BashInput]):
-    """Run a shell command via /bin/sh and return the merged stdout/stderr."""
+    """Run a shell command via the configured ExecutionEnvironment.
+
+    P7-T3 refactor:the subprocess plumbing (create_subprocess_shell +
+    merged pipe + timeout + SIGTERM->SIGKILL escalation) is owned by
+    the substrate (:class:`HostExecution` in Phase 7a;
+    ``SandboxExecution`` in Phase 7b). The Bash tool's responsibility
+    shrinks to:
+
+    1. Pack ``BashInput`` into substrate call args
+    2. Translate substrate's ``ProcessResult`` into LLM-facing
+       ``ToolResult`` (apply truncation, empty sentinel, is_error from
+       exit_code, metadata dict)
+    """
 
     name = "Bash"
     description = (
@@ -74,68 +95,47 @@ class Bash(BaseTool[BashInput]):
         timeout = (
             args.timeout_seconds if args.timeout_seconds is not None else DEFAULT_TIMEOUT_SECONDS
         )
+        # P7-T3:fall back to the host singleton when ``execution_env``
+        # isn't populated. This happens when a test or external caller
+        # constructs ``ToolExecutionContext(cwd=p)`` directly without
+        # going through the engine. The engine always populates
+        # ``execution_env`` per P7-T2.
+        env = context.execution_env if context.execution_env is not None else _HOST_EXECUTION
 
         start = time.monotonic()
-        process = await asyncio.create_subprocess_shell(
-            args.command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,  # merged into stdout pipe
-            cwd=str(context.cwd),
+        result = await env.run_command(
+            command=args.command,
+            cwd=context.cwd,
+            timeout=float(timeout),
         )
-
-        try:
-            stdout_bytes, _ = await asyncio.wait_for(
-                process.communicate(),
-                timeout=timeout,
-            )
-            timed_out = False
-        except asyncio.TimeoutError:
-            await _terminate_then_kill(process)
-            timed_out = True
-            stdout_bytes = b""
-
         elapsed_ms = int((time.monotonic() - start) * 1000)
 
-        if timed_out:
+        if result.timed_out:
             return ToolResult(
                 is_error=True,
                 output=f"command timed out after {timeout}s",
                 metadata={
-                    "exit_code": process.returncode,
+                    "exit_code": result.exit_code,
                     "duration_ms": elapsed_ms,
                     "timed_out": True,
                 },
             )
 
-        output = stdout_bytes.decode("utf-8", errors="replace")
-        # Strict empty-only: only the empty-bytes case triggers the sentinel;
-        # whitespace-only output (e.g., bare ``echo`` -> "\n") passes through
-        # unchanged. is_error is decided downstream by exit_code.
+        output = result.output
+        # Strict empty-only: only the empty-output case triggers the
+        # sentinel; whitespace-only output (e.g., bare ``echo`` -> "\n")
+        # passes through unchanged. is_error is decided by exit_code.
         if output == "":
             output = NO_OUTPUT_SENTINEL
         elif len(output) > MAX_OUTPUT_CHARS:
             dropped = len(output) - MAX_OUTPUT_CHARS
             output = output[:MAX_OUTPUT_CHARS] + f"\n... [truncated {dropped} chars]"
 
-        exit_code = process.returncode if process.returncode is not None else -1
         return ToolResult(
             output=output,
-            is_error=(exit_code != 0),
+            is_error=(result.exit_code != 0),
             metadata={
-                "exit_code": exit_code,
+                "exit_code": result.exit_code,
                 "duration_ms": elapsed_ms,
             },
         )
-
-
-async def _terminate_then_kill(process: asyncio.subprocess.Process) -> None:
-    """Send SIGTERM, wait up to ``KILL_GRACE_PERIOD_SECONDS``, then SIGKILL.
-
-    Always reaps the process before returning so ``process.returncode`` is set.
-    """
-    process.terminate()
-    try:
-        await asyncio.wait_for(process.wait(), timeout=KILL_GRACE_PERIOD_SECONDS)
-    except asyncio.TimeoutError:
-        process.kill()
-        await process.wait()
