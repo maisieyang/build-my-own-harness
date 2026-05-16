@@ -34,7 +34,7 @@ lines of production code.
 
 ## Task list
 
-### P6-T1: Settings + QueryContext fields 🔜 NEXT
+### P6-T1: Settings + QueryContext fields ✅
 
 **Description**: Foundation — add `max_agent_depth` to Settings, add
 `agent_depth` + `max_agent_depth` to QueryContext. No tool yet, no
@@ -67,7 +67,7 @@ Same shape as P5-T1(`McpServerConfig` + Settings fields).
 
 ---
 
-### P6-T2: `ToolExecutionContext.parent_query` additive field
+### P6-T2: `ToolExecutionContext.parent_query` additive field 🔜 NEXT
 
 **Description**: The mechanical question Phase 6 forces — how does
 `SpawnAgent.execute` access the parent's `QueryContext`?Boundary D16.8

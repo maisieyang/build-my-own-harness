@@ -56,6 +56,16 @@ class QueryContext:
     max_tokens: int = 1024
     max_turns: int = 20
     permission_mode: PermissionMode = field(default=PermissionMode.DEFAULT)
+    # P6-T1 (D16.5): sub-agent recursion tracking. Top-level ``oh ask``
+    # constructs with default ``agent_depth=0``; ``SpawnAgent.execute``
+    # builds the sub-context via ``dataclasses.replace(parent,
+    # agent_depth=parent.agent_depth + 1)``. ``max_agent_depth`` is the
+    # cap from :class:`Settings`; propagates through all sub-agent levels
+    # so every depth check reads the same value. Engine dispatch is
+    # depth-agnostic — the bound check lives entirely inside
+    # ``SpawnAgent.execute`` per the cross-cutting invariant.
+    agent_depth: int = 0
+    max_agent_depth: int = 3
     # P3-T4.4e: hook registry for middleware (Pre/PostToolUse, Pre/PostApiCall,
     # OnError). Default empty registry = no hooks = zero dispatch overhead.
     # Users programmatically register hooks before constructing the context

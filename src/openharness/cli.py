@@ -258,6 +258,12 @@ async def _run_ask(
             max_tokens=max_tokens,
             permission_mode=permission_mode,
             skill_store=skill_store,
+            # P6-T1 (D16.5): propagate the sub-agent recursion cap from
+            # Settings into the top-level QueryContext. ``agent_depth=0``
+            # is the dataclass default for top-level invocations; each
+            # ``SpawnAgent.execute`` builds the sub-context via
+            # ``dataclasses.replace(parent, agent_depth=parent.agent_depth + 1)``.
+            max_agent_depth=settings.max_agent_depth,
         )
 
         initial_messages = [

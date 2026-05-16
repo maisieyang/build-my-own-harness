@@ -127,3 +127,44 @@ class TestSkillStoreField:
         )
         assert ctx.skill_store is store
         assert "x" in ctx.skill_store.discover()
+
+
+class TestAgentDepthFields:
+    """P6-T1 (D16.5) — sub-agent recursion tracking on QueryContext."""
+
+    def test_default_depth_is_zero(self, context: QueryContext) -> None:
+        # Top-level ``oh ask`` invocations construct with depth 0.
+        assert context.agent_depth == 0
+
+    def test_default_max_agent_depth_is_three(self, context: QueryContext) -> None:
+        # Matches the Settings default — engine cap is the same value as
+        # the env-driven Settings field.
+        assert context.max_agent_depth == 3
+
+    def test_dataclasses_replace_bumps_depth(self, context: QueryContext) -> None:
+        # The sub-agent construction pattern — `SpawnAgent.execute` will
+        # call `dataclasses.replace(parent, agent_depth=parent.agent_depth + 1)`.
+        sub = dataclasses.replace(context, agent_depth=context.agent_depth + 1)
+        assert sub.agent_depth == 1
+        assert sub.max_agent_depth == 3  # inherited
+
+    def test_max_depth_propagates_through_replace(self, context: QueryContext) -> None:
+        # `max_agent_depth` MUST stay constant across replace so every level
+        # of the recursion checks against the same cap. If the cap were
+        # somehow re-derived per level the depth bound would not be a hard
+        # ceiling.
+        sub = dataclasses.replace(context, agent_depth=2)
+        assert sub.max_agent_depth == context.max_agent_depth
+
+    def test_explicit_max_depth_override(self, tmp_path: Path) -> None:
+        ctx = QueryContext(
+            api_client=_stub_client(),
+            tool_registry=ToolRegistry(),
+            permission_checker=_AllowAllChecker(),
+            system_prompt="",
+            cwd=tmp_path,
+            model="qwen-plus",
+            max_agent_depth=5,
+        )
+        assert ctx.max_agent_depth == 5
+        assert ctx.agent_depth == 0  # default unchanged

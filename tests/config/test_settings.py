@@ -325,3 +325,44 @@ class TestMcpServers:
         )
         with pytest.raises(ValidationError, match="invalid MCP server name"):
             Settings()
+
+
+class TestMaxAgentDepth:
+    """P6-T1 (D16.5) — env-driven sub-agent recursion cap."""
+
+    def test_default_is_three(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        settings = Settings()
+        assert settings.max_agent_depth == 3
+
+    @pytest.mark.parametrize("value", ["0", "1", "5", "20"])
+    def test_env_var_parses_to_int(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_MAX_AGENT_DEPTH", value)
+        settings = Settings()
+        assert settings.max_agent_depth == int(value)
+
+    def test_zero_is_valid(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # ``0`` disables spawning entirely — depth 0 + 1 > 0 refuses.
+        # Useful as a "no sub-agents" hard kill-switch.
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_MAX_AGENT_DEPTH", "0")
+        settings = Settings()
+        assert settings.max_agent_depth == 0
+
+    def test_negative_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_MAX_AGENT_DEPTH", "-1")
+        with pytest.raises(ValidationError):
+            Settings()
+
+    def test_non_int_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_MAX_AGENT_DEPTH", "not-a-number")
+        with pytest.raises(ValidationError):
+            Settings()

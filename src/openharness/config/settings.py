@@ -162,6 +162,26 @@ class Settings(BaseSettings):
         ),
     )
 
+    # P6-T1 (D16.5): sub-agent depth bound. Top-level ``oh ask`` runs at
+    # ``agent_depth=0``; each ``SpawnAgent`` invocation bumps the
+    # sub-agent's ``QueryContext.agent_depth`` by 1, and ``SpawnAgent.execute``
+    # refuses when ``parent.agent_depth + 1 > parent.max_agent_depth``.
+    # Default 3 covers realistic delegation patterns (supervisor → research
+    # → leaf tool calls); deeper structures usually indicate prompt design
+    # problems or fork-bomb shape — fail loudly. ``0`` disables spawning
+    # entirely (any spawn at depth 0 needs depth 1 ≤ 0 which is false).
+    max_agent_depth: int = Field(
+        default=3,
+        ge=0,
+        description=(
+            "Maximum sub-agent recursion depth (Phase 6 / D16.5). Top-level "
+            "``oh ask`` runs at depth 0; default 3 supports supervisor → "
+            "research → leaf chains. ``0`` disables ``SpawnAgent`` "
+            "invocations entirely (depth check refuses any spawn). Env var: "
+            "OPENHARNESS_MAX_AGENT_DEPTH."
+        ),
+    )
+
     @field_validator("deny_paths", mode="before")
     @classmethod
     def _parse_deny_paths(cls, value: Any) -> Any:
