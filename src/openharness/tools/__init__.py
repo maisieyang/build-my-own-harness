@@ -34,12 +34,18 @@ from openharness.tools.write import Write
 
 
 def create_default_tool_registry() -> ToolRegistry:
-    """Construct a :class:`ToolRegistry` with the five base tools registered.
+    """Construct a :class:`ToolRegistry` with the default built-in tools.
 
-    Registration order matches ``tasks/phase-2-plan.md``:
-    ``Read`` -> ``Write`` -> ``Edit`` -> ``Bash`` -> ``Grep``. The order is
-    visible to the LLM via ``to_api_schema()`` and to UIs via
+    Registration order:
+    ``Read`` -> ``Write`` -> ``Edit`` -> ``Bash`` -> ``Grep`` -> ``Agent``.
+    The order is visible to the LLM via ``to_api_schema()`` and to UIs via
     ``list_tools()``.
+
+    P6-T5: ``Agent`` (SpawnAgent default instance) joins the lineup. It's
+    the recursive tool dispatch primitive (Phase 6) — sub-agents inherit
+    this same registry, so a sub-agent at depth 1 also sees ``Agent`` and
+    can spawn its own children until ``Settings.max_agent_depth`` is
+    reached.
     """
     registry = ToolRegistry()
     registry.register(Read())
@@ -47,6 +53,7 @@ def create_default_tool_registry() -> ToolRegistry:
     registry.register(Edit())
     registry.register(Bash())
     registry.register(Grep())
+    registry.register(SpawnAgent())
     return registry
 
 

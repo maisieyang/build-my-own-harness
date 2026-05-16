@@ -21,6 +21,7 @@ from openharness.tools import (
     Edit,
     Grep,
     Read,
+    SpawnAgent,
     Write,
     create_default_tool_registry,
 )
@@ -32,22 +33,32 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def test_factory_registers_five_base_tools() -> None:
+def test_factory_registers_default_tools() -> None:
     registry = create_default_tool_registry()
     listed = registry.list_tools()
-    assert [t.name for t in listed] == ["Read", "Write", "Edit", "Bash", "Grep"]
+    # P6-T5: ``Agent`` (SpawnAgent) joins the default lineup.
+    assert [t.name for t in listed] == [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Grep",
+        "Agent",
+    ]
     # Spot-check that each is the expected concrete class.
     assert isinstance(registry.get("Read"), Read)
     assert isinstance(registry.get("Write"), Write)
     assert isinstance(registry.get("Edit"), Edit)
     assert isinstance(registry.get("Bash"), Bash)
     assert isinstance(registry.get("Grep"), Grep)
+    assert isinstance(registry.get("Agent"), SpawnAgent)
 
 
-def test_factory_schema_projects_to_five_specs() -> None:
+def test_factory_schema_projects_to_all_specs() -> None:
     registry = create_default_tool_registry()
     schemas = registry.to_api_schema()
-    assert len(schemas) == 5
+    # 5 base tools + 1 sub-agent.
+    assert len(schemas) == 6
     for spec in schemas:
         assert isinstance(spec, ToolSpec)
         assert spec.name
@@ -83,7 +94,7 @@ class TestEndToEndExecution:
 
 @pytest.mark.parametrize(
     "tool_name",
-    ["Read", "Write", "Edit", "Bash", "Grep"],
+    ["Read", "Write", "Edit", "Bash", "Grep", "Agent"],
 )
 def test_each_tool_has_pascal_case_name(tool_name: str) -> None:
     # D6.4: tool names are PascalCase; the registry stores them under the
@@ -104,6 +115,9 @@ def test_each_tool_has_pascal_case_name(tool_name: str) -> None:
         # Bash 默认保守 False —— `cat foo` 是只读但 `rm foo` 也是 Bash,
         # 静态判不出 read vs write,默认非只读交 AuthZ Tier 3 走 strict path
         ("Bash", False),
+        # Agent (SpawnAgent) — sub-agent may dispatch mutating tools, so
+        # AuthZ Tier 3 strict path applies. P6-T3 / D16.1.
+        ("Agent", False),
     ],
 )
 def test_is_read_only_classification(

@@ -1009,3 +1009,88 @@ class TestSlashCommands:
         user_text = stub.last_request.messages[0].content[0].text  # type: ignore[union-attr]
         assert "Make a plan:" in user_text
         assert "{args}" not in user_text  # substituted with empty string
+
+
+# --------------------------------------------------------------------------- #
+# Sub-agent bootstrap (P6-T5)                                                 #
+# --------------------------------------------------------------------------- #
+
+
+class TestSubAgentBootstrap:
+    """``Agent`` (SpawnAgent) is in the default tool registry; CLI propagates
+    ``max_agent_depth`` from Settings into QueryContext; the LLM sees the
+    Agent tool in its catalog by default.
+    """
+
+    def test_agent_tool_in_default_registry_visible_to_llm(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Default oh ask invocation → LLM's tools list contains Agent.
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        assert result.exit_code == 0
+        assert stub.last_request is not None
+        tool_names = {t.name for t in (stub.last_request.tools or [])}
+        assert "Agent" in tool_names
+
+    def test_max_agent_depth_propagates_from_settings(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from openharness.engine import QueryContext
+
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("OPENHARNESS_MAX_AGENT_DEPTH", "5")
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        assert result.exit_code == 0
+
+        ctx = captured.context
+        assert isinstance(ctx, QueryContext)
+        assert ctx.max_agent_depth == 5
+        assert ctx.agent_depth == 0  # top-level oh ask runs at depth 0
+
+    def test_default_max_agent_depth_is_three(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from openharness.engine import QueryContext
+
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        assert result.exit_code == 0
+
+        ctx = captured.context
+        assert isinstance(ctx, QueryContext)
+        assert ctx.max_agent_depth == 3  # Settings default
+
+    def test_zero_max_agent_depth_disables_spawning(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from openharness.engine import QueryContext
+
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("OPENHARNESS_MAX_AGENT_DEPTH", "0")
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        assert result.exit_code == 0
+        ctx = captured.context
+        assert isinstance(ctx, QueryContext)
+        # 0 + 1 > 0 → SpawnAgent will refuse any invocation. The Agent
+        # tool is still in the catalog (LLM sees it); refusing is the
+        # depth check's job at dispatch time.
+        assert ctx.max_agent_depth == 0

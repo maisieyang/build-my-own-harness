@@ -209,10 +209,12 @@ class TestCliBootstrapWithMcp:
         result = runner.invoke(cli_module.app, ["ask", "hi"])
         assert result.exit_code == 0
 
-        # Only the 5 built-ins, no MCP-namespaced tools.
+        # Only the default built-ins, no MCP-namespaced tools.
+        # P6-T5: ``Agent`` joins the default lineup as the sub-agent
+        # primitive — no MCP-namespaced tools still means no servers.
         assert stub.last_request is not None
         tool_names = {t.name for t in (stub.last_request.tools or [])}
-        assert tool_names == {"Read", "Write", "Edit", "Bash", "Grep"}
+        assert tool_names == {"Read", "Write", "Edit", "Bash", "Grep", "Agent"}
 
 
 # --------------------------------------------------------------------------- #

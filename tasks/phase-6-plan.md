@@ -191,7 +191,7 @@ detects nested invocation;`bind_turn` or a new helper binds depth.
 
 ---
 
-### P6-T5: CLI bootstrap + INVARIANT VERIFICATION ⭐ 🔜 NEXT
+### P6-T5: CLI bootstrap + INVARIANT VERIFICATION ⭐ ✅
 
 **Description**: Register a default `SpawnAgent("Agent")` instance into
 the registry in `cli._run_ask`. Wire `max_agent_depth` from Settings into
@@ -239,7 +239,7 @@ logic, `mcp/`, `compaction/`, `protocols/` all zero diff.
 
 ---
 
-### P6-T6: End-to-end smoke + retro
+### P6-T6: End-to-end smoke + retro 🔜 NEXT
 
 **Description**: Real Qwen run(opt-in via `OPENHARNESS_API_KEY` env,
 same gate as Phase 4 / 5 smokes)— parent prompts "use the Agent tool to
