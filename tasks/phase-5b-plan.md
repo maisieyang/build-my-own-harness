@@ -171,7 +171,33 @@ Plus the **structural invariant verification** (the fourth tenant test).
 
 ---
 
-### P5b-T5: README + Coverage + retro 🔜 NEXT
+### P5b-T5: README + Coverage + retro ✅
+
+---
+
+## Phase 5b DONE 🎉
+
+`commands/` 5 modules all 100 % coverage / total ≥ 95 % / mypy strict
+clean / ruff clean / fourth tenant invariant verified — and stronger
+than 5c (commands don't reach `engine/context.py`, `prompts.py`, or
+`tools/` either).
+
+Per the `learnings/phase-5b-commands.md` §3.4 observation, this is the
+framework's first **pre-LLM extension point** — a new layer-0 fold
+distinct from layer-1 (Skills catalog), layer-2 (MCP tools), and
+layer-3 (Sandbox execution env). Phase 7+ pre-LLM features (history
+rewrite, multi-prompt batching, external templating) will land here
+following the same pattern.
+
+Next milestones:
+- **Phase 6 (Sandbox)** — boundary + plan on disk; third tenant test
+  prediction will be verified.
+- **Phase 5d (ModeBundle)** — first cross-layer tenant; combines
+  slash command + skill subset + permission overlay + hook injection
+  into a unified "mode" abstraction. Phase 5b retro §3.2 + §6 are
+  required reading.
+- **Phase 7 (Polish + release)** — `markdown_store/` shared mechanism
+  layer (NOT shared audience abstraction); README + tutorial + packaging.
 
 **Description**: README section, coverage close-out,
 `learnings/phase-5b-commands.md`.

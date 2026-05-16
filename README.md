@@ -300,6 +300,99 @@ uv run oh ask "help me write a flake-free test"
 uv run oh ask --no-skills "..."
 ```
 
+### Phase 5b features — Slash Commands (user-facing UX shortcuts)
+
+Slash commands are markdown templates the user invokes with `/cmd args`
+to save typing on repeated workflows. Full design in
+[`decisions/14-phase-5b-boundary.md`](./decisions/14-phase-5b-boundary.md).
+
+**Authoring a command** — drop a markdown file with YAML frontmatter
+into one of two layers (project overrides global, same convention as
+Skills and git config):
+
+- Global: `~/.openharness/commands/<name>.md`
+- Project: `<project-root>/.openharness/commands/<name>.md`
+
+```markdown
+---
+name: review
+description: Review pending changes for correctness + security
+---
+Please review the following changes:
+
+{args}
+
+Focus on edge cases and security implications.
+```
+
+**How it works** — the user types `oh ask "/review last commit"`. The
+CLI parses the leading `/`, looks up `review.md`, substitutes
+`{args}` → `last commit`, and the resolved body becomes the user
+message sent to the LLM. From `run_query`'s perspective, no slash
+command exists — it's a pure CLI input transformation that vanishes
+before the agent loop sees the prompt.
+
+```bash
+# Author once, reuse forever:
+mkdir -p .openharness/commands
+cat > .openharness/commands/review.md <<'EOF'
+---
+name: review
+description: Review pending changes
+---
+Please review:
+
+{args}
+
+Focus on edge cases.
+EOF
+
+uv run oh ask "/review last 3 commits"
+# → LLM receives "Please review:\n\nlast 3 commits\n\nFocus on edge cases."
+```
+
+**Args placement rules**:
+
+- Body contains `{args}` → substituted in place (including empty args).
+- Body has no `{args}` placeholder + non-empty args → appended on a
+  new line at end of body (args never silently vanish).
+- `oh ask "/cmd"` (no args) → `{args}` substituted with empty string.
+
+**Unknown command error**:
+
+```bash
+$ oh ask "/nonexistent something"
+Unknown command: no slash command named 'nonexistent'; available commands: review
+```
+
+Exit code 1, no LLM call attempted, catalog of available names surfaces
+so you can pick the right one.
+
+**Escape hatch** — `--no-commands` for prompts that legitimately start
+with `/`:
+
+```bash
+uv run oh ask --no-commands "/path/to/file what's wrong here?"
+# → slash prefix flows verbatim to LLM as user message
+```
+
+**Commands vs Skills** — the role split is load-bearing:
+
+| | Skills (Phase 5c) | Commands (Phase 5b) |
+|---|---|---|
+| Audience | LLM-facing knowledge | User-facing UX shortcut |
+| Trigger | LLM calls `LoadSkill(name)` | User types `/<name> args` |
+| When resolved | Mid-conversation, lazy | Pre-LLM, in `cli.py` |
+| Catalog visibility | Injected into system prompt | None — LLM doesn't see commands |
+| Affects LLM behavior | Yes (loaded body in tool_result) | Yes (different user message) |
+
+Phase 5b is the **fourth tenant test** of the Phase 3 cross-cutting
+invariant. Slash commands don't touch `permissions/`, `hooks/`,
+`engine/`, `observability/`, `prompts/`, or `tools/` — they live
+entirely in `commands/` + `cli.py`. Formal structural test in
+[`tests/commands/test_e2e.py`](./tests/commands/test_e2e.py)
+introspects 9 protected modules.
+
 ### Want to verify the wire path against your account?
 
 ```bash
