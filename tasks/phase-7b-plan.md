@@ -82,7 +82,7 @@ Container lifecycle (`__aenter__` pulls image + spawns container,
 
 ---
 
-### P7b-T2: Settings + CLI flags + bootstrap 🔜 NEXT
+### P7b-T2: Settings + CLI flags + bootstrap ✅
 
 **Description**: Wire `SandboxExecution` into the harness via Settings
 + CLI. `--sandbox` is off by default (zero behavior change); enabling
@@ -134,7 +134,7 @@ swaps in `SandboxExecution` for the `QueryContext.execution_env`.
 
 ---
 
-### P7b-T3: Integration smoke (real Docker, gated)
+### P7b-T3: Integration smoke (real Docker, gated) 🔜 NEXT
 
 **Description**: Real-Docker tests behind `@pytest.mark.integration` +
 `docker info` available check. Same gating pattern as Phase 1 / Phase 5

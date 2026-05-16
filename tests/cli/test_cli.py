@@ -1094,3 +1094,180 @@ class TestSubAgentBootstrap:
         # tool is still in the catalog (LLM sees it); refusing is the
         # depth check's job at dispatch time.
         assert ctx.max_agent_depth == 0
+
+
+# --------------------------------------------------------------------------- #
+# Sandbox flags (P7b-T2)                                                      #
+# --------------------------------------------------------------------------- #
+
+
+class TestSandboxFlags:
+    """``--sandbox`` / ``--sandbox-*`` flags thread into QueryContext via
+    SandboxExecution (mocked, so tests are cross-platform). Default off
+    keeps HostExecution path unchanged.
+    """
+
+    def test_default_no_sandbox(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from openharness.execution.host import HostExecution
+
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        assert result.exit_code == 0
+        # Default: HostExecution singleton — no Docker involvement.
+        ctx = captured.context
+        assert isinstance(ctx.execution_env, HostExecution)  # type: ignore[attr-defined]
+
+    def test_sandbox_flag_enters_sandbox_context(self, monkeypatch: pytest.MonkeyPatch) -> None:
+
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        # Patch SandboxExecution to a stub so we don't touch real Docker.
+        # The stub records constructor args; __aenter__/__aexit__ are
+        # async no-ops returning self.
+        captured_init: dict[str, object] = {}
+
+        class _FakeSandbox:
+            def __init__(self, *, cwd, image, network, memory, cpus, pids) -> None:  # type: ignore[no-untyped-def]
+                captured_init.update(
+                    cwd=cwd,
+                    image=image,
+                    network=network,
+                    memory=memory,
+                    cpus=cpus,
+                    pids=pids,
+                )
+
+            async def __aenter__(self) -> _FakeSandbox:
+                return self
+
+            async def __aexit__(self, *a: object) -> None:
+                pass
+
+            async def run_command(self, command, cwd, timeout=None):  # type: ignore[no-untyped-def]
+                from openharness.execution import ProcessResult
+
+                return ProcessResult(output="", exit_code=0)
+
+        monkeypatch.setattr(cli_module, "SandboxExecution", _FakeSandbox)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi", "--sandbox"])
+        assert result.exit_code == 0
+
+        # SandboxExecution was constructed; defaults plumbed through.
+        assert captured_init["image"] == "python:3.12-slim"
+        assert captured_init["network"] == "none"
+        assert captured_init["memory"] == "1g"
+        assert captured_init["cpus"] == 1.0
+        # QueryContext.execution_env is the fake (substrate-swap worked).
+        ctx = captured.context
+        assert isinstance(ctx.execution_env, _FakeSandbox)  # type: ignore[attr-defined]
+
+    def test_sandbox_network_flag_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        captured_init: dict[str, object] = {}
+
+        class _FakeSandbox:
+            def __init__(self, **kwargs: object) -> None:
+                captured_init.update(kwargs)
+
+            async def __aenter__(self) -> _FakeSandbox:
+                return self
+
+            async def __aexit__(self, *a: object) -> None:
+                pass
+
+            async def run_command(self, command, cwd, timeout=None):  # type: ignore[no-untyped-def]
+                from openharness.execution import ProcessResult
+
+                return ProcessResult(output="", exit_code=0)
+
+        monkeypatch.setattr(cli_module, "SandboxExecution", _FakeSandbox)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_module.app,
+            [
+                "ask",
+                "hi",
+                "--sandbox",
+                "--sandbox-network",
+                "bridge",
+                "--sandbox-memory",
+                "512m",
+                "--sandbox-cpus",
+                "0.5",
+                "--sandbox-image",
+                "ubuntu:latest",
+            ],
+        )
+        assert result.exit_code == 0
+        assert captured_init["network"] == "bridge"
+        assert captured_init["memory"] == "512m"
+        assert captured_init["cpus"] == 0.5
+        assert captured_init["image"] == "ubuntu:latest"
+
+    def test_env_var_enables_sandbox(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("OPENHARNESS_SANDBOX_ENABLED", "true")
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        # Same fake sandbox pattern.
+        class _FakeSandbox:
+            def __init__(self, **kwargs: object) -> None:
+                pass
+
+            async def __aenter__(self) -> _FakeSandbox:
+                return self
+
+            async def __aexit__(self, *a: object) -> None:
+                pass
+
+            async def run_command(self, command, cwd, timeout=None):  # type: ignore[no-untyped-def]
+                from openharness.execution import ProcessResult
+
+                return ProcessResult(output="", exit_code=0)
+
+        monkeypatch.setattr(cli_module, "SandboxExecution", _FakeSandbox)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        assert result.exit_code == 0
+        ctx = captured.context
+        assert isinstance(ctx.execution_env, _FakeSandbox)  # type: ignore[attr-defined]
+
+    def test_no_sandbox_flag_overrides_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from openharness.execution.host import HostExecution
+
+        _set_minimum_env(monkeypatch)
+        # Env says enable, but CLI says no.
+        monkeypatch.setenv("OPENHARNESS_SANDBOX_ENABLED", "true")
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi", "--no-sandbox"])
+        assert result.exit_code == 0
+        ctx = captured.context
+        # HostExecution wins because --no-sandbox CLI flag overrides env.
+        assert isinstance(ctx.execution_env, HostExecution)  # type: ignore[attr-defined]

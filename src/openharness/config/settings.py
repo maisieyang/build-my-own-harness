@@ -182,6 +182,70 @@ class Settings(BaseSettings):
         ),
     )
 
+    # P7b-T2 (D18.x): Docker sandbox substrate for BashTool. All default
+    # OFF — existing behavior unchanged. Enable via ``--sandbox`` CLI
+    # flag or ``OPENHARNESS_SANDBOX=true`` env var. The 5 ``sandbox_*``
+    # configuration fields tune the container shape.
+    sandbox_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable the Docker sandbox substrate for Bash. When true, "
+            "Bash commands execute inside a per-query container with the "
+            "cwd bind-mounted read-write and no network by default. When "
+            "false (default), Bash runs on the host via HostExecution. "
+            "Env var: OPENHARNESS_SANDBOX_ENABLED. Overridden by the "
+            "``--sandbox`` / ``--no-sandbox`` CLI flag."
+        ),
+    )
+    sandbox_image: str = Field(
+        default="python:3.12-slim",
+        description=(
+            "Docker image for the sandbox container (D18.7). Stock "
+            "``python:3.12-slim`` (~120MB) covers bash/sh/python3/coreutils "
+            "for most coding workflows. Override via "
+            "``OPENHARNESS_SANDBOX_IMAGE=ubuntu:latest`` (image must "
+            "provide POSIX sh; pure-binary images don't work)."
+        ),
+    )
+    sandbox_network: str = Field(
+        default="none",
+        pattern=r"^(none|bridge)$",
+        description=(
+            "Container network mode (D18.5). ``none`` (default) blocks "
+            "all external network — strongest default, defeats "
+            "exfiltration. ``bridge`` enables NAT'd internet (needed for "
+            "npm install / git clone etc.). Other modes (``host`` /"
+            " custom networks) intentionally not supported."
+        ),
+    )
+    sandbox_memory: str = Field(
+        default="1g",
+        description=(
+            "Container memory limit, Docker-style spec (D18.6). ``1g`` / "
+            "``512m`` / ``1024b`` etc. Suffix is case-insensitive. Kernel "
+            "OOM-kills processes that exceed this without crashing the "
+            "harness."
+        ),
+    )
+    sandbox_cpus: float = Field(
+        default=1.0,
+        gt=0.0,
+        description=(
+            "Container CPU quota expressed as CPU equivalents (D18.6). "
+            "1.0 = one full CPU; 0.5 = half a CPU. Internally translated "
+            "to Docker's CpuQuota (period 100ms)."
+        ),
+    )
+    sandbox_pids: int = Field(
+        default=256,
+        gt=0,
+        description=(
+            "Container process count limit (D18.6). Bounds fork bombs. "
+            "256 covers normal coding workflows including npm install / "
+            "pytest fork; bump for parallel build systems if needed."
+        ),
+    )
+
     @field_validator("deny_paths", mode="before")
     @classmethod
     def _parse_deny_paths(cls, value: Any) -> Any:

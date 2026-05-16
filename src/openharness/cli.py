@@ -40,6 +40,7 @@ touching Typer internals.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from pathlib import Path
 
 import typer
@@ -63,6 +64,8 @@ from openharness.compaction import TruncateToolResultHook
 from openharness.config import Settings
 from openharness.engine import QueryContext, run_query
 from openharness.errors import LoopError, OpenHarnessError
+from openharness.execution import ExecutionEnvironment, SandboxExecution
+from openharness.execution.host import _HOST_EXECUTION
 from openharness.hooks import HookRegistry
 from openharness.mcp import McpClientPool
 from openharness.observability import configure_logging
@@ -139,6 +142,11 @@ async def _run_ask(
     auto_truncate_override: bool | None,
     no_skills: bool = False,
     no_commands: bool = False,
+    sandbox_override: bool | None = None,
+    sandbox_image_override: str | None = None,
+    sandbox_network_override: str | None = None,
+    sandbox_memory_override: str | None = None,
+    sandbox_cpus_override: float | None = None,
 ) -> None:
     """Build the QueryContext, run the loop, render the events.
 
@@ -161,6 +169,14 @@ async def _run_ask(
     )
     auto_truncate = (
         auto_truncate_override if auto_truncate_override is not None else settings.auto_truncate
+    )
+    # P7b-T2: sandbox configuration — CLI flag overrides Settings.
+    sandbox_enabled = sandbox_override if sandbox_override is not None else settings.sandbox_enabled
+    sandbox_image = sandbox_image_override or settings.sandbox_image
+    sandbox_network = sandbox_network_override or settings.sandbox_network
+    sandbox_memory = sandbox_memory_override or settings.sandbox_memory
+    sandbox_cpus = (
+        sandbox_cpus_override if sandbox_cpus_override is not None else settings.sandbox_cpus
     )
 
     # P3-T5.5e:configure logging FIRST so any subsequent error path
@@ -201,7 +217,10 @@ async def _run_ask(
         settings.mcp_servers,
         trusted_servers=settings.trusted_mcp_servers,
     )
-    async with pool:
+    # P7b-T2: AsyncExitStack lets us conditionally enter SandboxExecution
+    # without duplicating the body. ``--sandbox`` enters; otherwise the
+    # default HostExecution singleton is used (matches Phase 7a default).
+    async with pool, contextlib.AsyncExitStack() as stack:
         for adapter in pool.adapters:
             registry.register(adapter)
 
@@ -244,6 +263,25 @@ async def _run_ask(
                 TruncateToolResultHook(cap_tokens=tool_result_cap, model=model),
             )
 
+        # P7b-T2 (D18.2): conditionally enter SandboxExecution.
+        # ``--no-sandbox``(default)→ HostExecution singleton.
+        # ``--sandbox`` → enter the substrate context here; BashTool
+        # routes through it via ``QueryContext.execution_env``.
+        execution_env: ExecutionEnvironment
+        if sandbox_enabled:
+            execution_env = await stack.enter_async_context(
+                SandboxExecution(
+                    cwd=env.cwd,
+                    image=sandbox_image,
+                    network=sandbox_network,
+                    memory=sandbox_memory,
+                    cpus=sandbox_cpus,
+                    pids=settings.sandbox_pids,
+                )
+            )
+        else:
+            execution_env = _HOST_EXECUTION
+
         context = QueryContext(
             api_client=client,
             tool_registry=registry,
@@ -264,6 +302,9 @@ async def _run_ask(
             # ``SpawnAgent.execute`` builds the sub-context via
             # ``dataclasses.replace(parent, agent_depth=parent.agent_depth + 1)``.
             max_agent_depth=settings.max_agent_depth,
+            # P7b-T2: substrate the BashTool delegates to. Default
+            # HostExecution singleton when ``--sandbox`` is off.
+            execution_env=execution_env,
         )
 
         initial_messages = [
@@ -381,6 +422,49 @@ def ask(
             "legitimately start with ``/``."
         ),
     ),
+    sandbox: bool | None = typer.Option(
+        None,
+        "--sandbox/--no-sandbox",
+        help=(
+            "Enable the Docker sandbox substrate for Bash (Phase 7b). When "
+            "on, Bash commands execute inside a per-query container with "
+            "cwd bind-mounted read-write and network=none by default. "
+            "Default OFF (host execution); overrides OPENHARNESS_SANDBOX."
+        ),
+    ),
+    sandbox_image: str | None = typer.Option(
+        None,
+        "--sandbox-image",
+        help=(
+            "Docker image for the sandbox (default: python:3.12-slim). "
+            "Overrides OPENHARNESS_SANDBOX_IMAGE."
+        ),
+    ),
+    sandbox_network: str | None = typer.Option(
+        None,
+        "--sandbox-network",
+        help=(
+            "Container network mode [none|bridge]. ``none`` (default) "
+            "blocks external network — strongest default. ``bridge`` "
+            "enables NAT'd internet. Overrides OPENHARNESS_SANDBOX_NETWORK."
+        ),
+    ),
+    sandbox_memory: str | None = typer.Option(
+        None,
+        "--sandbox-memory",
+        help=(
+            "Container memory limit, Docker-style spec (1g / 512m / etc.). "
+            "Overrides OPENHARNESS_SANDBOX_MEMORY (default 1g)."
+        ),
+    ),
+    sandbox_cpus: float | None = typer.Option(
+        None,
+        "--sandbox-cpus",
+        help=(
+            "Container CPU quota in CPU equivalents (1.0 = one full CPU; "
+            "0.5 = half). Overrides OPENHARNESS_SANDBOX_CPUS (default 1.0)."
+        ),
+    ),
 ) -> None:
     """Stream a single LLM response (with tool dispatch) to stdout."""
     if auto and dry_run:
@@ -413,6 +497,11 @@ def ask(
                 auto_truncate_override=auto_truncate_override,
                 no_skills=no_skills,
                 no_commands=no_commands,
+                sandbox_override=sandbox,
+                sandbox_image_override=sandbox_image,
+                sandbox_network_override=sandbox_network,
+                sandbox_memory_override=sandbox_memory,
+                sandbox_cpus_override=sandbox_cpus,
             )
         )
     except ValidationError as exc:

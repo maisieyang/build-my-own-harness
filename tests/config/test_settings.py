@@ -366,3 +366,63 @@ class TestMaxAgentDepth:
         monkeypatch.setenv("OPENHARNESS_MAX_AGENT_DEPTH", "not-a-number")
         with pytest.raises(ValidationError):
             Settings()
+
+
+class TestSandboxFields:
+    """P7b-T2 (D18.x) — Docker sandbox configuration."""
+
+    def test_default_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        settings = Settings()
+        assert settings.sandbox_enabled is False  # default: host execution
+        assert settings.sandbox_image == "python:3.12-slim"
+        assert settings.sandbox_network == "none"
+        assert settings.sandbox_memory == "1g"
+        assert settings.sandbox_cpus == 1.0
+        assert settings.sandbox_pids == 256
+
+    def test_enable_via_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_SANDBOX_ENABLED", "true")
+        settings = Settings()
+        assert settings.sandbox_enabled is True
+
+    def test_custom_image_via_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_SANDBOX_IMAGE", "ubuntu:latest")
+        settings = Settings()
+        assert settings.sandbox_image == "ubuntu:latest"
+
+    def test_network_must_be_none_or_bridge(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_SANDBOX_NETWORK", "host")
+        with pytest.raises(ValidationError):
+            Settings()
+
+    @pytest.mark.parametrize(("env_value", "expected"), [("none", "none"), ("bridge", "bridge")])
+    def test_network_valid_values(
+        self, env_value: str, expected: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_SANDBOX_NETWORK", env_value)
+        settings = Settings()
+        assert settings.sandbox_network == expected
+
+    def test_cpus_must_be_positive(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_SANDBOX_CPUS", "0")
+        with pytest.raises(ValidationError):
+            Settings()
+
+    def test_pids_must_be_positive(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_SANDBOX_PIDS", "0")
+        with pytest.raises(ValidationError):
+            Settings()
