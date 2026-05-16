@@ -54,6 +54,11 @@ from openharness.api import (
     RateLimitFailure,
     RequestFailure,
 )
+from openharness.commands import (
+    FilesystemCommandStore,
+    UnknownCommandError,
+    expand_command,
+)
 from openharness.compaction import TruncateToolResultHook
 from openharness.config import Settings
 from openharness.engine import QueryContext, run_query
@@ -133,6 +138,7 @@ async def _run_ask(
     tool_result_cap_override: int | None,
     auto_truncate_override: bool | None,
     no_skills: bool = False,
+    no_commands: bool = False,
 ) -> None:
     """Build the QueryContext, run the loop, render the events.
 
@@ -160,6 +166,29 @@ async def _run_ask(
     # P3-T5.5e:configure logging FIRST so any subsequent error path
     # (client build / system prompt build) is observable.
     configure_logging(level=log_level, format=log_format)
+
+    # P5b-T3: Slash command expansion. Runs BEFORE the rest of bootstrap
+    # so the resolved prompt flows through normally — engine never sees
+    # the original ``/cmd ...`` form. Convention-driven storage per
+    # decisions/14 C2 (same shape as Skills L2).
+    #
+    # ``--no-commands`` is a hard bypass:expand_command is NOT called,
+    # so the slash prefix flows verbatim to the LLM. Calling
+    # ``expand_command`` with an :class:`EmptyCommandStore` would instead
+    # raise :class:`UnknownCommandError` on any ``/<x>`` prompt — wrong
+    # behavior for the escape hatch (which is meant for prompts that
+    # legitimately start with ``/``).
+    #
+    # ``UnknownCommandError`` from the live path is intentionally NOT
+    # caught here — it propagates to the synchronous ``ask`` command's
+    # except chain so the user-facing error UX (with available catalog)
+    # renders before any LLM call is attempted.
+    if not no_commands:
+        command_store = FilesystemCommandStore(
+            global_dir=Path.home() / ".openharness" / "commands",
+            project_dir=Path.cwd() / ".openharness" / "commands",
+        )
+        prompt = expand_command(prompt, command_store)
 
     client = _build_client(settings)
     registry = create_default_tool_registry()
@@ -336,6 +365,16 @@ def ask(
             "or when the skill catalog interferes with a one-shot run."
         ),
     ),
+    no_commands: bool = typer.Option(
+        False,
+        "--no-commands",
+        help=(
+            "Skip scanning ~/.openharness/commands/ + .openharness/commands/ "
+            "at bootstrap. Slash-prefixed prompts pass through verbatim to "
+            "the LLM as user message. Useful for testing or for prompts that "
+            "legitimately start with ``/``."
+        ),
+    ),
 ) -> None:
     """Stream a single LLM response (with tool dispatch) to stdout."""
     if auto and dry_run:
@@ -367,6 +406,7 @@ def ask(
                 tool_result_cap_override=tool_result_cap,
                 auto_truncate_override=auto_truncate_override,
                 no_skills=no_skills,
+                no_commands=no_commands,
             )
         )
     except ValidationError as exc:
@@ -406,6 +446,15 @@ def ask(
         # (e.g., LoopLimitExceeded already names --max-turns) carries the
         # remediation, so no separate Hint line is needed here.
         typer.echo(f"Loop error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except UnknownCommandError as exc:
+        # P5b-T3: user invoked /<name> but no command with that name is
+        # registered. UnknownCommandError inherits from OpenHarnessError
+        # so we MUST catch it before the root catch-all below (or it
+        # would fall into the generic "Error:" prefix).
+        # The message already contains the available catalog (formatted
+        # by UnknownCommandError.__init__) so no separate Hint line.
+        typer.echo(f"Unknown command: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     except OpenHarnessError as exc:
         # Root catch-all for any OpenHarness error not handled above:

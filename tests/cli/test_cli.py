@@ -847,3 +847,165 @@ class TestSkillsBootstrap:
         assert "LoadSkill" not in names
         assert "should-not-appear" not in ctx.system_prompt  # type: ignore[attr-defined]
         assert "Available Skills" not in ctx.system_prompt  # type: ignore[attr-defined]
+
+
+# --------------------------------------------------------------------------- #
+# Slash commands (P5b-T3)                                                     #
+# --------------------------------------------------------------------------- #
+
+
+def _write_command_file(directory: Path, name: str, description: str, body: str) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{name}.md").write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\n{body}",
+        encoding="utf-8",
+    )
+
+
+class TestSlashCommands:
+    """``/cmd args`` expansion + ``--no-commands`` flag + ``UnknownCommandError``
+    UX. Reuses the ``_isolate_skills_dirs`` helper (HOME redirect + chdir to
+    a tmp project root) because slash commands live under the same
+    ``.openharness/`` directory convention.
+    """
+
+    def test_no_slash_prompt_unchanged(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        _isolate_skills_dirs(monkeypatch, tmp_path)
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "regular prompt"])
+        assert result.exit_code == 0
+        # LLM saw the original prompt verbatim — no expansion attempted.
+        assert stub.last_request is not None
+        assert stub.last_request.messages[0].content[0].text == "regular prompt"  # type: ignore[union-attr]
+
+    def test_slash_command_resolves_and_reaches_llm(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        project = _isolate_skills_dirs(monkeypatch, tmp_path)
+        _write_command_file(
+            project / ".openharness" / "commands",
+            "review",
+            "Review pending changes",
+            "Please review:\n\n{args}\nFocus on edge cases.",
+        )
+
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "/review last 3 commits"])
+        assert result.exit_code == 0
+
+        # The LLM's user message is the resolved body — slash + cmd name gone.
+        assert stub.last_request is not None
+        user_text = stub.last_request.messages[0].content[0].text  # type: ignore[union-attr]
+        assert "Please review:" in user_text
+        assert "last 3 commits" in user_text
+        assert "Focus on edge cases." in user_text
+        assert "{args}" not in user_text  # placeholder substituted
+        assert not user_text.startswith("/review")  # slash prefix consumed
+
+    def test_unknown_command_exits_with_catalog_in_stderr(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        project = _isolate_skills_dirs(monkeypatch, tmp_path)
+        _write_command_file(
+            project / ".openharness" / "commands",
+            "review",
+            "Review pending changes",
+            "Body",
+        )
+
+        # No LLM stub needed — error fires before any LLM call.
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "/nonexistent some args"])
+        assert result.exit_code == 1
+        # Error message names the bad command + lists the available one.
+        assert "Unknown command" in result.stderr
+        assert "nonexistent" in result.stderr
+        assert "review" in result.stderr
+
+    def test_no_commands_flag_passes_slash_through(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        project = _isolate_skills_dirs(monkeypatch, tmp_path)
+        # Even with a real command on disk, --no-commands must skip lookup.
+        _write_command_file(
+            project / ".openharness" / "commands",
+            "review",
+            "should not fire",
+            "would-expand body",
+        )
+
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "/review args", "--no-commands"])
+        assert result.exit_code == 0
+        # LLM sees the slash prefix verbatim — no expansion attempted.
+        assert stub.last_request is not None
+        user_text = stub.last_request.messages[0].content[0].text  # type: ignore[union-attr]
+        assert user_text == "/review args"
+        assert "would-expand body" not in user_text
+
+    def test_project_command_overrides_global(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        project = _isolate_skills_dirs(monkeypatch, tmp_path)
+        _write_command_file(
+            tmp_path / "home" / ".openharness" / "commands",
+            "shared",
+            "global desc",
+            "global body for {args}",
+        )
+        _write_command_file(
+            project / ".openharness" / "commands",
+            "shared",
+            "project desc",
+            "project body for {args}",
+        )
+
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "/shared X"])
+        assert result.exit_code == 0
+        assert stub.last_request is not None
+        user_text = stub.last_request.messages[0].content[0].text  # type: ignore[union-attr]
+        assert "project body for X" in user_text
+        assert "global body for X" not in user_text
+
+    def test_command_without_args_resolves_with_empty_substitution(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        project = _isolate_skills_dirs(monkeypatch, tmp_path)
+        _write_command_file(
+            project / ".openharness" / "commands",
+            "plan",
+            "Plan something",
+            "Make a plan:\n{args}\n",
+        )
+
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "/plan"])
+        assert result.exit_code == 0
+        assert stub.last_request is not None
+        user_text = stub.last_request.messages[0].content[0].text  # type: ignore[union-attr]
+        assert "Make a plan:" in user_text
+        assert "{args}" not in user_text  # substituted with empty string

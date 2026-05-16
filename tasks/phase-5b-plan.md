@@ -27,7 +27,7 @@ production code.
 
 ## Task list
 
-### P5b-T1: `commands/` package foundation 🔜 NEXT
+### P5b-T1: `commands/` package foundation ✅
 
 **Description**: Mirror `skills/` (Phase 5c P5c-T1) structurally. Pure
 data + parsing layer. `Command` dataclass + `parse_command` + filesystem
@@ -68,7 +68,7 @@ once Slash Command + Skills patterns prove they share the abstraction.
 
 ---
 
-### P5b-T2: `expand_command` — prompt resolution
+### P5b-T2: `expand_command` — prompt resolution ✅
 
 **Description**: The single function that turns `/cmd args` into a
 resolved user message. Pure function — takes a raw prompt + a
@@ -102,7 +102,7 @@ and resolved) or the original prompt verbatim (no slash prefix).
 
 ---
 
-### P5b-T3: CLI integration + `--no-commands` flag
+### P5b-T3: CLI integration + `--no-commands` flag ✅
 
 **Description**: Wire `expand_command` into `cli._run_ask`. Mirror the
 Phase 5c `--no-skills` flag and the bootstrap chain. The slash expansion
@@ -139,7 +139,7 @@ construction.
 
 ---
 
-### P5b-T4: End-to-end smoke + invariant verification
+### P5b-T4: End-to-end smoke + invariant verification 🔜 NEXT
 
 **Description**: Mirror P5c-T4 (Skills e2e). Stub LLM,real `expand_command`,
 real (empty) hook chain,confirm the resolved prompt reaches the LLM.
