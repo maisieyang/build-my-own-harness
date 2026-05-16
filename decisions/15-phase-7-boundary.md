@@ -52,30 +52,44 @@ proven correct in 7a means 7b is purely engineering.
 class ExecutionEnvironment(Protocol):
     async def run_command(
         self,
-        cmd: list[str],
+        command: str,
         cwd: Path,
-        env: dict[str, str] | None = None,
         timeout: float | None = None,
-        stdin: bytes | None = None,
     ) -> ProcessResult:
         ...
 
 @dataclass(frozen=True)
 class ProcessResult:
-    stdout: str
-    stderr: str
-    exit_code: int
+    output: str        # combined stdout + stderr (chronological merge)
+    exit_code: int     # -1 sentinel when timed_out (process killed before exit)
     timed_out: bool = False
 ```
 
-Single method,五 keyword args. Sufficient for Bash's needs(the only
-consumer). The shape is intentionally close to ``asyncio.create_subprocess_exec``'s
-output so wrapping is a thin layer.
+Single method, three keyword args — exactly what current
+``BashTool.execute`` uses against ``asyncio.create_subprocess_shell``.
+**Shell-string** interface (not ``list[str]`` exec-style) because:
 
-``ProcessResult`` is a small frozen dataclass — separate from
-``ToolResult``(which is the LLM-facing result). The substrate returns
-the raw process output; ``BashTool.execute`` builds the LLM-facing
-``ToolResult`` from it.
+- Current ``Bash`` calls ``create_subprocess_shell(args.command, ...)``
+  which is ``/bin/sh -c "..."`` semantics
+- HostExecution must preserve this byte-identically — switching to
+  ``cmd: list[str]`` would mean ``["bash", "-c", args.command]`` and
+  change the shell from ``/bin/sh`` to ``/bin/bash``, breaking parity
+- Phase 7b Docker substrate naturally accepts the same string for
+  ``docker exec sh -c "..."``
+
+``ProcessResult.output`` is **merged stdout + stderr** in chronological
+order — same as current ``Bash`` behavior (achieved via
+``stderr=asyncio.subprocess.STDOUT`` in the substrate). Separating
+streams defers; current callers don't need it and merging at the pipe
+level (vs Python level) preserves the ordering guarantee.
+
+``env`` and ``stdin`` are NOT in the Protocol — current ``Bash`` doesn't
+pass them. Add as additive kwargs if a future use case needs them.
+
+``ProcessResult`` is separate from ``ToolResult``: the substrate returns
+raw process output; ``BashTool.execute`` translates it (applying the
+``(no output)`` sentinel, truncation, ``is_error`` from ``exit_code``,
+``metadata`` dict).
 
 **D17.2 — `HostExecution` is the default substrate; wraps current behavior.**
 

@@ -35,7 +35,7 @@ production code.
 
 ## Task list
 
-### P7-T1: `execution/` package + `HostExecution` 🔜 NEXT
+### P7-T1: `execution/` package + `HostExecution` ✅
 
 **Description**: Foundation — the abstraction layer + the identity
 substrate. `ExecutionEnvironment` Protocol + `ProcessResult` dataclass
@@ -47,23 +47,25 @@ just the data + Protocol.
 - [ ] `src/openharness/execution/__init__.py` exports
   `ExecutionEnvironment`, `HostExecution`, `ProcessResult`
 - [ ] `src/openharness/execution/base.py`:
-  - `ExecutionEnvironment(Protocol)` with `async run_command(cmd, cwd,
-    env, timeout, stdin) -> ProcessResult`
-  - `ProcessResult` frozen dataclass: `stdout: str`, `stderr: str`,
-    `exit_code: int`, `timed_out: bool = False`
+  - `ExecutionEnvironment(Protocol)` with `async run_command(command,
+    cwd, timeout) -> ProcessResult`
+  - `ProcessResult` frozen dataclass: `output: str` (merged
+    stdout+stderr), `exit_code: int`, `timed_out: bool = False`
 - [ ] `src/openharness/execution/host.py`:
   - `HostExecution(ExecutionEnvironment)` — body extracted from
-    current `BashTool.execute`'s `asyncio.create_subprocess_exec`
-    + stdout/stderr collection + timeout handling
+    current `BashTool.execute`'s `asyncio.create_subprocess_shell`
+    + merged stdout/stderr pipe + timeout + SIGTERM→SIGKILL escalation
   - Module-level `_HOST_EXECUTION = HostExecution()` singleton
 - [ ] Tests (`tests/execution/test_host.py`):
-  - `HostExecution.run_command` against `echo hello` → stdout
-    carries text, exit 0
+  - `HostExecution.run_command` against `echo hello` → output text,
+    exit 0
   - Against a non-existent command → exit code non-zero
   - With a `cwd` arg → subprocess runs in that directory
-  - With `env` arg → subprocess sees the env vars
-  - With `stdin` bytes → subprocess reads them on stdin
-  - With `timeout=0.01` against a slow command → `timed_out=True`
+  - Stderr merged into output (chronological order preserved)
+  - With `timeout=0.05` against a slow command → `timed_out=True`,
+    `exit_code` sentinel
+  - SIGTERM→SIGKILL escalation: subprocess that ignores SIGTERM still
+    gets killed after grace period
   - Singleton: `_HOST_EXECUTION` is one shared instance
 
 **Files**:
@@ -78,7 +80,7 @@ just the data + Protocol.
 
 ---
 
-### P7-T2: Additive fields on `QueryContext` + `ToolExecutionContext`
+### P7-T2: Additive fields on `QueryContext` + `ToolExecutionContext` 🔜 NEXT
 
 **Description**: Wire the substrate into the engine's existing
 data structures. Both fields default to `HostExecution()` (or `None`
