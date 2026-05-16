@@ -1,15 +1,22 @@
-# Phase 6 Preview — Sandbox (Execution Substrate Abstraction)
+# Phase 7 Preview — Sandbox (Execution Substrate Abstraction)
 
-> **Status**: PREVIEW（不是正式 boundary doc）。Phase 6 入口时基于此文档做正式
-> Three-Axis 讨论，产出 `decisions/<NN>-phase-6-boundary.md` 拍板。
+> **Status**: PREVIEW（不是正式 boundary doc）。Phase 7 入口时基于此文档做正式
+> Three-Axis 讨论，产出 `decisions/<NN>-phase-7-boundary.md` 拍板。
 >
-> 写于 2026-05-15。Phase 5 MCP boundary 锁定的同一天浮现的 Phase 6 设计预演。
-> 沉淀这份文档的目的：**避免 Phase 6 入口再想一遍**——boundary doc 入口时直接
-> 基于此推进，能节省 2-3 小时设计时间。
+> **Rename note (2026-05-16)**:此文档原为 phase-6-preview.md。Phase 5 retro
+> 后 Sub-agent 浮现为更自然的 Phase 6(同一条 invariant 的第三次兑现,工程量
+> 更小,且 sandbox 抽象需要的 ExecutionEnvironment 接口可以在 sub-agent
+> 落地后用真 use case 校正)。Sandbox 顺延到 Phase 7。详见
+> [`decisions/13-phase-6-boundary.md`](../decisions/13-phase-6-boundary.md)
+> §"为何 Sub-agent 优先于 Sandbox"。
 >
-> 关联：[`decisions/11-phase-5-boundary.md`](../decisions/11-phase-5-boundary.md)
+> 写于 2026-05-15。Phase 5 MCP boundary 锁定的同一天浮现的设计预演。
+> 沉淀这份文档的目的:**避免 Phase 7 入口再想一遍**——boundary doc 入口时直接
+> 基于此推进,能节省 2-3 小时设计时间。
+>
+> 关联:[`decisions/11-phase-5-boundary.md`](../decisions/11-phase-5-boundary.md)
 > Cross-cutting invariant / [`learnings/phase-3-framing.md`](../learnings/phase-3-framing.md)
-> §4-7 / [`ARCHITECTURE.md`](../ARCHITECTURE.md) §4 Phase 6 候选
+> §4-7 / [`ARCHITECTURE.md`](../ARCHITECTURE.md) §4 Phase 7 候选
 
 ---
 
