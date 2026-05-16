@@ -168,3 +168,42 @@ class TestAgentDepthFields:
         )
         assert ctx.max_agent_depth == 5
         assert ctx.agent_depth == 0  # default unchanged
+
+
+class TestExecutionEnvField:
+    """P7-T2 (D17.3) — `execution_env` field on QueryContext."""
+
+    def test_default_is_HostExecution_singleton(self, context: QueryContext) -> None:
+        from openharness.execution.host import _HOST_EXECUTION, HostExecution
+
+        assert isinstance(context.execution_env, HostExecution)
+        # Default factory points at the module singleton.
+        assert context.execution_env is _HOST_EXECUTION
+
+    def test_custom_execution_env_injected(self, tmp_path: Path) -> None:
+        from openharness.execution import ExecutionEnvironment, ProcessResult
+
+        class _FakeEnv:
+            async def run_command(
+                self, command: str, cwd: Path, timeout: float | None = None
+            ) -> ProcessResult:
+                return ProcessResult(output=f"fake:{command}", exit_code=0)
+
+        fake: ExecutionEnvironment = _FakeEnv()
+        ctx = QueryContext(
+            api_client=_stub_client(),
+            tool_registry=ToolRegistry(),
+            permission_checker=_AllowAllChecker(),
+            system_prompt="",
+            cwd=tmp_path,
+            model="qwen-plus",
+            execution_env=fake,
+        )
+        assert ctx.execution_env is fake
+
+    def test_dataclasses_replace_preserves_execution_env(self, context: QueryContext) -> None:
+        # Sub-agent inheritance (P6) MUST carry execution_env through
+        # `dataclasses.replace`. If this breaks, sandboxed sub-agents
+        # would silently revert to HostExecution.
+        sub = dataclasses.replace(context, agent_depth=1)
+        assert sub.execution_env is context.execution_env

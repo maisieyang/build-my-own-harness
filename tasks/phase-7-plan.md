@@ -80,7 +80,7 @@ just the data + Protocol.
 
 ---
 
-### P7-T2: Additive fields on `QueryContext` + `ToolExecutionContext` 🔜 NEXT
+### P7-T2: Additive fields on `QueryContext` + `ToolExecutionContext` ✅
 
 **Description**: Wire the substrate into the engine's existing
 data structures. Both fields default to `HostExecution()` (or `None`
@@ -125,7 +125,7 @@ for ToolExecutionContext, with engine populating from QueryContext) so
 
 ---
 
-### P7-T3: `BashTool` refactor + behavior parity
+### P7-T3: `BashTool` refactor + behavior parity 🔜 NEXT
 
 **Description**: Replace the inline `asyncio.create_subprocess_exec`
 logic in `BashTool.execute` with `await ctx.execution_env.run_command(...)`.

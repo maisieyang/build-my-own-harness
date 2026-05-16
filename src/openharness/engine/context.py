@@ -25,6 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from openharness.execution.host import _HOST_EXECUTION
 from openharness.hooks import HookRegistry
 from openharness.permissions import PermissionMode
 from openharness.skills.store import EmptySkillStore
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from openharness.api import SupportsStreamingMessages
+    from openharness.execution import ExecutionEnvironment
     from openharness.permissions import PermissionChecker
     from openharness.skills.store import SkillStore
     from openharness.tools import ToolRegistry
@@ -77,3 +79,11 @@ class QueryContext:
     # ignores skills working unchanged — no field is required to flip Phase
     # 5c on for callers who don't want it.
     skill_store: SkillStore = field(default_factory=EmptySkillStore)
+    # P7-T2 (decisions/15 D17.3): substrate-execution abstraction.
+    # Defaults to the module-level ``HostExecution`` singleton — every
+    # existing test / CLI flow passes unchanged because BashTool's
+    # current behavior is byte-identical to ``HostExecution.run_command``.
+    # Phase 7b will allow injection of ``SandboxExecution`` (Docker) via
+    # ``--sandbox`` CLI flag. Sub-agent inherits this field via
+    # ``dataclasses.replace`` automatically.
+    execution_env: ExecutionEnvironment = field(default_factory=lambda: _HOST_EXECUTION)

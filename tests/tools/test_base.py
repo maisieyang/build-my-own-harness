@@ -269,3 +269,43 @@ class TestParentQueryField:
         ctx = ToolExecutionContext(cwd=tmp_path)
         with pytest.raises(_dc.FrozenInstanceError):
             ctx.parent_query = object()  # type: ignore[misc,assignment]
+
+
+# --------------------------------------------------------------------------- #
+# P7-T2: ToolExecutionContext.execution_env field                             #
+# --------------------------------------------------------------------------- #
+
+
+class TestExecutionEnvOnExecCtx:
+    """P7-T2 (D17.3) — additive optional ``execution_env`` field.
+
+    Mirrors the ``parent_query`` test pattern: default ``None``,
+    explicit injection round-trips, frozen prevents reassignment.
+    The engine populates this from ``QueryContext.execution_env``;
+    tools that don't consume it (Read / Write / Edit / Grep / MCP /
+    LoadSkill / SpawnAgent) ignore the field. Only BashTool reads it.
+    """
+
+    def test_default_execution_env_is_none(self, tmp_path: Path) -> None:
+        ctx = ToolExecutionContext(cwd=tmp_path)
+        assert ctx.execution_env is None
+
+    def test_explicit_execution_env_attached(self, tmp_path: Path) -> None:
+        sentinel = object()
+        ctx = ToolExecutionContext(
+            cwd=tmp_path,
+            execution_env=sentinel,  # type: ignore[arg-type]
+        )
+        assert ctx.execution_env is sentinel
+
+    def test_can_set_both_parent_query_and_execution_env(self, tmp_path: Path) -> None:
+        # Engine populates both at dispatch time (P6-T2 + P7-T2).
+        parent_sentinel = object()
+        env_sentinel = object()
+        ctx = ToolExecutionContext(
+            cwd=tmp_path,
+            parent_query=parent_sentinel,  # type: ignore[arg-type]
+            execution_env=env_sentinel,  # type: ignore[arg-type]
+        )
+        assert ctx.parent_query is parent_sentinel
+        assert ctx.execution_env is env_sentinel

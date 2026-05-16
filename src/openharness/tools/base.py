@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from openharness.engine.context import QueryContext
+    from openharness.execution import ExecutionEnvironment
 
 
 @dataclass(frozen=True)
@@ -74,6 +75,14 @@ class ToolExecutionContext:
 
     cwd: Path
     parent_query: QueryContext | None = None
+    # P7-T2 (D17.3 / D17.4): substrate the tool should delegate shell
+    # commands to. Engine populates from ``QueryContext.execution_env``.
+    # Default ``None`` so every existing tool (Read / Write / Edit /
+    # Grep / MCP / SpawnAgent / LoadSkill) that doesn't consume the
+    # field passes through unchanged. Only ``BashTool`` reads it (with
+    # the ``_HOST_EXECUTION`` fallback if ``None``, preserving direct
+    # construction of ``ToolExecutionContext(cwd=p)`` in tests).
+    execution_env: ExecutionEnvironment | None = None
 
 
 # Bound to BaseModel so every tool's input is parseable from the LLM's

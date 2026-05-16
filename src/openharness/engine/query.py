@@ -269,7 +269,15 @@ async def run_query(
                 # can build sub-context via ``dataclasses.replace``. This is
                 # the ONLY engine dispatch change Phase 6 introduces; every
                 # other tool ignores ``parent_query`` and behaves identically.
-                exec_context = ToolExecutionContext(cwd=context.cwd, parent_query=context)
+                # P7-T2 (D17.3 / D17.4): pass through ``execution_env`` so
+                # ``BashTool`` can delegate shell commands to the configured
+                # substrate (HostExecution by default; SandboxExecution in
+                # Phase 7b). Every other tool ignores the field.
+                exec_context = ToolExecutionContext(
+                    cwd=context.cwd,
+                    parent_query=context,
+                    execution_env=context.execution_env,
+                )
                 tool_results: list[ToolResultBlock] = []
 
                 for tool_use in tool_uses:
