@@ -134,7 +134,7 @@ swaps in `SandboxExecution` for the `QueryContext.execution_env`.
 
 ---
 
-### P7b-T3: Integration smoke (real Docker, gated) 🔜 NEXT
+### P7b-T3: Integration smoke (real Docker, gated) ✅
 
 **Description**: Real-Docker tests behind `@pytest.mark.integration` +
 `docker info` available check. Same gating pattern as Phase 1 / Phase 5
@@ -167,7 +167,7 @@ integration tests. Verifies the actual sandbox properties.
 
 ---
 
-### P7b-T4: README + retro + DoD closeout
+### P7b-T4: README + retro + DoD closeout 🔜 NEXT
 
 **Description**: Docs + retrospective.
 
