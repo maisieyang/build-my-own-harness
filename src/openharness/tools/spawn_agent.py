@@ -1,0 +1,197 @@
+"""``SpawnAgent`` — recursive tool dispatch — P6-T3 (D16.1).
+
+The capability Phase 6 unlocks: the LLM can call ``Agent(description=...,
+prompt=...)`` like any other tool. ``execute`` builds a sub-:class:`QueryContext`
+via ``dataclasses.replace`` (inheriting most fields, overriding
+``system_prompt`` / ``max_turns`` / ``agent_depth``), drives the **same**
+:func:`run_query` against the same engine, collects the sub-agent's final
+assistant text, and returns it as a single :class:`ToolResult`.
+
+The cross-cutting invariant: this is the **third tenant test** of
+Phase 3's abstraction (after MCP / Skills). Engine dispatch loop /
+permission checker / hook chain / observability layer all see ``Agent``
+exactly like they see ``Read`` — the fact that ``execute`` internally
+re-enters ``run_query`` is an implementation detail of this one
+``BaseTool`` subclass.
+
+Per ``decisions/13``:
+
+- D16.2: inherit most QueryContext fields; override only
+  ``system_prompt`` / ``max_turns`` / ``agent_depth``
+- D16.4: parent's conversation grows by exactly one tool_use/tool_result
+  pair regardless of sub-agent length (internal events not surfaced)
+- D16.5: depth check lives ENTIRELY in ``execute`` — engine is
+  depth-agnostic
+"""
+
+from __future__ import annotations
+
+import dataclasses
+from typing import TYPE_CHECKING
+
+from pydantic import BaseModel, Field
+
+from openharness.engine.errors import LoopLimitExceeded
+from openharness.engine.query import run_query
+from openharness.protocols import (
+    ApiMessageCompleteEvent,
+    ConversationMessage,
+    TextBlock,
+)
+from openharness.tools.base import BaseTool, ToolResult
+
+if TYPE_CHECKING:
+    from openharness.tools.base import ToolExecutionContext
+
+
+class SpawnAgentInput(BaseModel):
+    """LLM-facing input for ``Agent`` tool calls."""
+
+    description: str = Field(
+        description=(
+            "Short label for the sub-task — appears in trace logs for "
+            "debuggability. Example: 'research async patterns'."
+        ),
+    )
+    prompt: str = Field(
+        description=(
+            "The full task description sent to the sub-agent as its "
+            "initial user message. The sub-agent has access to the same "
+            "tool catalog as the parent (Phase 6: full inheritance, no "
+            "filtering)."
+        ),
+    )
+
+
+class SpawnAgent(BaseTool[SpawnAgentInput]):
+    """Delegate a sub-task to a fresh agent loop with its own conversation context."""
+
+    name = "Agent"
+    description = (
+        "Delegate a sub-task to a fresh agent loop with its own conversation "
+        "context. The sub-agent receives `prompt` as its initial user message, "
+        "runs independently through tool dispatch (with its own turn budget), "
+        "and returns its final text response as the tool result. Use when a "
+        "sub-task warrants isolated context — e.g., focused research that "
+        "would clutter your main conversation, or a multi-step investigation "
+        "you want compartmentalized. The sub-agent inherits the same tool "
+        "catalog as you, including this `Agent` tool (bounded recursion: see "
+        "OPENHARNESS_MAX_AGENT_DEPTH)."
+    )
+    input_model = SpawnAgentInput
+    is_read_only = False  # Sub-agent can use mutating tools — AuthZ Tier 3 strict
+    trust_source = "local"  # P5-T5 provenance
+
+    def __init__(
+        self,
+        *,
+        name: str = "Agent",
+        description: str | None = None,
+        system_prompt: str | None = None,
+        max_turns: int = 20,
+        tool_filter: set[str] | None = None,  # noqa: ARG002 — D16.3 forward-compat
+    ) -> None:
+        """Construct a configurable :class:`SpawnAgent` variant.
+
+        Phase 6 ships a single default ``Agent`` instance(`cli.py`
+        registers it). Programmatic users can construct additional
+        variants with differentiated ``system_prompt`` /``max_turns``
+        — e.g., a ``ResearchAgent`` with a focused system prompt and
+        a tighter turn budget.
+
+        ``tool_filter`` is accepted per D16.3 forward-compat but
+        IGNORED in Phase 6. Filtering defers to Phase 7+ when a real
+        use case surfaces.
+        """
+        # Class attributes are overridable on the instance per-variant.
+        if name != "Agent":
+            self.name = name
+        if description is not None:
+            self.description = description
+        self._sub_system_prompt = system_prompt
+        self._max_turns = max_turns
+
+    async def execute(
+        self,
+        args: SpawnAgentInput,
+        context: ToolExecutionContext,
+    ) -> ToolResult:
+        # 1. Defensive: parent_query must be present (engine sets it per P6-T2).
+        # In practice this branch only fires if a tool author manually constructs
+        # a ToolExecutionContext without going through the engine.
+        parent = context.parent_query
+        if parent is None:
+            return ToolResult(
+                is_error=True,
+                output="SpawnAgent invoked outside an active query context",
+            )
+
+        # 2. Depth check (D16.5). Top-level oh ask runs at depth 0; default cap
+        # of 3 supports supervisor → research → leaf chains. Refusal surfaces
+        # to the parent LLM as is_error=True so it can adapt (errors-as-payload).
+        if parent.agent_depth + 1 > parent.max_agent_depth:
+            return ToolResult(
+                is_error=True,
+                output=(
+                    f"max agent depth ({parent.max_agent_depth}) reached; "
+                    f"cannot spawn further sub-agents"
+                ),
+            )
+
+        # 3. Build sub-context. ``dataclasses.replace`` inherits every parent
+        # field unless explicitly overridden — same api_client, same
+        # tool_registry, same permission_checker, same hook_registry, same
+        # skill_store, same cwd, same model, same max_tokens, same
+        # permission_mode. Only the three fields per D16.2 change.
+        sub_context = dataclasses.replace(
+            parent,
+            system_prompt=self._sub_system_prompt
+            if self._sub_system_prompt is not None
+            else parent.system_prompt,
+            max_turns=self._max_turns,
+            agent_depth=parent.agent_depth + 1,
+        )
+
+        # 4. Sub-agent receives `args.prompt` as its initial user message —
+        # totally isolated from the parent's conversation.
+        initial_messages: list[ConversationMessage] = [
+            ConversationMessage(
+                role="user",
+                content=[TextBlock(text=args.prompt)],
+            ),
+        ]
+
+        # 5. Drive run_query and collect the final assistant message.
+        # Per D16.4: internal events are NOT surfaced — we just consume them
+        # to drive the loop and capture the final ApiMessageCompleteEvent.
+        final_event: ApiMessageCompleteEvent | None = None
+        try:
+            async for event in run_query(initial_messages, sub_context):
+                if isinstance(event, ApiMessageCompleteEvent):
+                    final_event = event
+        except LoopLimitExceeded:
+            # D16.4: turn-budget exhaustion surfaces as is_error so parent LLM
+            # can pivot. Other OpenHarnessError types propagate (engine wraps
+            # as ToolError in the parent's dispatch loop).
+            return ToolResult(
+                is_error=True,
+                output=(f"sub-agent exceeded max_turns={self._max_turns} without completing"),
+            )
+
+        if final_event is None:
+            # Defensive: run_query should always emit a terminal
+            # ApiMessageCompleteEvent. If it doesn't, something upstream broke.
+            return ToolResult(
+                is_error=True,
+                output="sub-agent produced no completion event",
+            )
+
+        # 6. Extract text content from the final assistant message. Tool-use
+        # blocks at the end of a sub-agent's run are unusual (would mean the
+        # sub-agent stopped mid-dispatch); but if present, ignore them — the
+        # parent only consumes the text response.
+        text_parts = [
+            block.text for block in final_event.message.content if isinstance(block, TextBlock)
+        ]
+        output = "\n".join(text_parts) if text_parts else "(no text response)"
+        return ToolResult(output=output)

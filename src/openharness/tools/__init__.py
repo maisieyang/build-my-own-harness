@@ -29,6 +29,7 @@ from openharness.tools.edit import Edit
 from openharness.tools.grep import Grep
 from openharness.tools.load_skill import LoadSkillInput, LoadSkillTool
 from openharness.tools.read import Read
+from openharness.tools.spawn_agent import SpawnAgent, SpawnAgentInput
 from openharness.tools.write import Write
 
 
@@ -57,6 +58,8 @@ __all__ = [
     "LoadSkillInput",
     "LoadSkillTool",
     "Read",
+    "SpawnAgent",
+    "SpawnAgentInput",
     "ToolExecutionContext",
     "ToolRegistry",
     "ToolResult",
