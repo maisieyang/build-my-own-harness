@@ -42,8 +42,11 @@ Public API:
 
 from __future__ import annotations
 
+from openharness.bundles.apply import BundleApplication, apply_bundle_to_context
 from openharness.bundles.errors import UnknownBundleError
+from openharness.bundles.hooks import BUILTIN_HOOKS, resolve_hook
 from openharness.bundles.model import Bundle, parse_bundle
+from openharness.bundles.registry import WhitelistRegistry
 from openharness.bundles.store import (
     BundleStore,
     EmptyBundleStore,
@@ -51,10 +54,15 @@ from openharness.bundles.store import (
 )
 
 __all__ = [
+    "BUILTIN_HOOKS",
     "Bundle",
+    "BundleApplication",
     "BundleStore",
     "EmptyBundleStore",
     "FilesystemBundleStore",
     "UnknownBundleError",
+    "WhitelistRegistry",
+    "apply_bundle_to_context",
     "parse_bundle",
+    "resolve_hook",
 ]
