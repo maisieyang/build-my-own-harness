@@ -49,6 +49,7 @@ from openharness.hooks import (
     execute_hook_chain,
 )
 from openharness.observability import (
+    bind_agent_depth,
     bind_run,
     bind_turn,
     get_logger,
@@ -136,7 +137,13 @@ async def run_query(
     # messages helpers (engine.messages) all return new lists.
     messages = list(initial_messages)
 
-    with bind_run():
+    # P6-T4 (D16.7):``bind_run`` auto-detects nested invocations (sub-agent's
+    # ``run_query`` re-enters within parent's bound context) and stashes the
+    # parent's run_id as ``parent_run_id`` on the new bound layer. ``bind_agent_depth``
+    # surfaces ``QueryContext.agent_depth`` on every event so trace consumers
+    # can stitch the parent ↔ sub-agent tree via a self-join on
+    # ``run_id ↔ parent_run_id`` and filter by depth.
+    with bind_run(), bind_agent_depth(context.agent_depth):
         for _turn in range(context.max_turns):
             with bind_turn(_turn + 1):  # 1-indexed: humans count turns from 1
                 logger.info(

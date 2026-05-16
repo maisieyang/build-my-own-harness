@@ -55,13 +55,36 @@ def bind_run(run_id: str | None = None) -> Iterator[str]:
 
         with bind_run() as rid:
             logger.info("turn_start", turn=1)  # auto-injects run_id=rid
+
+    P6-T4 (D16.7) — **nested invocation detection**. If a ``run_id`` is
+    already bound when ``bind_run`` enters(typical case:sub-agent's
+    ``run_query`` re-enters ``bind_run`` while parent's ``run_id`` is
+    still active), the existing value is stashed as ``parent_run_id`` in
+    the bound context. On exit, ``parent_run_id`` unbinds and the outer
+    ``run_id`` remains for the parent. Trace stitching is a self-join
+    on ``run_id ↔ parent_run_id``.
     """
     rid = run_id or new_run_id()
-    structlog.contextvars.bind_contextvars(run_id=rid)
+    # Detect nested invocation:if run_id is already bound by an outer
+    # ``bind_run``,stash it as parent_run_id so sub-agent log events
+    # carry the trace-stitching pointer.
+    existing = structlog.contextvars.get_contextvars()
+    parent_rid = existing.get("run_id")
+    bind_kwargs: dict[str, object] = {"run_id": rid}
+    if parent_rid is not None:
+        bind_kwargs["parent_run_id"] = parent_rid
+    structlog.contextvars.bind_contextvars(**bind_kwargs)
     try:
         yield rid
     finally:
-        structlog.contextvars.unbind_contextvars("run_id")
+        # ``structlog.contextvars`` has set/unset semantics, NOT stack —
+        # ``unbind_contextvars("run_id")`` would erase the binding instead
+        # of restoring the outer ``bind_run``'s value. Restore explicitly:
+        if parent_rid is not None:
+            structlog.contextvars.bind_contextvars(run_id=parent_rid)
+            structlog.contextvars.unbind_contextvars("parent_run_id")
+        else:
+            structlog.contextvars.unbind_contextvars("run_id")
 
 
 @contextmanager
@@ -80,3 +103,31 @@ def bind_turn(turn_id: int) -> Iterator[int]:
         yield turn_id
     finally:
         structlog.contextvars.unbind_contextvars("turn_id")
+
+
+@contextmanager
+def bind_agent_depth(agent_depth: int) -> Iterator[int]:
+    """Bind ``agent_depth`` for the duration of a ``run_query`` invocation.
+
+    P6-T4(D16.7):top-level ``oh ask`` runs at depth 0;each
+    :class:`SpawnAgent` invocation enters a fresh ``run_query`` with
+    ``context.agent_depth = parent.agent_depth + 1``. Every log event
+    emitted inside that ``run_query``(``turn_start`` / ``tool_dispatch``
+    / ``tool_complete`` / etc.)carries the bound depth.
+
+    Decoupled from :func:`bind_run` per the boundary doc Tentative (a):
+    keeps ``bind_run`` agnostic of ``QueryContext`` so structlog stays
+    a thin layer over contextvars.
+
+    Typical usage in ``run_query``::
+
+        with bind_run(), bind_agent_depth(context.agent_depth):
+            for turn in range(max_turns):
+                with bind_turn(turn + 1):
+                    logger.info("turn_start", ...)  # carries agent_depth
+    """
+    structlog.contextvars.bind_contextvars(agent_depth=agent_depth)
+    try:
+        yield agent_depth
+    finally:
+        structlog.contextvars.unbind_contextvars("agent_depth")

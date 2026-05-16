@@ -150,3 +150,104 @@ class TestContextvarIsolation:
         # given — proving the contextvar didn't bleed across tasks.
         for record in records:
             assert record["run_id"] == record["rid_passed"]
+
+
+class TestBindRunNesting:
+    """P6-T4 (D16.7) — nested ``bind_run`` invocations stash the parent's
+    ``run_id`` as ``parent_run_id`` so sub-agent log events carry the
+    trace-stitching pointer.
+    """
+
+    def test_top_level_has_no_parent_run_id(self, stream: io.StringIO) -> None:
+        configure_logging(level="DEBUG", format="json", stream=stream)
+        log = get_logger("test")
+        with bind_run("R1"):
+            log.info("top")
+        lines = _lines(stream)
+        assert lines[0]["run_id"] == "R1"
+        assert "parent_run_id" not in lines[0]
+
+    def test_nested_run_attaches_parent_run_id(self, stream: io.StringIO) -> None:
+        configure_logging(level="DEBUG", format="json", stream=stream)
+        log = get_logger("test")
+        with bind_run("R1"):
+            log.info("parent")
+            with bind_run("R2"):
+                log.info("child")
+            log.info("parent_again")
+        lines = _lines(stream)
+        assert lines[0] == {**lines[0], "run_id": "R1"}
+        assert "parent_run_id" not in lines[0]
+        # Sub-agent's event has both R2 and R1.
+        assert lines[1]["run_id"] == "R2"
+        assert lines[1]["parent_run_id"] == "R1"
+        # After child exits, parent is restored cleanly (no parent_run_id).
+        assert lines[2]["run_id"] == "R1"
+        assert "parent_run_id" not in lines[2]
+
+    def test_three_level_nesting_immediate_parent_only(self, stream: io.StringIO) -> None:
+        # Per the boundary doc:depth=2 sub-agent's parent_run_id is its
+        # IMMEDIATE parent (R2), not the grandparent (R1). Trace stitching
+        # uses self-join on run_id ↔ parent_run_id to walk the chain.
+        configure_logging(level="DEBUG", format="json", stream=stream)
+        log = get_logger("test")
+        with bind_run("R1"), bind_run("R2"), bind_run("R3"):
+            log.info("deepest")
+        lines = _lines(stream)
+        assert lines[0]["run_id"] == "R3"
+        assert lines[0]["parent_run_id"] == "R2"
+
+
+class TestBindAgentDepth:
+    """P6-T4 — ``agent_depth`` binding surfaces on every log event inside
+    a ``run_query`` invocation. Top-level is 0;sub-agent is 1, 2, etc.
+    """
+
+    def test_binds_depth_zero(self, stream: io.StringIO) -> None:
+        from openharness.observability import bind_agent_depth
+
+        configure_logging(level="DEBUG", format="json", stream=stream)
+        log = get_logger("test")
+        with bind_agent_depth(0):
+            log.info("top")
+        lines = _lines(stream)
+        assert lines[0]["agent_depth"] == 0
+
+    def test_binds_depth_one(self, stream: io.StringIO) -> None:
+        from openharness.observability import bind_agent_depth
+
+        configure_logging(level="DEBUG", format="json", stream=stream)
+        log = get_logger("test")
+        with bind_agent_depth(1):
+            log.info("child")
+        lines = _lines(stream)
+        assert lines[0]["agent_depth"] == 1
+
+    def test_unbinds_on_exit(self, stream: io.StringIO) -> None:
+        from openharness.observability import bind_agent_depth
+
+        configure_logging(level="DEBUG", format="json", stream=stream)
+        log = get_logger("test")
+        with bind_agent_depth(2):
+            pass
+        log.info("after")
+        lines = _lines(stream)
+        # Outside the block, depth is gone.
+        assert "agent_depth" not in lines[0]
+
+    def test_nested_depth_via_runquery_pattern(self, stream: io.StringIO) -> None:
+        # Mirrors how `run_query` will use the helper: combined with bind_run.
+        from openharness.observability import bind_agent_depth
+
+        configure_logging(level="DEBUG", format="json", stream=stream)
+        log = get_logger("test")
+        with bind_run("R1"), bind_agent_depth(0):
+            log.info("parent_turn")
+            with bind_run("R2"), bind_agent_depth(1):
+                log.info("child_turn")
+        lines = _lines(stream)
+        assert lines[0]["run_id"] == "R1"
+        assert lines[0]["agent_depth"] == 0
+        assert lines[1]["run_id"] == "R2"
+        assert lines[1]["parent_run_id"] == "R1"
+        assert lines[1]["agent_depth"] == 1

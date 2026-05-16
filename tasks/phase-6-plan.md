@@ -145,7 +145,7 @@ returns `ToolResult`. This is where the recursion lives — and where the
 
 ---
 
-### P6-T4: Observability — `parent_run_id` + `agent_depth` binding 🔜 NEXT
+### P6-T4: Observability — `parent_run_id` + `agent_depth` binding ✅
 
 **Description**: D16.7 — every log event emitted inside sub-agent's
 `run_query` carries `parent_run_id`(pointing at parent's run_id) and
@@ -191,7 +191,7 @@ detects nested invocation;`bind_turn` or a new helper binds depth.
 
 ---
 
-### P6-T5: CLI bootstrap + INVARIANT VERIFICATION ⭐
+### P6-T5: CLI bootstrap + INVARIANT VERIFICATION ⭐ 🔜 NEXT
 
 **Description**: Register a default `SpawnAgent("Agent")` instance into
 the registry in `cli._run_ask`. Wire `max_agent_depth` from Settings into
