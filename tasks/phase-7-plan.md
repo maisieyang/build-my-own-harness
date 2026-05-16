@@ -163,7 +163,44 @@ cwd / env / timeout / stdin` arg packing + `ProcessResult` →
 
 ---
 
-### P7-T4: INVARIANT VERIFICATION + retro + README 🔜 NEXT
+### P7-T4: INVARIANT VERIFICATION + retro + README ✅
+
+---
+
+## Phase 7a DONE 🎉
+
+**Formal git-diff invariant verification** (against Phase 6 close
+commit `189a083`):
+
+  permissions/        → 0 lines diff ✓
+  hooks/              → 0 lines diff ✓
+  observability/      → 0 lines diff ✓
+  mcp/                → 0 lines diff ✓
+  compaction/         → 0 lines diff ✓
+  skills/             → 0 lines diff ✓
+  commands/           → 0 lines diff ✓
+  protocols/          → 0 lines diff ✓
+  engine/query.py     → 1 line additive (kwarg `execution_env=context.execution_env`)
+
+Plus structural invariant test (22 protected modules, 4 forbidden
+identifiers) — confirms no leak into permission / hook / observability /
+mcp / compaction / skills / commands / other-tools layers.
+
+**Fourth tenant test** of Phase 3's abstractions PASSED — and
+strongest variant: ``HostExecution`` is the identity transform, so
+13 existing BashTool tests passing unchanged after the refactor is
+direct evidence the abstraction layer is purely additive.
+
+Next milestones (per ARCHITECTURE.md §4):
+
+- **Phase 7b (real Docker substrate)** — pure plug-in, ~250 LoC
+  independent phase. Adds `SandboxExecution(ExecutionEnvironment)` +
+  Settings fields + CLI flags + cross-platform CI strategy. The
+  abstraction (D17.1 Protocol) need not change.
+- **Phase 5d (ModeBundle)** — first cross-layer tenant. Phase 7a's
+  abstraction-first pattern is the template (per retro §3.6).
+- **Phase 8 (Polish + release)** — `markdown_store/` shared mechanism
+  + tutorial + packaging.
 
 **Description**: The structural invariant verification (the fourth
 tenant test) + `learnings/phase-7a.md` + README section + DoD closeout.

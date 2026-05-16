@@ -471,6 +471,79 @@ test
 [`tests/tools/test_spawn_agent_invariant.py`](./tests/tools/test_spawn_agent_invariant.py)
 introspects 9 protected modules to confirm no leak.
 
+### Phase 7a features — ExecutionEnvironment abstraction (substrate layer)
+
+The harness now has an explicit **substrate layer** —``BashTool``
+no longer hard-codes ``asyncio.create_subprocess_shell`` calls;it
+delegates to the configured :class:`ExecutionEnvironment` on the
+query context. Default is ``HostExecution`` (current behavior); Phase
+7b will plug in a ``SandboxExecution`` (Docker container) without
+changing ``BashTool``.
+
+Full design in
+[`decisions/15-phase-7-boundary.md`](./decisions/15-phase-7-boundary.md).
+The conceptual lift:**"where does this tool run" becomes an
+injectable dependency**. Same shape as Phase 5a MCP (where the tool
+runs) and Phase 6 Sub-agent (recursive agent loop as a tool) — every
+extension lands on the same `BaseTool → ToolRegistry → dispatch loop`
+primitive.
+
+**For users** — Phase 7a is invisible at the CLI surface. `oh ask "..."`
+behavior is byte-identical to before:
+
+```bash
+uv run oh ask "list files in this dir using bash"
+```
+
+Internally, the engine populates
+`ToolExecutionContext.execution_env=context.execution_env`. ``BashTool``
+reads that field, calls
+`env.run_command(command=args.command, cwd=ctx.cwd, timeout=...)`, and
+translates the returned :class:`ProcessResult` into a
+`ToolResult`. All 13 existing BashTool tests pass unchanged after the
+refactor — behavior parity is the load-bearing assertion.
+
+**For framework developers** — to inject a custom substrate:
+
+```python
+from openharness.engine import QueryContext
+from openharness.execution import ExecutionEnvironment, ProcessResult
+
+
+class MyExecution:
+    async def run_command(
+        self, command: str, cwd, timeout=None
+    ) -> ProcessResult:
+        # ... whatever (remote worker pool / gVisor / Firecracker / ...)
+        return ProcessResult(output="...", exit_code=0)
+
+
+env: ExecutionEnvironment = MyExecution()
+ctx = QueryContext(
+    ...,
+    execution_env=env,  # all Bash dispatches route through MyExecution
+)
+```
+
+Sub-agents inherit the parent's `execution_env` via `dataclasses.replace`
+automatically — a parent sandboxed sub-agent transparently keeps the
+sandbox.
+
+**Cross-cutting invariant verified (fourth tenant test)** — Phase 7a
+landed with **zero diff** on `permissions/`, `hooks/`,
+`observability/`, `mcp/`, `compaction/`, `skills/`, `commands/`,
+`protocols/`, and all other tool modules. `engine/query.py` gained
+exactly one additive kwarg on the existing
+`ToolExecutionContext(...)` call. Structural test in
+[`tests/execution/test_invariant.py`](./tests/execution/test_invariant.py)
+asserts no `ExecutionEnvironment` / `HostExecution` / `ProcessResult` /
+`_HOST_EXECUTION` identifier leaks into any of the 22 protected
+modules.
+
+**Phase 7b** (deferred) will add the real Docker substrate
+(`SandboxExecution`) as a single ~250-LoC follow-up — the abstraction
+having been proven correct in 7a, 7b is purely engineering.
+
 ### Want to verify the wire path against your account?
 
 ```bash
