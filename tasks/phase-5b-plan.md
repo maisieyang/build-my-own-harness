@@ -139,7 +139,7 @@ construction.
 
 ---
 
-### P5b-T4: End-to-end smoke + invariant verification 🔜 NEXT
+### P5b-T4: End-to-end smoke + invariant verification ✅
 
 **Description**: Mirror P5c-T4 (Skills e2e). Stub LLM,real `expand_command`,
 real (empty) hook chain,confirm the resolved prompt reaches the LLM.
@@ -171,7 +171,7 @@ Plus the **structural invariant verification** (the fourth tenant test).
 
 ---
 
-### P5b-T5: README + Coverage + retro
+### P5b-T5: README + Coverage + retro 🔜 NEXT
 
 **Description**: README section, coverage close-out,
 `learnings/phase-5b-commands.md`.
