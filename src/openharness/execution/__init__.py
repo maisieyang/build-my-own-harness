@@ -43,9 +43,11 @@ from __future__ import annotations
 
 from openharness.execution.base import ExecutionEnvironment, ProcessResult
 from openharness.execution.host import HostExecution
+from openharness.execution.sandbox import SandboxExecution
 
 __all__ = [
     "ExecutionEnvironment",
     "HostExecution",
     "ProcessResult",
+    "SandboxExecution",
 ]

@@ -42,6 +42,12 @@ dependencies = [
     # own parser would break on multi-line strings, lists, and edge cases
     # users will hit. ``yaml.safe_load`` is the small, correct primitive.
     "pyyaml>=6.0",
+    # P7b-T1 — Docker substrate (SandboxExecution). aiodocker is the
+    # async-native Docker Engine SDK; matches the existing await
+    # `env.run_command(...)` shape without thread-pool wrapping. Pinned
+    # below 1.0 since aiodocker is still pre-1.0; bumping is a Phase 8+
+    # task. See decisions/16 D18.1.
+    "aiodocker>=0.21,<1.0",
 ]
 
 [project.scripts]
@@ -137,6 +143,18 @@ plugins = ["pydantic.mypy"]
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_decorators = false
+
+# P7b-T1 — aiodocker has no type stubs (pre-1.0 library). Treat its
+# imports as untyped so mypy --strict doesn't fail on every aiodocker
+# usage. ``follow_imports = "skip"`` additionally prevents mypy from
+# trying to analyze aiodocker's internals (mypy 2.0.0 crashes on
+# aiodocker's jsonstream.py — upstream bug; skipping sidesteps it).
+# SandboxExecution wraps it in our own typed Protocol
+# (ExecutionEnvironment from P7a), so the untyped surface is bounded.
+[[tool.mypy.overrides]]
+module = "aiodocker.*"
+ignore_missing_imports = true
+follow_imports = "skip"
 
 # Pydantic mypy plugin — enforce stricter Pydantic patterns
 [tool.pydantic-mypy]

@@ -23,7 +23,7 @@ of production code.
 
 ## Task list
 
-### P7b-T1: `SandboxExecution` class + aiodocker dependency 🔜 NEXT
+### P7b-T1: `SandboxExecution` class + aiodocker dependency ✅
 
 **Description**: Foundation — the substrate class itself, with all
 unit-test coverage. No Settings / CLI wire-up yet; T2 handles that.
@@ -82,7 +82,7 @@ Container lifecycle (`__aenter__` pulls image + spawns container,
 
 ---
 
-### P7b-T2: Settings + CLI flags + bootstrap
+### P7b-T2: Settings + CLI flags + bootstrap 🔜 NEXT
 
 **Description**: Wire `SandboxExecution` into the harness via Settings
 + CLI. `--sandbox` is off by default (zero behavior change); enabling
