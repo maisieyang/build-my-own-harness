@@ -30,6 +30,8 @@ from openharness.protocols import ToolSpec
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from openharness.engine.context import QueryContext
+
 
 @dataclass(frozen=True)
 class ToolResult:
@@ -53,13 +55,25 @@ class ToolResult:
 class ToolExecutionContext:
     """Runtime context handed to ``BaseTool.execute``.
 
-    P2-T2 carries only ``cwd``. P2-T3 file tools resolve relative paths
-    against this; ``Bash`` uses it as the subprocess cwd; ``Grep`` walks
-    from it. Future fields (settings excerpts, hook data) land here as
-    additive frozen-dataclass fields when concrete capabilities surface them.
+    P2-T2 carried only ``cwd``. P6-T2 (D16.8) adds the optional
+    ``parent_query`` field — additive default ``None`` so every existing
+    tool (Read / Write / Edit / Bash / Grep / MCP adapters / LoadSkill)
+    continues to ignore it. Only :class:`SpawnAgent` reads it, to build
+    the sub-agent's ``QueryContext`` via ``dataclasses.replace``.
+
+    The TYPE_CHECKING-only import of :class:`QueryContext` avoids the
+    runtime import cycle (``engine/context.py`` already imports
+    ``tools.ToolRegistry`` lazily). At runtime the field is just an
+    opaque object the tool either passes through or unwraps via
+    ``dataclasses.replace``.
+
+    Per the cross-cutting invariant, this is the **only structural
+    dispatch-machinery change Phase 6 introduces** — and it's strictly
+    additive.
     """
 
     cwd: Path
+    parent_query: QueryContext | None = None
 
 
 # Bound to BaseModel so every tool's input is parseable from the LLM's

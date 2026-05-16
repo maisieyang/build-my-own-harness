@@ -258,7 +258,11 @@ async def run_query(
                 # denied / tool's own is_error. Programming exceptions
                 # propagate (D8.5 / D10.5).
                 tool_uses = extract_tool_uses(complete_event.message)
-                exec_context = ToolExecutionContext(cwd=context.cwd)
+                # P6-T2 (D16.8): pass ``context`` through so ``SpawnAgent``
+                # can build sub-context via ``dataclasses.replace``. This is
+                # the ONLY engine dispatch change Phase 6 introduces; every
+                # other tool ignores ``parent_query`` and behaves identically.
+                exec_context = ToolExecutionContext(cwd=context.cwd, parent_query=context)
                 tool_results: list[ToolResultBlock] = []
 
                 for tool_use in tool_uses:

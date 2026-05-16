@@ -67,7 +67,7 @@ Same shape as P5-T1(`McpServerConfig` + Settings fields).
 
 ---
 
-### P6-T2: `ToolExecutionContext.parent_query` additive field 🔜 NEXT
+### P6-T2: `ToolExecutionContext.parent_query` additive field ✅
 
 **Description**: The mechanical question Phase 6 forces — how does
 `SpawnAgent.execute` access the parent's `QueryContext`?Boundary D16.8
@@ -105,7 +105,7 @@ identically.
 
 ---
 
-### P6-T3: `SpawnAgent` BaseTool subclass
+### P6-T3: `SpawnAgent` BaseTool subclass 🔜 NEXT
 
 **Description**: The core capability. `SpawnAgent(BaseTool)`'s `execute`
 body checks depth, constructs `sub_context` via `dataclasses.replace`,

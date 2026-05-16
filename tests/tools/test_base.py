@@ -217,3 +217,55 @@ class TestToolRegistryToApiSchema:
         registry.register(_AltFakeTool())
         names = [spec.name for spec in registry.to_api_schema()]
         assert names == ["Fake", "Alt"]
+
+
+# --------------------------------------------------------------------------- #
+# P6-T2: ToolExecutionContext.parent_query field                              #
+# --------------------------------------------------------------------------- #
+
+
+class TestParentQueryField:
+    """P6-T2 (D16.8) — additive optional field on ToolExecutionContext.
+
+    The field is the ONLY structural dispatch-machinery change Phase 6
+    introduces. Tests verify:
+
+    1. Default ``None`` — backward compat for every existing tool that
+       doesn't care about sub-agents.
+    2. Explicit ``QueryContext`` passed — what the engine does for the
+       SpawnAgent path.
+    3. Backward-compat positional construction ``ToolExecutionContext(cwd=p)``
+       still works.
+    """
+
+    def test_default_parent_query_is_none(self, tmp_path: Path) -> None:
+        ctx = ToolExecutionContext(cwd=tmp_path)
+        assert ctx.parent_query is None
+
+    def test_keyword_construction_with_cwd_only(self, tmp_path: Path) -> None:
+        # Existing tools / tests / fixtures construct this way — must
+        # remain valid.
+        ctx = ToolExecutionContext(cwd=tmp_path)
+        assert ctx.cwd == tmp_path
+        assert ctx.parent_query is None
+
+    def test_explicit_parent_query_attached(self, tmp_path: Path) -> None:
+        # ``parent_query`` is just an opaque object at this layer (no
+        # isinstance check). Pass a sentinel object to verify the field
+        # round-trips. SpawnAgent's actual sub-agent construction is
+        # tested separately in P6-T3.
+        sentinel = object()
+        ctx = ToolExecutionContext(
+            cwd=tmp_path,
+            parent_query=sentinel,  # type: ignore[arg-type]
+        )
+        assert ctx.parent_query is sentinel
+
+    def test_is_frozen(self, tmp_path: Path) -> None:
+        # Defense in depth: ToolExecutionContext must remain immutable so
+        # tools can't leak side-channel state back to engine.
+        import dataclasses as _dc
+
+        ctx = ToolExecutionContext(cwd=tmp_path)
+        with pytest.raises(_dc.FrozenInstanceError):
+            ctx.parent_query = object()  # type: ignore[misc,assignment]
