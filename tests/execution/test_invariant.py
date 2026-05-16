@@ -58,6 +58,10 @@ class TestPhase7aCrossCuttingInvariant:
         "HostExecution",
         "ProcessResult",
         "_HOST_EXECUTION",
+        # P7b: SandboxExecution must also not leak. cli.py is the only
+        # non-execution/ module allowed to reference it (boundary doc
+        # D18 allows cli.py to enter the sandbox context manager).
+        "SandboxExecution",
     )
 
     @staticmethod

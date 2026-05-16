@@ -540,9 +540,94 @@ asserts no `ExecutionEnvironment` / `HostExecution` / `ProcessResult` /
 `_HOST_EXECUTION` identifier leaks into any of the 22 protected
 modules.
 
-**Phase 7b** (deferred) will add the real Docker substrate
-(`SandboxExecution`) as a single ~250-LoC follow-up — the abstraction
-having been proven correct in 7a, 7b is purely engineering.
+**Phase 7b** lands the real Docker substrate(`SandboxExecution`)as a
+second `ExecutionEnvironment` implementation — see the "Phase 7b"
+section below.
+
+### Phase 7b features — Docker sandbox (real execution isolation)
+
+`SandboxExecution`(Phase 7b)takes the abstraction Phase 7a established
+and plugs in a real Linux-namespace-isolated substrate via Docker.
+``BashTool``'s code didn't change — it just sees a different
+``ExecutionEnvironment`` on ``QueryContext``. Full design in
+[`decisions/16-phase-7b-boundary.md`](./decisions/16-phase-7b-boundary.md).
+
+**Default behavior(no Docker)**:
+
+```bash
+uv run oh ask "list files via bash"
+# → BashTool delegates to HostExecution (current behavior, no changes)
+```
+
+**Enable Docker sandbox**:
+
+```bash
+uv run oh ask --sandbox "use bash to count files in this dir"
+# → BashTool delegates to SandboxExecution (container)
+```
+
+**What the sandbox isolates**:
+
+- **Filesystem**: only the project cwd is bind-mounted (read-write)
+  to ``/workspace`` inside the container. The host's ``/etc``,
+  ``~/.ssh``, ``~/.aws``, ``/Users/...`` are **structurally absent**
+  from the container's mount namespace — defense in depth via the
+  kernel, not via permission checks. ``Bash("cat /etc/passwd")``
+  doesn't return the host's passwd file; it returns the container
+  base image's (which is harmless).
+- **Network**: default ``--sandbox-network=none`` blocks all external
+  network — blocks classic prompt-injection exfiltration attempts.
+  Opt-in via ``--sandbox-network=bridge`` for npm install / git clone.
+- **Resources**: cgroup-bounded by default (1GB memory / 1 CPU / 256
+  processes). Fork bombs and OOM-amok scripts get kernel-killed, not
+  the harness.
+
+**Configuration** (CLI flags / env vars):
+
+```bash
+# Tune limits + image:
+uv run oh ask --sandbox \
+  --sandbox-memory 512m \
+  --sandbox-cpus 0.5 \
+  --sandbox-image ubuntu:latest \
+  --sandbox-network bridge \
+  "..."
+
+# Or via env (persists across invocations):
+export OPENHARNESS_SANDBOX_ENABLED=true
+export OPENHARNESS_SANDBOX_IMAGE=python:3.12-slim
+export OPENHARNESS_SANDBOX_NETWORK=none
+```
+
+**Requirements**:
+
+- Docker daemon running locally (macOS Docker Desktop; Linux native)
+- Container image (default ``python:3.12-slim``, ~120MB) auto-pulled
+  on first use
+- macOS users:Docker Desktop's nested LinuxKit VM adds ~5-10s
+  warm-up latency on first ``oh ask --sandbox`` of a session; subsequent
+  invocations reuse the warm VM
+
+**What's still on the host**(not sandboxed):
+
+- ``Read`` / ``Write`` / ``Edit`` / ``Grep`` — path-pure tools
+  already covered by Tier 1-3 permission checks
+- ``LoadSkill`` — reads markdown files, no shell execution
+- MCP tool dispatch — runs in remote MCP server process
+- ``SpawnAgent`` — same agent loop, same substrate inherited via
+  ``dataclasses.replace``
+
+Only ``BashTool`` routes through the substrate — per D17.4 layered
+extension model (only tools that need the cost pay it).
+
+**Cross-cutting invariant** — Phase 7b again landed with zero diff on
+``permissions/``, ``hooks/``, ``observability/``, ``mcp/``,
+``compaction/``, ``skills/``, ``commands/``, ``engine/``, ``tools/``,
+``protocols/``, and even Phase 7a's `execution/base.py` + `execution/host.py`.
+Only ``execution/sandbox.py`` (new) + `cli.py` (+1
+`AsyncExitStack` block + 5 flags) + `config/settings.py` (+6 fields)
+were touched. The Phase 7a abstraction's payoff: Phase 7b is **pure
+plug-in work**.
 
 ### Want to verify the wire path against your account?
 

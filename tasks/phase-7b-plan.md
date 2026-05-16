@@ -167,7 +167,52 @@ integration tests. Verifies the actual sandbox properties.
 
 ---
 
-### P7b-T4: README + retro + DoD closeout 🔜 NEXT
+### P7b-T4: README + retro + DoD closeout ✅
+
+---
+
+## Phase 7b DONE 🎉
+
+**Formal git-diff invariant verification** (against Phase 7a close
+commit `b8dd19f`):
+
+  permissions/        → 0 lines diff ✓
+  hooks/              → 0 lines diff ✓
+  observability/      → 0 lines diff ✓
+  mcp/                → 0 lines diff ✓
+  compaction/         → 0 lines diff ✓
+  skills/             → 0 lines diff ✓
+  commands/           → 0 lines diff ✓
+  protocols/          → 0 lines diff ✓
+  engine/             → 0 lines diff ✓
+  tools/              → 0 lines diff ✓
+  execution/base.py   → 0 lines diff ✓ (Protocol unchanged)
+  execution/host.py   → 0 lines diff ✓ (identity substrate unchanged)
+
+Phase 7a's "abstraction-first paid off" hypothesis (P7a retro §3.6)
+empirically validated: Phase 7b is **pure plug-in** work. Only
+`execution/sandbox.py` (new file, ~200 LoC), `pyproject.toml` (+1
+dep), `config/settings.py` (+6 fields), `cli.py` (+5 flags +
+AsyncExitStack chain), `tests/execution/` (+50 tests across 2 files).
+
+Quality: 1064 passed / 7 skipped (integration tests skip cleanly
+when Docker daemon unavailable), mypy strict clean (with bounded
+`follow_imports = skip` on aiodocker per upstream mypy crash),
+ruff clean throughout.
+
+Next milestones (per ARCHITECTURE.md §4):
+
+- **Phase 5d (ModeBundle)** — first cross-layer tenant. Combines
+  Layer 0 commands + Layer 1 skills + Layer 2 hooks + permission
+  overlay into one unified "mode" concept. Phase 7a/7b's
+  abstraction-first pattern applies (per retro §6).
+- **Phase 7c (gVisor / Firecracker / remote worker)** — additional
+  substrates if a use case surfaces. `ExecutionEnvironment` Protocol
+  is already the contract; each is a `~150-250 LoC plug-in` like
+  Phase 7b.
+- **Phase 8 (Polish + release)** — `markdown_store/` shared mechanism,
+  `--substrate=<name>` CLI unification when 3+ substrates exist,
+  tutorial + packaging.
 
 **Description**: Docs + retrospective.
 
