@@ -183,6 +183,12 @@ class TestPhase5dCrossCuttingInvariant:
         "EmptyBundleStore",
         "BundleStore",
         "resolve_hook",
+        # P5e additions: plugin hook discovery identifiers must also
+        # NOT leak into protected modules. Discovery lives in
+        # bundles/hook_plugins.py + cli.py only.
+        "HookSpec",
+        "hook_spec",
+        "discover_plugin_hooks",
         # Internal module-name leakage check.
         "openharness.bundles",
     )

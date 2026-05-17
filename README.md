@@ -731,6 +731,106 @@ any layer is the strongest single proof that Phase 3's layered model
 holds under real cross-cutting load. See ``learnings/phase-5d.md`` for
 the retrospective.
 
+### Phase 5e features — plugin hook discovery (third-party named hooks)
+
+Phase 5d shipped 2 framework-built-in named hooks (``audit_log`` +
+``deny_writes``) that bundle frontmatter references by string. Phase
+5e generalizes that catalog so **third-party Python packages can
+ship hooks** via the ``openharness.hooks`` entry-point group —
+bundle frontmatter then references them with the same `hooks:
+[name1, name2]` shape, no code changes required.
+
+**Plugin author workflow** — author a Python package:
+
+```python
+# my_pkg/hooks.py
+from openharness.bundles import hook_spec
+
+@hook_spec("PostToolUse")
+async def slack_notify(context):
+    """Notify the team Slack channel when a tool dispatch completes."""
+    # send Slack webhook payload
+    ...
+
+@hook_spec("PreApiCall")
+async def budget_guard(context):
+    """Deny API calls when the daily cost budget is exceeded."""
+    ...
+```
+
+```toml
+# pyproject.toml
+[project.entry-points."openharness.hooks"]
+slack_notify = "my_pkg.hooks:slack_notify"
+budget_guard = "my_pkg.hooks:budget_guard"
+```
+
+After `pip install my_pkg`, the hooks are available to any bundle
+that references them by name — provided the end-user opts in.
+
+**End-user enable flow** — discovery is **opt-in** (default OFF):
+
+```bash
+# Enable via CLI flag
+oh ask --enable-plugin-hooks "/review last commit"
+
+# Or via env var
+OPENHARNESS_ENABLE_PLUGIN_HOOKS=true oh ask "/review last commit"
+```
+
+The bundle's frontmatter references the plugin hook by name:
+
+```yaml
+---
+name: code-review
+description: Read-only code review with audit logging + Slack notify
+system_prompt: |
+  You are a code reviewer. Read-only mode.
+tools:
+  whitelist: [Read, Grep]
+hooks:
+  - audit_log         # framework built-in
+  - deny_writes       # framework built-in
+  - slack_notify      # plugin from my_pkg
+  - budget_guard      # plugin from my_pkg
+---
+```
+
+**Collision policy** — framework > plugins > error:
+
+1. **Plugin name collides with built-in** (e.g. plugin tries to
+   register as `audit_log`) → plugin skipped + warning logged
+   (`plugin_hook_collides_with_builtin`). Framework hooks are
+   documented + version-stable; a plugin can't silently override
+   compliance-critical hooks.
+2. **Plugin name collides with another plugin** → first-wins (entry-
+   point iteration order is generally install order) + warning.
+3. **Plugin load error** (import fail, wrong type, exception) →
+   skipped + warning. Same skip-not-fail discipline as `parse_*`
+   functions.
+
+**Security model** — opt-in by design:
+
+- Default OFF: even if plugin packages are installed, hooks are not
+  loaded. Users must explicitly turn on discovery.
+- Plugin hooks can DENY or MODIFY any tool call — too large a blast
+  radius for default ON.
+- Matches `--sandbox` (Phase 7b) opt-in shape: features that affect
+  authorization or execution surface require explicit consent.
+
+**Cross-cutting invariant verified** — Phase 5e landed with **zero
+diff** vs Phase 5d close on `permissions/`, `hooks/`, `engine/`,
+`observability/`, `mcp/`, `compaction/`, `skills/`, `commands/`,
+`protocols/`, `tools/`, `execution/`, and `bundles/{model,store,
+registry,errors}.py`. Only additive diffs: new
+`bundles/hook_plugins.py` (190 LoC), additive kwargs in
+`bundles/hooks.py` (`resolve_hook` + `plugin_catalog`) and
+`bundles/apply.py` (`apply_bundle_to_context` + `plugin_hook_catalog`),
+CLI flag + bootstrap (32 LoC), and `Settings.enable_plugin_hooks`
+field. **Phase 5e is extension WITHIN the bundle subsystem** — it
+adds a catalog source without inventing a new lookup path or
+modifying any layer. See `learnings/phase-5e.md`.
+
 ### Want to verify the wire path against your account?
 
 ```bash

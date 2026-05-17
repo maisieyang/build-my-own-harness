@@ -24,7 +24,7 @@ of production code + ~150 lines test.
 
 ## Task list
 
-### P5e-T1: `bundles/hook_plugins.py` — discovery scaffolding 🔜 NEXT
+### P5e-T1: `bundles/hook_plugins.py` — discovery scaffolding ✅
 
 **Description**: Pure data + decorator + discovery function. No CLI
 or Settings wiring yet. Tests use the `entry_point_source` seam.
@@ -76,7 +76,7 @@ or Settings wiring yet. Tests use the `entry_point_source` seam.
 
 ---
 
-### P5e-T2: Wire plugin catalog into `resolve_hook` + `apply_bundle_to_context`
+### P5e-T2: Wire plugin catalog into `resolve_hook` + `apply_bundle_to_context` ✅
 
 **Description**: Two function signatures gain an additive
 `plugin_catalog` / `plugin_hook_catalog` kwarg (default `None`).
@@ -119,7 +119,7 @@ to the inner lookup.
 
 ---
 
-### P5e-T3: Settings flag + CLI flag + bootstrap wiring
+### P5e-T3: Settings flag + CLI flag + bootstrap wiring ✅
 
 **Description**: `Settings.enable_plugin_hooks` + Typer flag +
 `cli._run_ask` calls `discover_plugin_hooks` once when flag is on,
@@ -158,45 +158,43 @@ threads the catalog through `apply_bundle_to_context`.
 
 ---
 
-### P5e-T4: Cross-cutting invariant + README + retro
+### P5e-T4: Cross-cutting invariant + README + retro ✅
 
 **Description**: Extended structural invariant + git-diff
 verification + docs + DoD closeout.
 
 **Acceptance**:
-- [ ] `tests/execution/test_invariant.py`
+- [x] `tests/execution/test_invariant.py`
   `TestPhase5dCrossCuttingInvariant` forbidden set extended with
   `HookSpec`, `hook_spec`, `discover_plugin_hooks`. The 46 protected
   modules continue to enforce zero ref.
-- [ ] **Formal git-diff invariant verification** (in retro): vs
+- [x] **Formal git-diff invariant verification** (in retro): vs
   Phase 5d close (`878d80a`):
-  - permissions/ → 0 lines
-  - hooks/ → 0 lines
-  - engine/ → 0 lines
-  - observability/ → 0 lines
-  - mcp/ → 0 lines
-  - compaction/ → 0 lines
-  - skills/ → 0 lines
-  - commands/ → 0 lines
-  - protocols/ → 0 lines
-  - tools/ → 0 lines
-  - execution/ → 0 lines
-  - bundles/{model.py, store.py, registry.py, errors.py} → 0 lines
-  - prompts.py → 0 lines
-- [ ] `bundles/` module ≥ 95% coverage (incl. new hook_plugins.py)
-- [ ] Total coverage ≥ 95%
-- [ ] README "Phase 5e — plugin hook discovery" section:
-  - Plugin author workflow (pyproject.toml + decorator)
-  - End-user enable flow (`--enable-plugin-hooks` + bundle hook_names)
-  - Collision policy (framework > plugins)
-  - Security model (opt-in default OFF)
-- [ ] `learnings/phase-5e.md` retro focusing on:
-  - **Extension within the bundle subsystem** (not cross-layer)
-  - "Catalog as additive lookup source" pattern
-  - Entry points vs filesystem trade-off
-  - `entry_point_source` test seam — why pure-function design
-    matters for plugin systems
-- [ ] Phase 5e DoD checklist all green
+  - permissions/ → **0 lines** ✓
+  - hooks/ → **0 lines** ✓
+  - engine/ → **0 lines** ✓
+  - observability/ → **0 lines** ✓
+  - mcp/ → **0 lines** ✓
+  - compaction/ → **0 lines** ✓
+  - skills/ → **0 lines** ✓
+  - commands/ → **0 lines** ✓
+  - protocols/ → **0 lines** ✓
+  - tools/ → **0 lines** ✓
+  - execution/ → **0 lines** ✓
+  - bundles/{model.py, store.py, registry.py, errors.py} → **0 lines** ✓
+  - prompts.py → **0 lines** ✓
+- [x] `bundles/` module ≥ 95% coverage (incl. new hook_plugins.py)
+- [x] Total coverage ≥ 95% (97.16%)
+- [x] README "Phase 5e — plugin hook discovery" section authored with
+  full plugin author workflow + end-user enable flow + collision
+  policy + security model.
+- [x] `learnings/phase-5e.md` retro authored covering:
+  in-subsystem-extension vs cross-layer composition; additive-kwarg
+  pattern; double-defense for built-in shadow; `entry_point_source`
+  test seam value; opt-in default for auto-invoked extension points;
+  framework-design compound interest (5d's good extension point made
+  5e fast).
+- [x] Phase 5e DoD checklist all green
 
 **Files**:
 - `tests/execution/test_invariant.py` (extend)
