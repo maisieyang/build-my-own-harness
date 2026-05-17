@@ -245,6 +245,25 @@ class Settings(BaseSettings):
             "pytest fork; bump for parallel build systems if needed."
         ),
     )
+    # P5e-T3 (decisions/18 D20.3): plugin hook discovery is opt-in.
+    # Default OFF so a transitive dependency shipping
+    # ``openharness.hooks`` entry points cannot register a hook the
+    # user didn't consent to. When ON, ``cli._run_ask`` calls
+    # ``discover_plugin_hooks()`` once at bootstrap and threads the
+    # catalog through to bundle hook resolution.
+    enable_plugin_hooks: bool = Field(
+        default=False,
+        description=(
+            "Enable discovery of third-party hooks declared via the "
+            "``openharness.hooks`` Python entry-point group (P5e). "
+            "When false (default), bundle ``hooks:`` frontmatter "
+            "resolves only against framework built-ins (``audit_log`` "
+            "/ ``deny_writes``). Env var: "
+            "OPENHARNESS_ENABLE_PLUGIN_HOOKS. Overridden by the "
+            "``--enable-plugin-hooks`` / ``--no-enable-plugin-hooks`` "
+            "CLI flag."
+        ),
+    )
 
     @field_validator("deny_paths", mode="before")
     @classmethod

@@ -426,3 +426,27 @@ class TestSandboxFields:
         monkeypatch.setenv("OPENHARNESS_SANDBOX_PIDS", "0")
         with pytest.raises(ValidationError):
             Settings()
+
+
+class TestEnablePluginHooks:
+    """P5e-T3 (D20.3) — opt-in plugin hook discovery."""
+
+    def test_default_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        settings = Settings()
+        assert settings.enable_plugin_hooks is False
+
+    def test_enable_via_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_ENABLE_PLUGIN_HOOKS", "true")
+        settings = Settings()
+        assert settings.enable_plugin_hooks is True
+
+    def test_false_via_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_ENABLE_PLUGIN_HOOKS", "false")
+        settings = Settings()
+        assert settings.enable_plugin_hooks is False

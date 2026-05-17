@@ -1445,3 +1445,158 @@ class TestBundles:
         # System prompt was rebuilt — catalog should mention Read but NOT Write.
         assert "**Read**" in ctx.system_prompt  # type: ignore[attr-defined]
         assert "**Write**" not in ctx.system_prompt  # type: ignore[attr-defined]
+
+
+# --------------------------------------------------------------------------- #
+# P5e-T3: Plugin hook discovery CLI integration                               #
+# --------------------------------------------------------------------------- #
+
+
+class TestPluginHookDiscovery:
+    """``--enable-plugin-hooks`` flag + discovered hooks reach the bundle's
+    hook resolution path. With the flag off (default), a bundle's
+    ``hooks:`` field referencing a plugin name raises UnknownBundleError.
+    """
+
+    def test_flag_off_default_unknown_plugin_hook_raises(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # Bundle references "slack_notify"; plugin discovery is OFF →
+        # name not in BUILTIN_HOOKS → UnknownBundleError → exit 1.
+        _set_minimum_env(monkeypatch)
+        project = _isolate_skills_dirs(monkeypatch, tmp_path)
+        cmd_path = project / ".openharness" / "commands"
+        cmd_path.mkdir(parents=True, exist_ok=True)
+        (cmd_path / "review.md").write_text(
+            "---\nname: review\ndescription: x\nmode: code-review\n---\nbody\n",
+            encoding="utf-8",
+        )
+        _write_bundle_file(
+            project / ".openharness" / "bundles",
+            "code-review",
+            "review mode",
+            hooks=["slack_notify"],
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "/review args"])
+        assert result.exit_code == 1
+        assert "Unknown hook" in result.stderr
+        assert "slack_notify" in result.stderr
+
+    def test_flag_on_discovers_plugin_and_resolves(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # Stub discover_plugin_hooks to return a fake plugin; flag on
+        # so the bundle's hook_names resolves it.
+        from openharness.bundles.hook_plugins import HookSpec
+
+        async def fake_plugin(ctx: object) -> None:
+            del ctx
+            return None
+
+        stub_catalog = {
+            "slack_notify": HookSpec(event="PostToolUse", hook=fake_plugin),
+        }
+
+        _set_minimum_env(monkeypatch)
+        project = _isolate_skills_dirs(monkeypatch, tmp_path)
+        cmd_path = project / ".openharness" / "commands"
+        cmd_path.mkdir(parents=True, exist_ok=True)
+        (cmd_path / "review.md").write_text(
+            "---\nname: review\ndescription: x\nmode: code-review\n---\nbody\n",
+            encoding="utf-8",
+        )
+        _write_bundle_file(
+            project / ".openharness" / "bundles",
+            "code-review",
+            "review mode",
+            hooks=["audit_log", "slack_notify"],
+        )
+
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        monkeypatch.setattr(cli_module, "discover_plugin_hooks", lambda: stub_catalog)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "/review args", "--enable-plugin-hooks"])
+        assert result.exit_code == 0, result.stderr
+        ctx = captured.context
+        post = ctx.hook_registry.get("PostToolUse")  # type: ignore[attr-defined]
+        # Both audit_log (built-in) and fake_plugin (plugin) registered.
+        assert fake_plugin in post
+
+    def test_env_var_enables_discovery(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # OPENHARNESS_ENABLE_PLUGIN_HOOKS=true with no CLI flag → flag on.
+        from openharness.bundles.hook_plugins import HookSpec
+
+        async def fake_plugin(ctx: object) -> None:
+            del ctx
+            return None
+
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("OPENHARNESS_ENABLE_PLUGIN_HOOKS", "true")
+        project = _isolate_skills_dirs(monkeypatch, tmp_path)
+        cmd_path = project / ".openharness" / "commands"
+        cmd_path.mkdir(parents=True, exist_ok=True)
+        (cmd_path / "x.md").write_text(
+            "---\nname: x\ndescription: x\nmode: m\n---\nbody\n", encoding="utf-8"
+        )
+        _write_bundle_file(
+            project / ".openharness" / "bundles",
+            "m",
+            "m",
+            hooks=["my_hook"],
+        )
+
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        monkeypatch.setattr(
+            cli_module,
+            "discover_plugin_hooks",
+            lambda: {"my_hook": HookSpec(event="PreToolUse", hook=fake_plugin)},
+        )
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "/x args"])
+        assert result.exit_code == 0
+        ctx = captured.context
+        assert fake_plugin in ctx.hook_registry.get("PreToolUse")  # type: ignore[attr-defined]
+
+    def test_no_flag_overrides_env_var(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # env=true but --no-enable-plugin-hooks → CLI wins → discovery off.
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("OPENHARNESS_ENABLE_PLUGIN_HOOKS", "true")
+        project = _isolate_skills_dirs(monkeypatch, tmp_path)
+        cmd_path = project / ".openharness" / "commands"
+        cmd_path.mkdir(parents=True, exist_ok=True)
+        (cmd_path / "x.md").write_text(
+            "---\nname: x\ndescription: x\nmode: m\n---\nbody\n", encoding="utf-8"
+        )
+        _write_bundle_file(
+            project / ".openharness" / "bundles",
+            "m",
+            "m",
+            hooks=["slack_notify"],
+        )
+
+        # discover_plugin_hooks should NOT be called; if it is, we'd
+        # see a TypeError from the lambda. Use a sentinel that raises.
+        def _should_not_call() -> object:
+            raise AssertionError("discover_plugin_hooks called despite --no-enable-plugin-hooks")
+
+        monkeypatch.setattr(cli_module, "discover_plugin_hooks", _should_not_call)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "/x args", "--no-enable-plugin-hooks"])
+        # discovery off → slack_notify unknown → exit 1.
+        assert result.exit_code == 1
+        assert "Unknown hook" in result.stderr

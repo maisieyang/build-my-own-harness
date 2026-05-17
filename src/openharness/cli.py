@@ -59,6 +59,7 @@ from openharness.bundles import (
     FilesystemBundleStore,
     UnknownBundleError,
     apply_bundle_to_context,
+    discover_plugin_hooks,
 )
 from openharness.commands import (
     FilesystemCommandStore,
@@ -152,6 +153,7 @@ async def _run_ask(
     sandbox_network_override: str | None = None,
     sandbox_memory_override: str | None = None,
     sandbox_cpus_override: float | None = None,
+    enable_plugin_hooks_override: bool | None = None,
 ) -> None:
     """Build the QueryContext, run the loop, render the events.
 
@@ -182,6 +184,15 @@ async def _run_ask(
     sandbox_memory = sandbox_memory_override or settings.sandbox_memory
     sandbox_cpus = (
         sandbox_cpus_override if sandbox_cpus_override is not None else settings.sandbox_cpus
+    )
+    # P5e-T3: plugin hook discovery is opt-in. CLI flag overrides
+    # Settings. When OFF, ``discover_plugin_hooks()`` is never called
+    # and bundle ``hooks:`` resolves only against BUILTIN_HOOKS — even
+    # if plugin packages are installed.
+    enable_plugin_hooks = (
+        enable_plugin_hooks_override
+        if enable_plugin_hooks_override is not None
+        else settings.enable_plugin_hooks
     )
 
     # P3-T5.5e:configure logging FIRST so any subsequent error path
@@ -235,6 +246,14 @@ async def _run_ask(
         if bundle is None:
             available = sorted(bundle_store.discover().keys())
             raise UnknownBundleError(invoked_command.mode, available=available)
+
+    # P5e-T3: Plugin hook discovery. Runs ONCE when the user opted in
+    # via Settings or ``--enable-plugin-hooks``. Cheap (one
+    # ``importlib.metadata.entry_points`` call); cached implicitly
+    # because discovery happens before ``apply_bundle_to_context``.
+    # Empty dict when flag off — bundle resolution falls back to
+    # BUILTIN_HOOKS only.
+    plugin_hook_catalog = discover_plugin_hooks() if enable_plugin_hooks else {}
 
     client = _build_client(settings)
     registry = create_default_tool_registry()
@@ -307,6 +326,7 @@ async def _run_ask(
                 hook_registry=hook_registry,
                 settings=settings,
                 system_prompt="",  # placeholder; prompt logic lives below
+                plugin_hook_catalog=plugin_hook_catalog,
             )
             effective_registry = application.tool_registry
             effective_hook_registry = application.hook_registry
@@ -529,6 +549,17 @@ def ask(
             "0.5 = half). Overrides OPENHARNESS_SANDBOX_CPUS (default 1.0)."
         ),
     ),
+    enable_plugin_hooks: bool | None = typer.Option(
+        None,
+        "--enable-plugin-hooks/--no-enable-plugin-hooks",
+        help=(
+            "Enable discovery of third-party hooks declared via the "
+            "``openharness.hooks`` Python entry-point group (Phase 5e). "
+            "Default OFF — even if plugin packages are installed, their "
+            "hooks are not loaded unless this flag is set. Overrides "
+            "OPENHARNESS_ENABLE_PLUGIN_HOOKS."
+        ),
+    ),
 ) -> None:
     """Stream a single LLM response (with tool dispatch) to stdout."""
     if auto and dry_run:
@@ -566,6 +597,7 @@ def ask(
                 sandbox_network_override=sandbox_network,
                 sandbox_memory_override=sandbox_memory,
                 sandbox_cpus_override=sandbox_cpus,
+                enable_plugin_hooks_override=enable_plugin_hooks,
             )
         )
     except ValidationError as exc:
