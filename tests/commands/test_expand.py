@@ -1,4 +1,9 @@
-"""Tests for ``expand_command`` + ``UnknownCommandError`` — P5b-T2."""
+"""Tests for ``expand_command`` + ``UnknownCommandError`` — P5b-T2.
+
+P5d-T4 adds tests for :func:`resolve_command_invocation` (returns the
+expanded prompt + the resolved Command so callers can inspect
+``Command.mode`` for bundle loading).
+"""
 
 from __future__ import annotations
 
@@ -12,6 +17,7 @@ from openharness.commands import (
     EmptyCommandStore,
     UnknownCommandError,
     expand_command,
+    resolve_command_invocation,
 )
 
 if TYPE_CHECKING:
@@ -35,12 +41,13 @@ class _InMemoryStore:
         return self._commands.get(name)
 
 
-def _make_command(name: str, body: str, *, tmp_path: Path) -> Command:
+def _make_command(name: str, body: str, *, tmp_path: Path, mode: str | None = None) -> Command:
     return Command(
         name=name,
         description=f"{name} command",
         body=body,
         source_path=tmp_path / f"{name}.md",
+        mode=mode,
     )
 
 
@@ -183,3 +190,36 @@ class TestUnknownCommand:
         with pytest.raises(UnknownCommandError) as exc_info:
             expand_command("/", store)
         assert exc_info.value.name == ""
+
+
+class TestResolveCommandInvocation:
+    """P5d-T4: ``resolve_command_invocation`` returns ``(prompt, Command|None)``."""
+
+    def test_passthrough_returns_none_command(self, tmp_path: Path) -> None:
+        prompt, command = resolve_command_invocation("regular prompt", EmptyCommandStore())
+        assert prompt == "regular prompt"
+        assert command is None
+
+    def test_invocation_returns_command(self, tmp_path: Path) -> None:
+        cmd = _make_command(
+            "review", "Please review:\n{args}\n", tmp_path=tmp_path, mode="code-review"
+        )
+        store = _store_with([cmd])
+
+        prompt, command = resolve_command_invocation("/review last commit", store)
+        assert prompt == "Please review:\nlast commit\n"
+        assert command is cmd
+        assert command.mode == "code-review"
+
+    def test_invocation_no_mode_field(self, tmp_path: Path) -> None:
+        cmd = _make_command("plain", "body", tmp_path=tmp_path)  # mode=None
+        store = _store_with([cmd])
+
+        _prompt, command = resolve_command_invocation("/plain args", store)
+        assert command is not None
+        assert command.mode is None
+
+    def test_unknown_raises(self, tmp_path: Path) -> None:
+        store = EmptyCommandStore()
+        with pytest.raises(UnknownCommandError):
+            resolve_command_invocation("/missing args", store)

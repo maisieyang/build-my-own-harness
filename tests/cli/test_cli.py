@@ -1271,3 +1271,177 @@ class TestSandboxFlags:
         ctx = captured.context
         # HostExecution wins because --no-sandbox CLI flag overrides env.
         assert isinstance(ctx.execution_env, HostExecution)  # type: ignore[attr-defined]
+
+
+# --------------------------------------------------------------------------- #
+# P5d-T4: ModeBundle integration                                              #
+# --------------------------------------------------------------------------- #
+
+
+def _write_bundle_file(
+    directory: Path,
+    name: str,
+    description: str,
+    *,
+    system_prompt: str | None = None,
+    tools_whitelist: list[str] | None = None,
+    deny_paths: list[str] | None = None,
+    hooks: list[str] | None = None,
+) -> None:
+    """Author a ModeBundle markdown file with the requested overrides."""
+    directory.mkdir(parents=True, exist_ok=True)
+    lines = ["---", f"name: {name}", f"description: {description}"]
+    if system_prompt is not None:
+        lines.append("system_prompt: |")
+        for body_line in system_prompt.splitlines():
+            lines.append(f"  {body_line}")
+    if tools_whitelist is not None:
+        lines.append("tools:")
+        lines.append(f"  whitelist: {tools_whitelist!r}".replace("'", '"'))
+    if deny_paths is not None:
+        lines.append("deny_paths:")
+        for p in deny_paths:
+            lines.append(f"  - {p!r}".replace("'", '"'))
+    if hooks is not None:
+        lines.append(f"hooks: {hooks!r}".replace("'", '"'))
+    lines.append("---")
+    (directory / f"{name}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+class TestBundles:
+    """``mode:`` field on a slash command resolves a ModeBundle and applies
+    its 4-layer overrides to the QueryContext. ``UnknownBundleError`` UX
+    surfaces a friendly error for the typo case.
+    """
+
+    def test_slash_command_without_mode_runs_unchanged(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # Regression: P5b's slash-command flow keeps working when no
+        # ``mode:`` is present — no bundle load attempted.
+        _set_minimum_env(monkeypatch)
+        project = _isolate_skills_dirs(monkeypatch, tmp_path)
+        _write_command_file(
+            project / ".openharness" / "commands",
+            "plain",
+            "plain cmd",
+            "expanded body",
+        )
+
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "/plain args"])
+        assert result.exit_code == 0
+        # No bundle → registry is the base ToolRegistry, NOT a WhitelistRegistry.
+        from openharness.bundles import WhitelistRegistry
+
+        ctx = captured.context
+        assert not isinstance(ctx.tool_registry, WhitelistRegistry)  # type: ignore[attr-defined]
+
+    def test_mode_field_applies_all_four_layers(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from openharness.bundles import WhitelistRegistry
+        from openharness.bundles.hooks import audit_log, deny_writes
+
+        _set_minimum_env(monkeypatch)
+        project = _isolate_skills_dirs(monkeypatch, tmp_path)
+        # Command references a bundle.
+        cmd_path = project / ".openharness" / "commands"
+        cmd_path.mkdir(parents=True, exist_ok=True)
+        (cmd_path / "review.md").write_text(
+            "---\nname: review\ndescription: code review\nmode: code-review\n---\n"
+            "Review:\n{args}\n",
+            encoding="utf-8",
+        )
+        # Bundle with all 4 layers.
+        _write_bundle_file(
+            project / ".openharness" / "bundles",
+            "code-review",
+            "read-only code review mode",
+            system_prompt="You are a code reviewer. Read-only.",
+            tools_whitelist=["Read", "Grep"],
+            deny_paths=["secrets/**"],
+            hooks=["audit_log", "deny_writes"],
+        )
+
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "/review the diff"])
+        assert result.exit_code == 0, result.stderr
+        ctx = captured.context
+        # Layer 1: system_prompt replaced. YAML ``|`` block scalar
+        # preserves a trailing newline — strip for the assertion.
+        assert ctx.system_prompt.rstrip() == "You are a code reviewer. Read-only."  # type: ignore[attr-defined]
+        # Layer 2: tool_registry is the whitelist wrapper; only Read+Grep visible.
+        assert isinstance(ctx.tool_registry, WhitelistRegistry)  # type: ignore[attr-defined]
+        names = sorted(t.name for t in ctx.tool_registry.list_tools())  # type: ignore[attr-defined]
+        assert names == ["Grep", "Read"]
+        # Layer 3a: deny_paths reach the permission_checker (via Settings).
+        assert "secrets/**" in ctx.permission_checker._deny_paths  # type: ignore[attr-defined]
+        # Layer 3b: bundle's hooks are in the hook_registry.
+        post = ctx.hook_registry.get("PostToolUse")  # type: ignore[attr-defined]
+        pre = ctx.hook_registry.get("PreToolUse")  # type: ignore[attr-defined]
+        assert audit_log in post
+        assert deny_writes in pre
+
+    def test_unknown_bundle_exits_with_friendly_error(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        project = _isolate_skills_dirs(monkeypatch, tmp_path)
+        # Command refs a bundle that doesn't exist.
+        cmd_path = project / ".openharness" / "commands"
+        cmd_path.mkdir(parents=True, exist_ok=True)
+        (cmd_path / "review.md").write_text(
+            "---\nname: review\ndescription: x\nmode: nonexistent\n---\nbody\n",
+            encoding="utf-8",
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "/review args"])
+        assert result.exit_code == 1
+        assert "Unknown bundle" in result.stderr
+        assert "nonexistent" in result.stderr
+
+    def test_bundle_without_system_prompt_rebuilds_against_whitelist(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # When bundle has whitelist but no system_prompt, the system prompt
+        # is rebuilt against the EFFECTIVE registry — the LLM sees only the
+        # whitelisted tools in its catalog.
+        _set_minimum_env(monkeypatch)
+        project = _isolate_skills_dirs(monkeypatch, tmp_path)
+        cmd_path = project / ".openharness" / "commands"
+        cmd_path.mkdir(parents=True, exist_ok=True)
+        (cmd_path / "ro.md").write_text(
+            "---\nname: ro\ndescription: ro\nmode: readonly\n---\nbody\n",
+            encoding="utf-8",
+        )
+        _write_bundle_file(
+            project / ".openharness" / "bundles",
+            "readonly",
+            "read-only tools",
+            tools_whitelist=["Read"],
+        )
+
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "/ro x"])
+        assert result.exit_code == 0
+        ctx = captured.context
+        # System prompt was rebuilt — catalog should mention Read but NOT Write.
+        assert "**Read**" in ctx.system_prompt  # type: ignore[attr-defined]
+        assert "**Write**" not in ctx.system_prompt  # type: ignore[attr-defined]

@@ -87,10 +87,11 @@ class TestParseCommandHappy:
         assert cmd.body == "Line 1\n\nLine 3 with   spaces\n"
 
     def test_extra_frontmatter_fields_ignored(self, tmp_path: Path) -> None:
-        # Forward-compat: Phase 5d ``mode:`` / ``hooks:`` fields tolerated.
+        # P5d-T4: ``mode:`` is now consumed (see TestCommandModeField).
+        # ``hooks:`` remains forward-compat-tolerated.
         path = tmp_path / "x.md"
         path.write_text(
-            "---\nname: x\ndescription: y\nmode: stateful\nhooks: [audit_log]\n---\nbody\n",
+            "---\nname: x\ndescription: y\nhooks: [audit_log]\n---\nbody\n",
             encoding="utf-8",
         )
         cmd = parse_command(path)
@@ -157,3 +158,73 @@ class TestParseCommandErrors:
         cmd = parse_command(path)
         assert cmd is not None
         assert cmd.body == ""
+
+
+class TestCommandModeField:
+    """P5d-T4: ``Command.mode`` optional reference to a ModeBundle."""
+
+    def test_mode_defaults_to_none(self, tmp_path: Path) -> None:
+        c = Command(name="x", description="d", body="b", source_path=tmp_path / "x.md")
+        assert c.mode is None
+
+    def test_mode_accepts_valid_identifier(self, tmp_path: Path) -> None:
+        c = Command(
+            name="review",
+            description="d",
+            body="b",
+            source_path=tmp_path / "x.md",
+            mode="code-review",
+        )
+        assert c.mode == "code-review"
+
+    @pytest.mark.parametrize(
+        "mode",
+        ["", "1abc", "_priv", "-dash", "has space", "has.dot", "has/slash"],
+    )
+    def test_invalid_mode_identifier_rejected(self, mode: str, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="invalid mode"):
+            Command(
+                name="x",
+                description="d",
+                body="b",
+                source_path=tmp_path / "x.md",
+                mode=mode,
+            )
+
+    def test_parse_command_reads_mode(self, tmp_path: Path) -> None:
+        path = tmp_path / "x.md"
+        path.write_text(
+            "---\nname: x\ndescription: d\nmode: code-review\n---\nbody\n",
+            encoding="utf-8",
+        )
+        cmd = parse_command(path)
+        assert cmd is not None
+        assert cmd.mode == "code-review"
+
+    def test_parse_command_no_mode_field(self, tmp_path: Path) -> None:
+        path = tmp_path / "x.md"
+        path.write_text("---\nname: x\ndescription: d\n---\nbody\n", encoding="utf-8")
+        cmd = parse_command(path)
+        assert cmd is not None
+        assert cmd.mode is None
+
+    def test_parse_command_mode_wrong_type_drops(self, tmp_path: Path) -> None:
+        # Non-string ``mode:`` → warn + drop (cmd still loads with mode=None).
+        path = tmp_path / "x.md"
+        path.write_text(
+            "---\nname: x\ndescription: d\nmode: [list, not, string]\n---\nbody\n",
+            encoding="utf-8",
+        )
+        cmd = parse_command(path)
+        assert cmd is not None
+        assert cmd.mode is None
+
+    def test_parse_command_invalid_mode_identifier_returns_none(self, tmp_path: Path) -> None:
+        # Invalid identifier (e.g. space) → ValueError from __post_init__
+        # → parse_command returns None.
+        path = tmp_path / "x.md"
+        path.write_text(
+            "---\nname: x\ndescription: d\nmode: 'has space'\n---\nbody\n",
+            encoding="utf-8",
+        )
+        assert parse_command(path) is None

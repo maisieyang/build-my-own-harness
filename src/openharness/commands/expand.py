@@ -26,6 +26,12 @@ Three placement rules for args:
 - Body has no ``{args}`` placeholder + non-empty args → appended on a
   new line at end of body (so args never silently vanish).
 - Empty args + ``{args}`` placeholder → substituted with empty string.
+
+P5d-T4: :func:`resolve_command_invocation` exposes the resolved
+``Command`` alongside the substituted prompt so callers can inspect
+``Command.mode`` for bundle loading. :func:`expand_command` is now a
+thin wrapper that discards the Command — existing P5b callers stay
+unchanged.
 """
 
 from __future__ import annotations
@@ -35,21 +41,26 @@ from typing import TYPE_CHECKING
 from openharness.commands.errors import UnknownCommandError
 
 if TYPE_CHECKING:
+    from openharness.commands.model import Command
     from openharness.commands.store import CommandStore
 
 
 _PLACEHOLDER = "{args}"
 
 
-def expand_command(prompt: str, store: CommandStore) -> str:
-    """Resolve ``prompt`` into the final user message.
+def resolve_command_invocation(prompt: str, store: CommandStore) -> tuple[str, Command | None]:
+    """Resolve a possible slash command invocation.
 
-    No leading ``/`` → return ``prompt`` unchanged(pass-through path).
-    Leading ``/`` → parse ``<name> <args...>``, look up, substitute.
-    Unknown name → :class:`UnknownCommandError`.
+    Returns ``(prompt_unchanged, None)`` if ``prompt`` lacks a leading
+    ``/`` (pass-through path).
+    Returns ``(substituted_body, command)`` for a successful invocation;
+    the caller can inspect ``command.mode`` to decide whether to load
+    a ModeBundle.
+    Raises :class:`UnknownCommandError` when ``/`` is present but no
+    command matches.
     """
     if not prompt.startswith("/"):
-        return prompt
+        return prompt, None
 
     name, args = _split_invocation(prompt)
     command = store.get(name)
@@ -57,7 +68,19 @@ def expand_command(prompt: str, store: CommandStore) -> str:
         available = sorted(store.discover().keys())
         raise UnknownCommandError(name, available=available)
 
-    return _substitute(command.body, args)
+    return _substitute(command.body, args), command
+
+
+def expand_command(prompt: str, store: CommandStore) -> str:
+    """Resolve ``prompt`` into the final user message (P5b compat shim).
+
+    Wraps :func:`resolve_command_invocation` and discards the Command
+    object — preserves the P5b call surface for callers that only need
+    the substituted prompt. Phase 5d's CLI bootstrap uses
+    :func:`resolve_command_invocation` directly to access ``Command.mode``.
+    """
+    expanded, _command = resolve_command_invocation(prompt, store)
+    return expanded
 
 
 def _split_invocation(prompt: str) -> tuple[str, str]:

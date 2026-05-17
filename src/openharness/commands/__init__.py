@@ -48,7 +48,7 @@ Public API:
 from __future__ import annotations
 
 from openharness.commands.errors import UnknownCommandError
-from openharness.commands.expand import expand_command
+from openharness.commands.expand import expand_command, resolve_command_invocation
 from openharness.commands.model import Command, parse_command
 from openharness.commands.store import (
     CommandStore,
@@ -64,4 +64,5 @@ __all__ = [
     "UnknownCommandError",
     "expand_command",
     "parse_command",
+    "resolve_command_invocation",
 ]

@@ -55,10 +55,15 @@ from openharness.api import (
     RateLimitFailure,
     RequestFailure,
 )
+from openharness.bundles import (
+    FilesystemBundleStore,
+    UnknownBundleError,
+    apply_bundle_to_context,
+)
 from openharness.commands import (
     FilesystemCommandStore,
     UnknownCommandError,
-    expand_command,
+    resolve_command_invocation,
 )
 from openharness.compaction import TruncateToolResultHook
 from openharness.config import Settings
@@ -188,23 +193,48 @@ async def _run_ask(
     # the original ``/cmd ...`` form. Convention-driven storage per
     # decisions/14 C2 (same shape as Skills L2).
     #
-    # ``--no-commands`` is a hard bypass:expand_command is NOT called,
-    # so the slash prefix flows verbatim to the LLM. Calling
-    # ``expand_command`` with an :class:`EmptyCommandStore` would instead
-    # raise :class:`UnknownCommandError` on any ``/<x>`` prompt — wrong
-    # behavior for the escape hatch (which is meant for prompts that
-    # legitimately start with ``/``).
+    # ``--no-commands`` is a hard bypass: command resolution is NOT
+    # called, so the slash prefix flows verbatim to the LLM. Calling
+    # ``resolve_command_invocation`` with an :class:`EmptyCommandStore`
+    # would instead raise :class:`UnknownCommandError` on any ``/<x>``
+    # prompt — wrong behavior for the escape hatch (which is meant for
+    # prompts that legitimately start with ``/``).
     #
     # ``UnknownCommandError`` from the live path is intentionally NOT
     # caught here — it propagates to the synchronous ``ask`` command's
     # except chain so the user-facing error UX (with available catalog)
     # renders before any LLM call is attempted.
+    #
+    # P5d-T4: ``resolve_command_invocation`` also surfaces the resolved
+    # ``Command`` so we can read ``Command.mode`` for ModeBundle loading
+    # (Phase 5d's first cross-layer composition tenant).
+    invoked_command = None
     if not no_commands:
         command_store = FilesystemCommandStore(
             global_dir=Path.home() / ".openharness" / "commands",
             project_dir=Path.cwd() / ".openharness" / "commands",
         )
-        prompt = expand_command(prompt, command_store)
+        prompt, invoked_command = resolve_command_invocation(prompt, command_store)
+
+    # P5d-T4: ModeBundle load. If the resolved command has a ``mode:``
+    # field, load the named bundle from the same global/project layered
+    # store as commands + skills. Skip-not-fail does NOT apply here —
+    # a slash command that names a nonexistent bundle is a hard error
+    # (:class:`UnknownBundleError`) because the user explicitly asked
+    # for the bundle's mode. The actual ``apply_bundle_to_context``
+    # call lives below, AFTER the base ToolRegistry + HookRegistry are
+    # assembled, so the bundle composes against the fully-built
+    # primitives (including MCP adapters + LoadSkill).
+    bundle = None
+    if invoked_command is not None and invoked_command.mode is not None:
+        bundle_store = FilesystemBundleStore(
+            global_dir=Path.home() / ".openharness" / "bundles",
+            project_dir=Path.cwd() / ".openharness" / "bundles",
+        )
+        bundle = bundle_store.get(invoked_command.mode)
+        if bundle is None:
+            available = sorted(bundle_store.discover().keys())
+            raise UnknownBundleError(invoked_command.mode, available=available)
 
     client = _build_client(settings)
     registry = create_default_tool_registry()
@@ -245,11 +275,6 @@ async def _run_ask(
         if skill_store.discover():
             registry.register(LoadSkillTool(skill_store))
 
-        # System prompt is built AFTER MCP tools + LoadSkill register so
-        # the LLM's tool catalog includes them. Skill catalog is injected
-        # by ``build_system_prompt`` itself via the ``skill_store`` kwarg.
-        system_prompt = build_system_prompt(registry.to_api_schema(), env, skill_store=skill_store)
-
         # P4-T4.4b:Layer 1 default registration. When ``auto_truncate`` is on
         # AND the cap is positive, the framework auto-registers
         # ``TruncateToolResultHook`` so users get sensible compaction without
@@ -261,6 +286,43 @@ async def _run_ask(
             hook_registry.register(
                 "PostToolUse",
                 TruncateToolResultHook(cap_tokens=tool_result_cap, model=model),
+            )
+
+        # P5d-T4: bundle composition. Applied AFTER base registry +
+        # base hook_registry are assembled so the bundle composes
+        # against the fully-built primitives (MCP adapters + LoadSkill
+        # in registry; auto-truncate hook in hook_registry). Layer 2
+        # (whitelist) wraps registry; Layer 3 (deny_paths) augments
+        # settings; Layer 3 (hooks) registers into a clone of
+        # hook_registry. Layer 1 (system_prompt) handled below — bundle
+        # overrides ours, else we build against the EFFECTIVE registry
+        # so the LLM's tool catalog reflects the whitelist.
+        effective_registry = registry
+        effective_hook_registry = hook_registry
+        effective_settings = settings
+        if bundle is not None:
+            application = apply_bundle_to_context(
+                bundle=bundle,
+                tool_registry=registry,
+                hook_registry=hook_registry,
+                settings=settings,
+                system_prompt="",  # placeholder; prompt logic lives below
+            )
+            effective_registry = application.tool_registry
+            effective_hook_registry = application.hook_registry
+            effective_settings = application.settings
+
+        # System prompt is built AFTER MCP tools + LoadSkill register so
+        # the LLM's tool catalog includes them. Skill catalog is injected
+        # by ``build_system_prompt`` itself via the ``skill_store`` kwarg.
+        # P5d-T4: bundle.system_prompt REPLACES base when set; otherwise
+        # build against EFFECTIVE registry so the tool catalog reflects
+        # any whitelist filter.
+        if bundle is not None and bundle.system_prompt is not None:
+            system_prompt = bundle.system_prompt
+        else:
+            system_prompt = build_system_prompt(
+                effective_registry.to_api_schema(), env, skill_store=skill_store
             )
 
         # P7b-T2 (D18.2): conditionally enter SandboxExecution.
@@ -284,12 +346,14 @@ async def _run_ask(
 
         context = QueryContext(
             api_client=client,
-            tool_registry=registry,
+            tool_registry=effective_registry,
             # P3-T3.3e:replaced Phase 2 DenyListChecker (Bash-only) with the
             # full three-Tier checker (hardcoded paths + user globs + mode-based +
-            # carry-over Bash deny-list).
-            permission_checker=TierBasedPermissionChecker(registry, settings),
-            hook_registry=hook_registry,
+            # carry-over Bash deny-list). P5d-T4: TierBasedPermissionChecker
+            # reads ``settings.deny_paths`` which already includes the bundle's
+            # extra patterns (via ``effective_settings``).
+            permission_checker=TierBasedPermissionChecker(effective_registry, effective_settings),
+            hook_registry=effective_hook_registry,
             system_prompt=system_prompt,
             cwd=env.cwd,
             model=model,
@@ -550,6 +614,13 @@ def ask(
         # The message already contains the available catalog (formatted
         # by UnknownCommandError.__init__) so no separate Hint line.
         typer.echo(f"Unknown command: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except UnknownBundleError as exc:
+        # P5d-T4: slash command's ``mode:`` references a bundle that
+        # isn't registered (or an unknown hook name inside a bundle).
+        # Same UX shape as UnknownCommandError: prefix + embedded
+        # catalog from the exception message + exit 1.
+        typer.echo(f"Unknown {exc.kind}: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     except OpenHarnessError as exc:
         # Root catch-all for any OpenHarness error not handled above:
