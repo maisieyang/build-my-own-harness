@@ -288,3 +288,102 @@ class TestFullBundle:
         # Layer 3b
         assert audit_log in result.hook_registry.get("PostToolUse")
         assert deny_writes in result.hook_registry.get("PreToolUse")
+
+
+# --------------------------------------------------------------------------- #
+# P5e-T2: plugin_hook_catalog kwarg                                           #
+# --------------------------------------------------------------------------- #
+
+
+class TestPluginHookCatalog:
+    """Phase 5e: ``apply_bundle_to_context(...,
+    plugin_hook_catalog=...)`` threads the catalog through to
+    :func:`resolve_hook` so bundle ``hook_names`` can reference
+    plugin-discovered hooks. Default ``None`` preserves Phase 5d
+    behavior byte-identical.
+    """
+
+    def test_default_none_preserves_phase_5d(self) -> None:
+        # Regression: omitting plugin_hook_catalog should behave
+        # identically to Phase 5d.
+        tr, hr, settings, prompt = _base_inputs()
+        bundle = _make_bundle(hook_names=("audit_log",))
+
+        result = apply_bundle_to_context(
+            bundle=bundle,
+            tool_registry=tr,
+            hook_registry=hr,
+            settings=settings,
+            system_prompt=prompt,
+        )
+        assert audit_log in result.hook_registry.get("PostToolUse")
+
+    def test_bundle_resolves_plugin_hook(self) -> None:
+        from openharness.bundles.hook_plugins import HookSpec
+
+        tr, hr, settings, prompt = _base_inputs()
+
+        async def slack_notify(ctx: object) -> None:
+            del ctx
+            return None
+
+        catalog = {
+            "slack_notify": HookSpec(event="PostToolUse", hook=slack_notify),
+        }
+        bundle = _make_bundle(hook_names=("audit_log", "slack_notify"))
+
+        result = apply_bundle_to_context(
+            bundle=bundle,
+            tool_registry=tr,
+            hook_registry=hr,
+            settings=settings,
+            system_prompt=prompt,
+            plugin_hook_catalog=catalog,
+        )
+        # Both built-in audit_log and plugin slack_notify registered.
+        post = result.hook_registry.get("PostToolUse")
+        assert audit_log in post
+        assert slack_notify in post
+
+    def test_unknown_plugin_hook_raises(self) -> None:
+        # Bundle references a name not in built-ins or plugin catalog.
+        tr, hr, settings, prompt = _base_inputs()
+        bundle = _make_bundle(hook_names=("missing_plugin",))
+
+        with pytest.raises(UnknownBundleError) as exc_info:
+            apply_bundle_to_context(
+                bundle=bundle,
+                tool_registry=tr,
+                hook_registry=hr,
+                settings=settings,
+                system_prompt=prompt,
+                plugin_hook_catalog={},
+            )
+        assert exc_info.value.kind == "hook"
+        assert exc_info.value.name == "missing_plugin"
+
+    def test_plugin_hook_only_in_catalog_resolves(self) -> None:
+        # Plugin hook name not in BUILTIN_HOOKS but in plugin catalog →
+        # bundle frontmatter resolves it correctly.
+        from openharness.bundles.hook_plugins import HookSpec
+
+        tr, hr, settings, prompt = _base_inputs()
+
+        async def budget_guard(ctx: object) -> None:
+            del ctx
+            return None
+
+        catalog = {
+            "budget_guard": HookSpec(event="PreApiCall", hook=budget_guard),
+        }
+        bundle = _make_bundle(hook_names=("budget_guard",))
+
+        result = apply_bundle_to_context(
+            bundle=bundle,
+            tool_registry=tr,
+            hook_registry=hr,
+            settings=settings,
+            system_prompt=prompt,
+            plugin_hook_catalog=catalog,
+        )
+        assert budget_guard in result.hook_registry.get("PreApiCall")

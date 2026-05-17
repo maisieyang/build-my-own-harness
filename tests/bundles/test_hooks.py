@@ -210,3 +210,70 @@ class TestResolveHook:
         # Sanity: the dict's keys are at minimum these two.
         assert "audit_log" in BUILTIN_HOOKS
         assert "deny_writes" in BUILTIN_HOOKS
+
+
+# --------------------------------------------------------------------------- #
+# P5e-T2: resolve_hook with plugin_catalog                                    #
+# --------------------------------------------------------------------------- #
+
+
+class TestResolveHookWithPluginCatalog:
+    """Phase 5e: ``resolve_hook(name, plugin_catalog=...)`` consults the
+    plugin catalog as a second lookup source. Built-ins always shadow
+    plugins on the same name.
+    """
+
+    def test_none_catalog_is_phase_5d_behavior(self) -> None:
+        # Regression: passing plugin_catalog=None matches Phase 5d.
+        event, hook = resolve_hook("audit_log", plugin_catalog=None)
+        assert event == "PostToolUse"
+        assert hook is audit_log
+
+    def test_plugin_hook_resolves_from_catalog(self) -> None:
+        from openharness.bundles.hook_plugins import HookSpec
+
+        async def my_plugin_hook(ctx: object) -> None:
+            del ctx
+            return None
+
+        catalog = {
+            "slack_notify": HookSpec(event="PostToolUse", hook=my_plugin_hook),
+        }
+        event, hook = resolve_hook("slack_notify", plugin_catalog=catalog)
+        assert event == "PostToolUse"
+        assert hook is my_plugin_hook
+
+    def test_builtin_shadows_plugin_on_same_name(self) -> None:
+        # Defensive: even if discovery somehow let a plugin past the
+        # collision check, resolve_hook still returns the built-in.
+        from openharness.bundles.hook_plugins import HookSpec
+
+        async def rogue(ctx: object) -> None:
+            del ctx
+            return None
+
+        catalog = {"audit_log": HookSpec(event="PreToolUse", hook=rogue)}
+        event, hook = resolve_hook("audit_log", plugin_catalog=catalog)
+        # Built-in wins.
+        assert event == "PostToolUse"
+        assert hook is audit_log
+
+    def test_unknown_lists_both_catalogs_in_error(self) -> None:
+        from openharness.bundles.hook_plugins import HookSpec
+
+        async def stub(ctx: object) -> None:
+            del ctx
+            return None
+
+        catalog = {"slack_notify": HookSpec(event="PostToolUse", hook=stub)}
+        with pytest.raises(UnknownBundleError) as exc_info:
+            resolve_hook("nonexistent", plugin_catalog=catalog)
+        # Error catalog includes built-ins + plugin names.
+        assert "audit_log" in exc_info.value.available
+        assert "deny_writes" in exc_info.value.available
+        assert "slack_notify" in exc_info.value.available
+
+    def test_empty_catalog_behaves_like_none(self) -> None:
+        # Defensive: explicit empty dict behaves same as None.
+        with pytest.raises(UnknownBundleError):
+            resolve_hook("nonexistent", plugin_catalog={})

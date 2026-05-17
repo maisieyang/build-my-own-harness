@@ -38,6 +38,7 @@ from openharness.bundles.registry import WhitelistRegistry
 from openharness.hooks import HookRegistry
 
 if TYPE_CHECKING:
+    from openharness.bundles.hook_plugins import HookSpec
     from openharness.bundles.model import Bundle
     from openharness.config.settings import Settings
     from openharness.hooks.events import HookEvent
@@ -80,12 +81,18 @@ def apply_bundle_to_context(
     hook_registry: HookRegistry,
     settings: Settings,
     system_prompt: str,
+    plugin_hook_catalog: dict[str, HookSpec] | None = None,
 ) -> BundleApplication:
     """Apply bundle's 4-layer overrides to a base set of primitives.
 
     Pure function — never mutates inputs. The base ``HookRegistry`` is
     cloned(not aliased)so subsequent registration on the returned
     chain doesn't bleed into the base.
+
+    P5e-T2: ``plugin_hook_catalog`` (default ``None``) threads through
+    to :func:`resolve_hook` so bundle ``hook_names`` can reference
+    plugin-discovered hooks when ``--enable-plugin-hooks`` is on.
+    Default ``None`` preserves Phase 5d behavior byte-identical.
     """
     new_prompt = bundle.system_prompt if bundle.system_prompt is not None else system_prompt
 
@@ -101,7 +108,7 @@ def apply_bundle_to_context(
 
     new_hooks = _clone_hook_registry(hook_registry)
     for name in bundle.hook_names:
-        event, hook_fn = resolve_hook(name)
+        event, hook_fn = resolve_hook(name, plugin_catalog=plugin_hook_catalog)
         new_hooks.register(event, hook_fn)
 
     return BundleApplication(

@@ -32,6 +32,7 @@ from openharness.hooks import (
 from openharness.observability.logging import get_logger
 
 if TYPE_CHECKING:
+    from openharness.bundles.hook_plugins import HookSpec
     from openharness.hooks import Hook
     from openharness.hooks.context import HookContext
 
@@ -104,13 +105,36 @@ BUILTIN_HOOKS: dict[str, tuple[HookEvent, Hook]] = {
 }
 
 
-def resolve_hook(name: str) -> tuple[HookEvent, Hook]:
-    """Look up a built-in hook by name.
+def resolve_hook(
+    name: str,
+    plugin_catalog: dict[str, HookSpec] | None = None,
+) -> tuple[HookEvent, Hook]:
+    """Look up a hook by name.
+
+    Lookup order(per decisions/18 D20.5):
+
+    1. :data:`BUILTIN_HOOKS` (framework hooks always shadow plugins)
+    2. ``plugin_catalog`` if provided (Phase 5e discovered hooks)
+    3. raise :class:`UnknownBundleError(kind="hook")`
+
+    The ``plugin_catalog`` kwarg defaults to ``None`` so all Phase 5d
+    callers stay byte-identical. When the CLI's ``--enable-plugin-hooks``
+    flag is on, the bootstrap discovers plugins via
+    :func:`discover_plugin_hooks` and passes the catalog through
+    :func:`apply_bundle_to_context` → ``_clone_hook_registry`` → here.
 
     Raises :class:`UnknownBundleError`(with ``kind="hook"``)on miss —
     same error type as nonexistent bundles so the CLI's error chain
-    handles both via one ``except UnknownBundleError`` arm.
+    handles both via one ``except UnknownBundleError`` arm. The
+    ``available`` list combines built-in + plugin names (sorted), so
+    a typo gets a complete catalog in stderr.
     """
-    if name not in BUILTIN_HOOKS:
-        raise UnknownBundleError(name, available=list(BUILTIN_HOOKS.keys()), kind="hook")
-    return BUILTIN_HOOKS[name]
+    if name in BUILTIN_HOOKS:
+        return BUILTIN_HOOKS[name]
+    if plugin_catalog is not None and name in plugin_catalog:
+        spec = plugin_catalog[name]
+        return (spec.event, spec.hook)
+    available = sorted(BUILTIN_HOOKS.keys())
+    if plugin_catalog:
+        available = sorted(set(available) | set(plugin_catalog.keys()))
+    raise UnknownBundleError(name, available=available, kind="hook")
