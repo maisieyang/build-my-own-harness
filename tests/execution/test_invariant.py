@@ -109,6 +109,116 @@ class TestPhase7aCrossCuttingInvariant:
             )
 
 
+class TestPhase5dCrossCuttingInvariant:
+    """ModeBundle identifiers (``Bundle`` / ``WhitelistRegistry`` /
+    ``BUILTIN_HOOKS`` / ``parse_bundle`` / ``apply_bundle_to_context`` /
+    ``UnknownBundleError``) must NOT appear in the protected zero-diff
+    subsystems. Phase 5d is the first cross-layer tenant — its
+    correctness rests entirely on composing primitives without modifying
+    any of them.
+
+    Allowed touch points: ``bundles/`` itself (where the identifiers
+    live) and ``cli.py`` (the only consumer that loads + applies a
+    bundle). Everywhere else must be zero-diff.
+    """
+
+    _PROTECTED_MODULES = (
+        "openharness.permissions.checker",
+        "openharness.permissions.tier_based",
+        "openharness.hooks.executor",
+        "openharness.hooks.registry",
+        "openharness.hooks.context",
+        "openharness.hooks.events",
+        "openharness.hooks.result",
+        "openharness.engine.context",
+        "openharness.engine.query",
+        "openharness.engine.messages",
+        "openharness.observability.context",
+        "openharness.observability.logging",
+        "openharness.observability.sanitize",
+        "openharness.mcp.client",
+        "openharness.mcp.adapter",
+        "openharness.mcp.pool",
+        "openharness.mcp.config",
+        "openharness.compaction.hook",
+        "openharness.compaction.truncate",
+        "openharness.compaction.tokenize",
+        "openharness.skills.model",
+        "openharness.skills.store",
+        "openharness.protocols.content",
+        "openharness.protocols.messages",
+        "openharness.protocols.requests",
+        "openharness.protocols.stream_events",
+        "openharness.protocols.tools",
+        "openharness.protocols.usage",
+        "openharness.tools.base",
+        "openharness.tools.read",
+        "openharness.tools.write",
+        "openharness.tools.edit",
+        "openharness.tools.grep",
+        "openharness.tools.bash",
+        "openharness.tools.load_skill",
+        "openharness.tools.spawn_agent",
+        "openharness.execution.base",
+        "openharness.execution.host",
+        "openharness.execution.sandbox",
+        "openharness.prompts",
+        # commands/model.py gains ``mode`` field — strict 1-additive-field
+        # diff vs Phase 7b close. Does NOT reference any bundle identifier.
+        "openharness.commands.model",
+        "openharness.commands.store",
+        "openharness.commands.expand",
+        "openharness.commands.errors",
+    )
+
+    _FORBIDDEN_IDENTIFIERS = (
+        "Bundle",
+        "WhitelistRegistry",
+        "BUILTIN_HOOKS",
+        "parse_bundle",
+        "apply_bundle_to_context",
+        "UnknownBundleError",
+        "BundleApplication",
+        "FilesystemBundleStore",
+        "EmptyBundleStore",
+        "BundleStore",
+        "resolve_hook",
+        # Internal module-name leakage check.
+        "openharness.bundles",
+    )
+
+    @staticmethod
+    def _strip_comments_and_docstrings(source: str) -> str:
+        cleaned = re.sub(r'"""[\s\S]*?"""', "", source, flags=re.MULTILINE)
+        cleaned = re.sub(r"'''[\s\S]*?'''", "", cleaned, flags=re.MULTILINE)
+        cleaned_lines = [line.split("#", 1)[0] for line in cleaned.splitlines()]
+        return "\n".join(cleaned_lines)
+
+    def test_protected_modules_do_not_reference_bundles(self) -> None:
+        for mod_name in self._PROTECTED_MODULES:
+            module = importlib.import_module(mod_name)
+            source = inspect.getsource(module)
+            code = self._strip_comments_and_docstrings(source)
+            for forbidden in self._FORBIDDEN_IDENTIFIERS:
+                pattern = rf"\b{re.escape(forbidden)}\b"
+                assert not re.search(pattern, code), (
+                    f"{mod_name} references {forbidden!r} — Phase 5d "
+                    f"cross-cutting invariant violated. ModeBundle must "
+                    f"compose primitives WITHOUT modifying any of the "
+                    f"layered abstractions."
+                )
+
+    def test_cli_is_the_consumer(self) -> None:
+        # Sanity inverse: cli.py is the ONE legitimate consumer that
+        # loads + applies bundles. If this drops out, T4 wiring broke.
+        from openharness import cli as cli_module
+
+        source = inspect.getsource(cli_module)
+        assert "apply_bundle_to_context" in source
+        assert "FilesystemBundleStore" in source
+        assert "UnknownBundleError" in source
+
+
 class TestExecutionEnvironmentSubstrateSwap:
     """Demonstrates the substrate swap actually works end-to-end via
     QueryContext + ToolExecutionContext flow — orthogonal to the

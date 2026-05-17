@@ -73,7 +73,7 @@ as `commands/` (Phase 5b) and `skills/` (Phase 5c).
 
 ---
 
-### P5d-T2: `BUILTIN_HOOKS` registry — `audit_log` + `deny_writes` 🔜 NEXT
+### P5d-T2: `BUILTIN_HOOKS` registry — `audit_log` + `deny_writes` ✅
 
 **Description**: Phase 5d's 2 framework-provided hooks. Each is a small
 async callable (matches `Hook` Protocol from P3-T4) registered into a
@@ -117,7 +117,7 @@ module-level dict so bundle frontmatter can reference them by name.
 
 ---
 
-### P5d-T3: `WhitelistRegistry` + bundle application logic
+### P5d-T3: `WhitelistRegistry` + bundle application logic ✅
 
 **Description**: The bridge layer — wrapping ToolRegistry for tool
 filter (D19.6); helper function that takes a bundle and produces the
@@ -161,7 +161,7 @@ QueryContext modifications.
 
 ---
 
-### P5d-T4: CLI integration + Command.mode field
+### P5d-T4: CLI integration + Command.mode field ✅
 
 **Description**: `commands/model.py` gains optional `mode: str | None
 = None` field. `cli._run_ask` loads the bundle when present + applies
@@ -214,45 +214,43 @@ error UX similar to `UnknownCommandError` (P5b-T3).
 
 ---
 
-### P5d-T5: Cross-cutting invariant + README + retro
+### P5d-T5: Cross-cutting invariant + README + retro ✅
 
 **Description**: Extended structural invariant + git-diff verification +
 docs + DoD closeout.
 
 **Acceptance**:
-- [ ] `tests/execution/test_invariant.py` extended forbidden set:
-  add `Bundle`, `WhitelistRegistry`, `BUILTIN_HOOKS`, `parse_bundle`,
-  `apply_bundle_to_context`, `UnknownBundleError`. Verify 22+
-  protected modules have zero references.
-- [ ] **Formal git-diff invariant verification** (in retro):
-  - permissions/ → 0 lines vs Phase 7b close
-  - hooks/ → 0 lines (hook_registry unchanged; bundle's hooks register
-    via existing API)
-  - engine/ → 0 lines
-  - observability/ → 0 lines
-  - mcp/ → 0 lines
-  - compaction/ → 0 lines
-  - skills/ → 0 lines
-  - protocols/ → 0 lines
-  - tools/ → 0 lines
-  - execution/ → 0 lines
-  - commands/model.py → 1 additive field (`mode`)
-- [ ] `bundles/` module ≥ 95% coverage
-- [ ] Total coverage ≥ 95%
-- [ ] README "Phase 5d — ModeBundle" section with:
-  - Authoring example (full 4-layer bundle)
-  - How slash commands reference bundles (`mode:` field)
-  - Built-in hooks (`audit_log` / `deny_writes`)
-  - Cross-layer invariant explanation
-- [ ] `learnings/phase-5d.md` retro focusing on:
-  - **First cross-layer tenant** — abstraction composes
-  - "Bundle as QueryContext factory" pattern (existing primitives
-    composed by a coordinator)
-  - Why named hooks built-in for MVP (Phase 5e adds plugin loading)
-  - Hook registration ordering: bundle's hooks fire AFTER user's
-    programmatically-registered hooks (chain order matters for deny
-    semantics)
-- [ ] Phase 5d DoD checklist all green
+- [x] `tests/execution/test_invariant.py` extended forbidden set: added
+  `TestPhase5dCrossCuttingInvariant` with 46 protected modules + 12
+  forbidden identifiers (`Bundle`, `WhitelistRegistry`, `BUILTIN_HOOKS`,
+  `parse_bundle`, `apply_bundle_to_context`, `UnknownBundleError`,
+  `BundleApplication`, `FilesystemBundleStore`, `EmptyBundleStore`,
+  `BundleStore`, `resolve_hook`, `openharness.bundles`).
+- [x] **Formal git-diff invariant verification** (in retro): vs Phase
+  7b close (`57f273b`):
+  - permissions/ → **0 lines** ✓
+  - hooks/ → **0 lines** ✓
+  - engine/ → **0 lines** ✓
+  - observability/ → **0 lines** ✓
+  - mcp/ → **0 lines** ✓
+  - compaction/ → **0 lines** ✓
+  - skills/ → **0 lines** ✓
+  - protocols/ → **0 lines** ✓
+  - tools/ → **0 lines** ✓
+  - execution/ → **0 lines** ✓
+  - commands/model.py → 1 additive field (`mode`) ✓
+- [x] `bundles/` module ≥ 95% coverage (96%+ on all files)
+- [x] Total coverage ≥ 95% (97.06%)
+- [x] README "Phase 5d — ModeBundle" section authored with full
+  authoring example, slash-command trigger explanation, built-in
+  hooks documentation, cross-layer invariant claim.
+- [x] `learnings/phase-5d.md` retro authored covering: first
+  cross-layer tenant; Bundle-as-QueryContext-factory pattern;
+  subclass-vs-Protocol decision driven by invariant; built-in hooks
+  vs plugin discovery node; rule-of-three triggering for
+  markdown_store/ (deferred to Phase 8); `deny_writes` passthrough
+  semantics; "what 5d didn't do and why".
+- [x] Phase 5d DoD checklist all green
 
 **Files**:
 - `tests/execution/test_invariant.py` (extend forbidden set)

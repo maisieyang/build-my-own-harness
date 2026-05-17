@@ -629,6 +629,108 @@ Only ``execution/sandbox.py`` (new) + `cli.py` (+1
 were touched. The Phase 7a abstraction's payoff: Phase 7b is **pure
 plug-in work**.
 
+### Phase 5d features — ModeBundle (the first cross-layer tenant)
+
+Phase 5d ships **ModeBundle** — the first feature that composes
+multiple existing layers (system prompt + tool catalog + permissions +
+hooks) into one named "mode" the user can invoke via a slash command.
+
+The bundle is a markdown file with YAML frontmatter declaring up to
+four layer overrides:
+
+```markdown
+---
+name: code-review
+description: Read-only code review mode with audit logging
+system_prompt: |
+  You are a code reviewer. Focus on correctness, readability, security.
+  Never modify files.
+tools:
+  whitelist: [Read, Grep, LoadSkill]
+deny_paths:
+  - secrets/**
+  - "*.env"
+hooks:
+  - audit_log
+  - deny_writes
+---
+```
+
+Stored under ``~/.openharness/bundles/`` (global) or
+``<cwd>/.openharness/bundles/`` (project). Project overrides global on
+the same name — same two-layer convention as Skills (5c) and Commands
+(5b).
+
+**How to trigger one** — a slash command's frontmatter references the
+bundle via a ``mode:`` field:
+
+```markdown
+---
+name: review
+description: Code review mode (read-only)
+mode: code-review
+---
+Review the following changes:
+
+{args}
+```
+
+When the user runs ``oh ask "/review last 3 commits"``:
+
+1. ``cli._run_ask`` resolves the slash command via
+   ``resolve_command_invocation`` — gets the substituted prompt + the
+   ``Command`` object.
+2. If ``Command.mode`` is set, ``FilesystemBundleStore`` looks up the
+   named bundle. Unknown bundle → ``UnknownBundleError`` → exit 1
+   with "Unknown bundle: <name>; available: ..." stderr.
+3. ``apply_bundle_to_context`` composes the 4 layers against the base
+   primitives (already-built tool registry + hook registry + Settings):
+   - **Layer 1 — system_prompt**: REPLACES base entirely if bundle
+     specifies it; else base prompt is rebuilt against the EFFECTIVE
+     tool registry so the catalog reflects any whitelist.
+   - **Layer 2 — tool catalog**: ``WhitelistRegistry`` subclasses
+     ``ToolRegistry`` and exposes only whitelisted tools. Engine sees
+     it as a regular ``ToolRegistry`` — zero engine diff.
+   - **Layer 3a — deny_paths**: AUGMENT (bundle's patterns appended
+     to ``Settings.deny_paths``) — safer than replace. The
+     ``TierBasedPermissionChecker`` reads ``settings.deny_paths``
+     unchanged.
+   - **Layer 3b — hook chain**: clone base ``HookRegistry`` + register
+     bundle's named hooks. Bundle hooks fire AFTER user-registered
+     hooks for the same event.
+4. ``QueryContext`` is constructed with the effective primitives;
+   engine runs unchanged.
+
+**Built-in named hooks (Phase 5d MVP):**
+
+- ``audit_log`` (``PostToolUse``) — emits
+  ``event=audit_tool_complete`` with ``tool_name`` / ``tool_use_id`` /
+  ``is_error`` / ``output_len``. Distinct from the framework's default
+  ``tool_complete`` so a ``jq 'select(.event=="audit_tool_complete")'``
+  filter isolates bundle-driven audit records for compliance trace.
+- ``deny_writes`` (``PreToolUse``) — denies any tool whose
+  ``is_read_only=False``. Belt-and-braces "read-only mode" so a
+  whitelist typo can't silently grant write access. Looks up the tool
+  via ``context.exec_context.parent_query.tool_registry``; passes
+  through (instead of denying) when the tool isn't in the registry, to
+  avoid masking the engine's own "tool not found" error.
+
+User-supplied custom hooks via plugin discovery defer to Phase 5e.
+
+**Cross-cutting invariant verified (fifth tenant test)** — Phase 5d
+landed with **zero diff** on ``permissions/``, ``hooks/``, ``engine/``,
+``observability/``, ``mcp/``, ``compaction/``, ``skills/``,
+``protocols/``, ``tools/``, ``execution/``, ``prompts.py`` vs Phase
+7b close. The only diffs are: ``commands/model.py`` (+1 additive
+``mode`` field), ``commands/expand.py`` (+1 new function), ``cli.py``
+(bootstrap chain + 1 except arm), and the new ``bundles/`` package
+itself. **Why this matters**: every prior phase (5a/5b/5c/6/7a/7b)
+extended ONE axis at a time — bundles compose FOUR axes
+simultaneously. The cross-layer composition working without modifying
+any layer is the strongest single proof that Phase 3's layered model
+holds under real cross-cutting load. See ``learnings/phase-5d.md`` for
+the retrospective.
+
 ### Want to verify the wire path against your account?
 
 ```bash
