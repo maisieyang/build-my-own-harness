@@ -1,9 +1,12 @@
 """``CommandStore`` Protocol + ``FilesystemCommandStore`` — P5b-T1.
 
 Per ``decisions/14`` C2:two-layer storage(global + project)with
-project-wins override. Mirrors ``skills/store.py`` structure verbatim;
-the two will be candidates for a shared ``markdown_store`` helper in a
-future Phase 7 polish task — Phase 5b explicitly does NOT refactor.
+project-wins override.
+
+P8 refactor: the duplicated scan + merge machinery moved to
+:class:`openharness.markdown_store.FilesystemMarkdownStore`. This
+module keeps the :class:`CommandStore` Protocol (the public
+contract) + a thin subclass that fixes the parser.
 """
 
 from __future__ import annotations
@@ -11,12 +14,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 from openharness.commands.model import Command, parse_command
-from openharness.observability.logging import get_logger
+from openharness.markdown_store import EmptyMarkdownStore, FilesystemMarkdownStore
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-_logger = get_logger("commands")
 
 
 class CommandStore(Protocol):
@@ -48,23 +49,26 @@ class CommandStore(Protocol):
         ...  # pragma: no cover - Protocol method body
 
 
-class EmptyCommandStore:
+class EmptyCommandStore(EmptyMarkdownStore[Command]):
     """Sentinel store with no commands. Used when ``--no-commands`` is
     passed or as a placeholder where the caller doesn't care about
     Phase 5b semantics.
+
+    Subclass of :class:`openharness.markdown_store.EmptyMarkdownStore`
+    parameterized to :class:`Command` — preserves the public class
+    name (P8 D21.3).
     """
 
-    def discover(self) -> dict[str, Command]:
-        return {}
 
-    def get(self, name: str) -> Command | None:  # noqa: ARG002 — Protocol signature
-        return None
-
-
-class FilesystemCommandStore:
+class FilesystemCommandStore(FilesystemMarkdownStore[Command]):
     """Scan two filesystem layers and merge:project entries override
     global entries on same ``name``. Catalog is frozen after first
     :meth:`discover` call — bootstrap-time discovery,not hot reload.
+
+    Subclass of :class:`openharness.markdown_store.FilesystemMarkdownStore`
+    fixing the parser to :func:`parse_command` and the log event
+    prefix to ``"command"`` — preserves the public class name + hides
+    the generic from callers (P8 D21.3).
     """
 
     def __init__(
@@ -73,55 +77,9 @@ class FilesystemCommandStore:
         global_dir: Path | None = None,
         project_dir: Path | None = None,
     ) -> None:
-        self._global_dir = global_dir
-        self._project_dir = project_dir
-        self._cache: dict[str, Command] | None = None
-
-    def discover(self) -> dict[str, Command]:
-        if self._cache is None:
-            self._cache = self._scan()
-        return dict(self._cache)  # defensive copy
-
-    def get(self, name: str) -> Command | None:
-        if self._cache is None:
-            self._cache = self._scan()
-        return self._cache.get(name)
-
-    def _scan(self) -> dict[str, Command]:
-        merged: dict[str, Command] = {}
-        if self._global_dir is not None:
-            self._merge_dir(merged, self._global_dir, layer="global")
-        if self._project_dir is not None:
-            self._merge_dir(merged, self._project_dir, layer="project")
-        return merged
-
-    @staticmethod
-    def _merge_dir(
-        merged: dict[str, Command],
-        directory: Path,
-        *,
-        layer: str,
-    ) -> None:
-        if not directory.exists() or not directory.is_dir():
-            return
-        for path in sorted(directory.glob("*.md")):
-            cmd = parse_command(path)
-            if cmd is None:
-                continue
-            if cmd.name in merged:
-                if layer == "project":
-                    _logger.info(
-                        "command_override",
-                        name=cmd.name,
-                        overrides=str(merged[cmd.name].source_path),
-                        new_source=str(cmd.source_path),
-                    )
-                else:
-                    _logger.warning(
-                        "command_name_collision",
-                        name=cmd.name,
-                        existing=str(merged[cmd.name].source_path),
-                        skipped=str(cmd.source_path),
-                    )
-                    continue
-            merged[cmd.name] = cmd
+        super().__init__(
+            global_dir=global_dir,
+            project_dir=project_dir,
+            parser=parse_command,
+            log_event_prefix="command",
+        )

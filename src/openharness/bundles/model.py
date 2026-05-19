@@ -23,38 +23,22 @@ overrides. All override fields are optional — a bundle with only
       - deny_writes
     ---
 
-Design choices(mirror ``commands/model.py`` + ``skills/model.py``):
-
-- **Frozen dataclass**:bundles read-only after construction
-- **``name`` regex matches** ``Skill.name`` / ``Command.name`` /
-  ``McpServerConfig.name`` — same safe-identifier discipline
-  (consumed as filesystem name + slash command ``mode:`` value)
-- **``parse_bundle`` returns ``Bundle | None``, NEVER raises**:
-  bootstrap discipline (same as ``parse_skill`` / ``parse_command``).
-  One bad bundle must not crash other bundles' load.
-- **All override fields optional**:bundle declaring only
-  ``system_prompt`` produces a context modification limited to Layer
-  1. Layer 2/3 overrides folded gracefully when absent.
+P8 refactor: the duplicated outer scaffolding lives in
+:mod:`openharness.markdown_store`. This module keeps the
+:class:`Bundle` dataclass + the bundle-specific 4-layer field
+extraction only.
 """
 
 from __future__ import annotations
 
-import re
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-import yaml
-
+from openharness.markdown_store import NAME_PATTERN, read_frontmatter_dict
 from openharness.observability.logging import get_logger
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-# Same regex as McpServerConfig / Skill / Command — uniform safe-
-# identifier rules across user-supplied names that flow into argument
-# positions or filesystem paths.
-_NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
-_FRONTMATTER_FENCE = "---"
 
 _logger = get_logger("bundles")
 
@@ -83,10 +67,10 @@ class Bundle:
     source_path: Path
 
     def __post_init__(self) -> None:
-        if not _NAME_PATTERN.match(self.name):
+        if not NAME_PATTERN.match(self.name):
             raise ValueError(
                 f"invalid bundle name {self.name!r}:must match "
-                f"{_NAME_PATTERN.pattern}"
+                f"{NAME_PATTERN.pattern}"
                 " (alphanumeric + ``_-``, starts with letter)"
             )
         if not self.description.strip():
@@ -101,29 +85,8 @@ def parse_bundle(path: Path) -> Bundle | None:
     types). Same never-raise discipline as ``parse_skill`` /
     ``parse_command``.
     """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        _logger.warning("bundle_read_failed", source_path=str(path), error=str(exc))
-        return None
-
-    frontmatter, _body = _split_frontmatter(text)
-    if frontmatter is None:
-        _logger.warning("bundle_missing_frontmatter", source_path=str(path))
-        return None
-
-    try:
-        parsed: Any = yaml.safe_load(frontmatter)
-    except yaml.YAMLError as exc:
-        _logger.warning("bundle_yaml_parse_failed", source_path=str(path), error=str(exc))
-        return None
-
-    if not isinstance(parsed, dict):
-        _logger.warning(
-            "bundle_frontmatter_not_mapping",
-            source_path=str(path),
-            got=type(parsed).__name__,
-        )
+    parsed, _body = read_frontmatter_dict(path, logger_name="bundle")
+    if parsed is None:
         return None
 
     name = parsed.get("name")
@@ -189,26 +152,3 @@ def parse_bundle(path: Path) -> Bundle | None:
             "bundle_validation_failed", source_path=str(path), name=name, error=str(exc)
         )
         return None
-
-
-def _split_frontmatter(text: str) -> tuple[str | None, str]:
-    """Same shape as ``skills/model._split_frontmatter`` and ``commands/
-    model._split_frontmatter`` — would be a candidate for Phase 8
-    polish ``markdown_store/`` extraction.
-    """
-    if not text.startswith(_FRONTMATTER_FENCE + "\n"):
-        return None, text
-    after_open = text[len(_FRONTMATTER_FENCE) + 1 :]
-    fence_with_newline = "\n" + _FRONTMATTER_FENCE + "\n"
-    idx = after_open.find(fence_with_newline)
-    if idx != -1:
-        return after_open[:idx], after_open[idx + len(fence_with_newline) :]
-    closing_at_eof = "\n" + _FRONTMATTER_FENCE
-    if after_open.endswith(closing_at_eof):
-        return after_open[: -len(closing_at_eof)], ""
-    return None, text
-
-
-# Suppress unused-import warning — `field` reserved for future
-# default_factory usage if we add list-type fields with defaults.
-_ = field

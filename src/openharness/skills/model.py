@@ -16,44 +16,23 @@ frontmatter block fenced by ``---``. Required fields are ``name`` and
     When writing tests for React components, follow these principles:
     1. ...
 
-Design choices:
-
-- **Frozen dataclass**:Skills are read-only after construction. The
-  store discovers them at bootstrap and never mutates.
-- **``name`` validation regex matches ``McpServerConfig.name``**:both
-  are user-controllable identifiers consumed by the LLM as tool argument
-  values;same safe-identifier discipline.
-- **``parse_skill`` returns ``Skill | None``, NEVER raises**:bootstrap
-  scans the entire skill directory, and one malformed file must not
-  prevent other skills from loading. Errors emit a warning via the
-  observability logger and return ``None``;caller treats ``None`` as
-  "skip this entry."
-- **``body`` is stored verbatim** including leading whitespace after the
-  closing ``---`` fence:the LLM sees exactly what the author wrote.
-- **``source_path`` carries the file path**:useful for diagnostics
-  (warning log includes it)and for the L2 override-detection logic in
-  the store.
+P8 refactor: the duplicated outer scaffolding (file read / frontmatter
+split / YAML parse / mapping check) lives in
+:mod:`openharness.markdown_store`. This module keeps the
+:class:`Skill` dataclass + the Skill-specific field extraction
+(``version`` coercion) only.
 """
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-import yaml
-
+from openharness.markdown_store import NAME_PATTERN, read_frontmatter_dict
 from openharness.observability.logging import get_logger
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-# Same as ``McpServerConfig._NAME_PATTERN`` — both are user-supplied
-# identifiers passed as tool arguments. Keeping the regex identical
-# keeps the surprise surface uniform.
-_NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
-
-_FRONTMATTER_FENCE = "---"
 
 _logger = get_logger("skills")
 
@@ -74,10 +53,10 @@ class Skill:
     source_path: Path
 
     def __post_init__(self) -> None:
-        if not _NAME_PATTERN.match(self.name):
+        if not NAME_PATTERN.match(self.name):
             raise ValueError(
                 f"invalid skill name {self.name!r}:must match "
-                f"{_NAME_PATTERN.pattern}"
+                f"{NAME_PATTERN.pattern}"
                 " (alphanumeric + ``_-``, starts with letter)"
             )
         if not self.description.strip():
@@ -92,45 +71,9 @@ def parse_skill(path: Path) -> Skill | None:
     discovery loop treats ``None`` as "skip" so one bad skill never
     prevents other skills from loading(see ``decisions/12`` acceptance:
     "Invalid frontmatter → warning log at bootstrap, skill skipped").
-
-    Frontmatter delimiter is exactly ``---`` on its own line(both
-    opening and closing). Anything before the opening fence is ignored;
-    anything after the closing fence is the body.
     """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        _logger.warning(
-            "skill_read_failed",
-            source_path=str(path),
-            error=str(exc),
-        )
-        return None
-
-    frontmatter, body = _split_frontmatter(text)
-    if frontmatter is None:
-        _logger.warning(
-            "skill_missing_frontmatter",
-            source_path=str(path),
-        )
-        return None
-
-    try:
-        parsed: Any = yaml.safe_load(frontmatter)
-    except yaml.YAMLError as exc:
-        _logger.warning(
-            "skill_yaml_parse_failed",
-            source_path=str(path),
-            error=str(exc),
-        )
-        return None
-
-    if not isinstance(parsed, dict):
-        _logger.warning(
-            "skill_frontmatter_not_mapping",
-            source_path=str(path),
-            got=type(parsed).__name__,
-        )
+    parsed, body = read_frontmatter_dict(path, logger_name="skill")
+    if parsed is None:
         return None
 
     name = parsed.get("name")
@@ -173,43 +116,3 @@ def parse_skill(path: Path) -> Skill | None:
             error=str(exc),
         )
         return None
-
-
-def _split_frontmatter(text: str) -> tuple[str | None, str]:
-    """Split ``text`` into ``(frontmatter_yaml, body)``.
-
-    Returns ``(None, text)`` if no well-formed frontmatter is found ——
-    caller treats this as "skip skill" rather than "body-only skill",
-    because skills without name / description can't appear in the
-    catalog and are therefore useless.
-
-    Algorithm:
-
-    1. File must start with ``---\\n`` (the opening fence). ``read_text``
-       applies universal-newlines translation so CRLF files arrive here
-       as LF-only — no special CRLF handling needed.
-    2. Find the next line that is exactly ``---``.
-    3. YAML block = text between fences; body = text after closing fence
-       (may be empty if file ends at the closing fence with no trailing
-       newline).
-    """
-    if not text.startswith(_FRONTMATTER_FENCE + "\n"):
-        return None, text
-
-    after_open = text[len(_FRONTMATTER_FENCE) + 1 :]  # past ``---\n``
-
-    fence_with_newline = "\n" + _FRONTMATTER_FENCE + "\n"
-    idx = after_open.find(fence_with_newline)
-    if idx != -1:
-        yaml_block = after_open[:idx]
-        body = after_open[idx + len(fence_with_newline) :]
-        return yaml_block, body
-
-    # Closing fence may be the last line with no trailing newline.
-    closing_at_eof = "\n" + _FRONTMATTER_FENCE
-    if after_open.endswith(closing_at_eof):
-        yaml_block = after_open[: -len(closing_at_eof)]
-        return yaml_block, ""
-
-    # No closing fence found — malformed.
-    return None, text

@@ -2,8 +2,7 @@
 
 Per ``decisions/14`` C1 / C2: a slash command is a markdown file with a
 YAML frontmatter block fenced by ``---``. Required fields are ``name``
-and ``description``; other fields are tolerated (forward-compat — Phase
-5d may add ``mode:`` / ``hooks:`` / ``permission:`` field semantics).
+and ``description``; ``mode`` (Phase 5d) is optional.
 
 ::
 
@@ -17,39 +16,23 @@ and ``description``; other fields are tolerated (forward-compat — Phase
 
     Focus on edge cases and security implications.
 
-Design choices(mirror ``skills/model.py``):
-
-- **Frozen dataclass**:commands are read-only after construction. The
-  store discovers them at bootstrap and never mutates.
-- **``name`` validation regex matches ``Skill.name`` / ``McpServerConfig.name``**:
-  same safe-identifier discipline; the value flows into a CLI argument
-  position(``oh ask "/<name> args"``)so reject characters that would
-  confuse the parser.
-- **``parse_command`` returns ``Command | None``, NEVER raises**:
-  bootstrap scans the entire directory;one malformed file must not
-  prevent other commands from loading. Same never-raise contract as
-  ``parse_skill``(see ``learnings/phase-5c-skills.md`` §3.4).
-- **No ``version`` field**:commands are simpler than skills — they're
-  templates,not curated expertise. Forward-compat: Phase 5d may add it.
+P8 refactor: the duplicated outer scaffolding (file read / frontmatter
+split / YAML parse / mapping check) lives in
+:mod:`openharness.markdown_store`. This module keeps the
+:class:`Command` dataclass + the Command-specific field extraction
+(``mode``) only.
 """
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-import yaml
-
+from openharness.markdown_store import NAME_PATTERN, read_frontmatter_dict
 from openharness.observability.logging import get_logger
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-# Same as ``Skill._NAME_PATTERN`` / ``McpServerConfig._NAME_PATTERN``.
-_NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
-
-_FRONTMATTER_FENCE = "---"
 
 _logger = get_logger("commands")
 
@@ -77,18 +60,18 @@ class Command:
     mode: str | None = None
 
     def __post_init__(self) -> None:
-        if not _NAME_PATTERN.match(self.name):
+        if not NAME_PATTERN.match(self.name):
             raise ValueError(
                 f"invalid command name {self.name!r}:must match "
-                f"{_NAME_PATTERN.pattern}"
+                f"{NAME_PATTERN.pattern}"
                 " (alphanumeric + ``_-``, starts with letter)"
             )
         if not self.description.strip():
             raise ValueError(f"command {self.name!r}:description must be non-empty")
-        if self.mode is not None and not _NAME_PATTERN.match(self.mode):
+        if self.mode is not None and not NAME_PATTERN.match(self.mode):
             raise ValueError(
                 f"command {self.name!r}:invalid mode {self.mode!r} — must match "
-                f"{_NAME_PATTERN.pattern}"
+                f"{NAME_PATTERN.pattern}"
             )
 
 
@@ -102,40 +85,8 @@ def parse_command(path: Path) -> Command | None:
 
     Same never-raise discipline as :func:`openharness.skills.model.parse_skill`.
     """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        _logger.warning(
-            "command_read_failed",
-            source_path=str(path),
-            error=str(exc),
-        )
-        return None
-
-    frontmatter, body = _split_frontmatter(text)
-    if frontmatter is None:
-        _logger.warning(
-            "command_missing_frontmatter",
-            source_path=str(path),
-        )
-        return None
-
-    try:
-        parsed: Any = yaml.safe_load(frontmatter)
-    except yaml.YAMLError as exc:
-        _logger.warning(
-            "command_yaml_parse_failed",
-            source_path=str(path),
-            error=str(exc),
-        )
-        return None
-
-    if not isinstance(parsed, dict):
-        _logger.warning(
-            "command_frontmatter_not_mapping",
-            source_path=str(path),
-            got=type(parsed).__name__,
-        )
+    parsed, body = read_frontmatter_dict(path, logger_name="command")
+    if parsed is None:
         return None
 
     name = parsed.get("name")
@@ -190,35 +141,3 @@ def parse_command(path: Path) -> Command | None:
             error=str(exc),
         )
         return None
-
-
-def _split_frontmatter(text: str) -> tuple[str | None, str]:
-    """Split ``text`` into ``(frontmatter_yaml, body)``.
-
-    Returns ``(None, text)`` if no well-formed frontmatter is found ——
-    caller treats this as "skip command" rather than "body-only command",
-    because commands WITHOUT name/description can't be invoked and are
-    therefore useless.
-
-    ``read_text`` applies universal-newlines translation so CRLF files
-    arrive here as LF-only — no special CRLF handling needed (same
-    rationale as ``skills/model.py``).
-    """
-    if not text.startswith(_FRONTMATTER_FENCE + "\n"):
-        return None, text
-
-    after_open = text[len(_FRONTMATTER_FENCE) + 1 :]
-
-    fence_with_newline = "\n" + _FRONTMATTER_FENCE + "\n"
-    idx = after_open.find(fence_with_newline)
-    if idx != -1:
-        yaml_block = after_open[:idx]
-        body = after_open[idx + len(fence_with_newline) :]
-        return yaml_block, body
-
-    closing_at_eof = "\n" + _FRONTMATTER_FENCE
-    if after_open.endswith(closing_at_eof):
-        yaml_block = after_open[: -len(closing_at_eof)]
-        return yaml_block, ""
-
-    return None, text

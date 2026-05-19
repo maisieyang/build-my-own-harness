@@ -8,21 +8,21 @@ project-wins override, surfaced to the harness as a Protocol so:
 - ``QueryContext.skill_store`` types against the contract → future stores
   (e.g., remote API-backed)plug in without changing engine / CLI.
 
-Mirrors the :class:`SupportsStreamingMessages` Protocol pattern in
-``api/client.py``(structural typing, no inheritance required).
+P8 refactor: the scan + merge machinery moved to
+:class:`openharness.markdown_store.FilesystemMarkdownStore`. This
+module keeps the :class:`SkillStore` Protocol (the public contract
+the engine consumes) + thin subclasses that fix the parser.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
-from openharness.observability.logging import get_logger
+from openharness.markdown_store import EmptyMarkdownStore, FilesystemMarkdownStore
 from openharness.skills.model import Skill, parse_skill
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-_logger = get_logger("skills")
 
 
 class SkillStore(Protocol):
@@ -61,20 +61,17 @@ class SkillStore(Protocol):
         ...  # pragma: no cover - Protocol method body
 
 
-class EmptySkillStore:
+class EmptySkillStore(EmptyMarkdownStore[Skill]):
     """Sentinel store with no skills. Used as the default for
     :class:`QueryContext.skill_store` so existing tests / CLI flows that
     don't care about skills don't need to construct a filesystem store.
+
+    Subclass of :class:`openharness.markdown_store.EmptyMarkdownStore`
+    parameterized to :class:`Skill` (P8 D21.3).
     """
 
-    def discover(self) -> dict[str, Skill]:
-        return {}
 
-    def get(self, name: str) -> Skill | None:  # noqa: ARG002 — Protocol signature; sentinel ignores name
-        return None
-
-
-class FilesystemSkillStore:
+class FilesystemSkillStore(FilesystemMarkdownStore[Skill]):
     """Scan two filesystem layers and merge:project entries override
     global entries on same ``name``.
 
@@ -94,63 +91,9 @@ class FilesystemSkillStore:
         global_dir: Path | None = None,
         project_dir: Path | None = None,
     ) -> None:
-        self._global_dir = global_dir
-        self._project_dir = project_dir
-        self._cache: dict[str, Skill] | None = None
-
-    def discover(self) -> dict[str, Skill]:
-        if self._cache is None:
-            self._cache = self._scan()
-        return dict(self._cache)  # defensive copy
-
-    def get(self, name: str) -> Skill | None:
-        if self._cache is None:
-            self._cache = self._scan()
-        return self._cache.get(name)
-
-    def _scan(self) -> dict[str, Skill]:
-        # Global first, so project entries can naturally overwrite via
-        # ``.update()``.
-        merged: dict[str, Skill] = {}
-        if self._global_dir is not None:
-            self._merge_dir(merged, self._global_dir, layer="global")
-        if self._project_dir is not None:
-            self._merge_dir(merged, self._project_dir, layer="project")
-        return merged
-
-    @staticmethod
-    def _merge_dir(
-        merged: dict[str, Skill],
-        directory: Path,
-        *,
-        layer: str,
-    ) -> None:
-        if not directory.exists() or not directory.is_dir():
-            return
-        # Sorted for deterministic ordering — tests can assert on order
-        # and CI runs are reproducible across machines.
-        for path in sorted(directory.glob("*.md")):
-            skill = parse_skill(path)
-            if skill is None:
-                continue
-            if skill.name in merged:
-                if layer == "project":
-                    _logger.info(
-                        "skill_override",
-                        name=skill.name,
-                        overrides=str(merged[skill.name].source_path),
-                        new_source=str(skill.source_path),
-                    )
-                else:
-                    # Within the same layer, a later file with the same
-                    # ``name`` collides with an earlier one — log + skip
-                    # the new one(filesystem order is deterministic so
-                    # this is reproducible).
-                    _logger.warning(
-                        "skill_name_collision",
-                        name=skill.name,
-                        existing=str(merged[skill.name].source_path),
-                        skipped=str(skill.source_path),
-                    )
-                    continue
-            merged[skill.name] = skill
+        super().__init__(
+            global_dir=global_dir,
+            project_dir=project_dir,
+            parser=parse_skill,
+            log_event_prefix="skill",
+        )
