@@ -1,7 +1,7 @@
 # Phase 7 Final — Production Polish & Release
 
-> Phase 7 boundary doc: **TBD — write `decisions/23-phase-7-final-boundary.md` at kickoff to ratify the decisions in §3 below**.
-> Triggering review: [project status review on 2026-05-19](../learnings/) (16 phases shipped, 1240 tests, no user-facing docs, no PyPI artifact).
+> Phase 7 boundary: [`decisions/23-phase-7-final-boundary.md`](../decisions/23-phase-7-final-boundary.md).
+> Triggering review: project status review on 2026-05-19 (16 phases shipped, 1240 tests, no user-facing docs, no PyPI artifact).
 
 ## 1. Overview
 
