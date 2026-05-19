@@ -245,6 +245,23 @@ class Settings(BaseSettings):
             "pytest fork; bump for parallel build systems if needed."
         ),
     )
+    # P7c-T2 (D23.4): OCI runtime selection. ``runc`` (default) shares
+    # the host kernel; ``runsc`` (gVisor) interposes syscalls in user
+    # space for stronger isolation at ~3x syscall overhead. Other OCI
+    # runtimes (kata, sysbox, etc.) work too — no client-side
+    # allowlist per D23.2.
+    sandbox_runtime: str = Field(
+        default="runc",
+        description=(
+            "OCI runtime for the sandbox container. ``runc`` (default) "
+            "shares the host kernel; ``runsc`` selects gVisor for "
+            "user-space syscall isolation (requires gVisor installed "
+            "on the host:https://gvisor.dev/docs/user_guide/install/). "
+            "Other registered OCI runtimes pass through unchanged. "
+            "Env var: OPENHARNESS_SANDBOX_RUNTIME. Overridden by the "
+            "``--sandbox-runtime`` CLI flag."
+        ),
+    )
     # P5e-T3 (decisions/18 D20.3): plugin hook discovery is opt-in.
     # Default OFF so a transitive dependency shipping
     # ``openharness.hooks`` entry points cannot register a hook the

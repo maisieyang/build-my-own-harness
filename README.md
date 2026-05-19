@@ -978,6 +978,62 @@ merges both discovery sources).
 
 See `learnings/phase-5f.md` for the retrospective.
 
+### Phase 7c features — gVisor sandbox runtime (`--sandbox-runtime`)
+
+Phase 7b shipped Docker sandboxing with the default OCI runtime
+(`runc`, which shares the host kernel). Phase 7c adds **runtime
+selection**: pick a different OCI runtime by name, with no other
+behavioral change. `runsc` (gVisor) is the documented alternative
+— it interposes syscalls in user-space for stronger isolation at
+~3× syscall overhead.
+
+**Enable gVisor**:
+
+```bash
+# Install gVisor on the host (out-of-band; framework can't do this)
+# https://gvisor.dev/docs/user_guide/install/
+
+# Then pick the runtime per-invocation
+oh ask --sandbox --sandbox-runtime runsc "your prompt"
+
+# Or via env var
+OPENHARNESS_SANDBOX=true OPENHARNESS_SANDBOX_RUNTIME=runsc oh ask "..."
+```
+
+**What changes vs runc**:
+
+- Every syscall the container makes is intercepted by `runsc` user-
+  space syscall filter (gVisor's "sentry") instead of going directly
+  to the host kernel.
+- A kernel exploit in a container process can no longer trivially
+  pivot to host privilege — the gVisor sentry doesn't expose the
+  syscall surface of the underlying kernel.
+- Some niche syscalls (specific `ioctl` variants, recent
+  `io_uring` ops) aren't yet supported by runsc. The default test
+  image (`python:3.12-slim`) works fine.
+
+**Other runtimes pass through**: framework accepts any string for
+`--sandbox-runtime`. Docker daemon validates at container-create
+time, so `kata-runtime`, `sysbox-runc`, or future OCI runtimes work
+without framework updates. Unknown runtime → daemon error surfaces
+with a clean message in stderr.
+
+**Cross-cutting invariant** — Phase 7c is **purely additive within
+`execution/sandbox.py`**. Zero diff vs Phase 5f close on
+`permissions/`, `hooks/`, `engine/`, `observability/`, `mcp/`,
+`compaction/`, `skills/`, `commands/`, `protocols/`, `tools/`,
+`bundles/`, `markdown_store/`, `execution/base.py`,
+`execution/host.py`, `prompts.py`. The diff is one new kwarg on
+`SandboxExecution.__init__` + one new field in the `HostConfig`
+dict + one Settings field + one CLI flag. ~30 LoC production.
+
+The new `tests/execution/test_sandbox_integration.py::TestGVisorRuntime`
+class is gated on `_gvisor_available()` (checks `docker info` for
+`runsc` in the Runtimes section) — SKIPs on machines without gVisor.
+
+See `learnings/phase-7c.md` for the retrospective on the runtime-
+selection pattern.
+
 ### Want to verify the wire path against your account?
 
 ```bash

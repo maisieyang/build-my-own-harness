@@ -88,6 +88,7 @@ class SandboxExecution:
         memory: str = "1g",
         cpus: float = 1.0,
         pids: int = 256,
+        runtime: str = "runc",
     ) -> None:
         self._cwd_host = cwd
         self._image = image
@@ -97,6 +98,14 @@ class SandboxExecution:
         # quota of 100_000 = 1 CPU equivalent; 50_000 = 0.5 CPU, etc.)
         self._cpu_quota = int(cpus * 100_000)
         self._pids_limit = pids
+        # P7c-T1 (D23.1/D23.2): OCI runtime — "runc" (default; shared
+        # host kernel) or "runsc" (gVisor user-space syscall
+        # interposition). Any string passes through to Docker; daemon
+        # validates and rejects unknown runtimes when the container is
+        # created (D23.3). No client-side allowlist so users with custom
+        # OCI runtimes (kata, sysbox, ...) work without framework
+        # changes.
+        self._runtime = runtime
 
         # Lifecycle state (set by __aenter__, used by run_command, torn
         # down by __aexit__):
@@ -154,6 +163,8 @@ class SandboxExecution:
                 "CpuQuota": self._cpu_quota,
                 "CpuPeriod": 100_000,  # standard 100ms period
                 "PidsLimit": self._pids_limit,
+                # P7c: OCI runtime — "runc" default, "runsc" for gVisor.
+                "Runtime": self._runtime,
                 # Don't bind-mount any host paths beyond cwd (D18.4)
                 "AutoRemove": False,  # we explicitly delete in __aexit__
             },

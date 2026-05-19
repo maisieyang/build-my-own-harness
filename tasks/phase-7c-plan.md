@@ -14,7 +14,7 @@ same flag pathway, ~30 LoC production.
 
 ## Task list
 
-### P7c-T1: `SandboxExecution.runtime` kwarg 🔜 NEXT
+### P7c-T1: `SandboxExecution.runtime` kwarg ✅
 
 **Description**: Plumb runtime into container `HostConfig`. Mocked
 unit tests cover runc and runsc kwarg values.
@@ -32,7 +32,7 @@ unit tests cover runc and runsc kwarg values.
 
 ---
 
-### P7c-T2: Settings field + CLI flag + bootstrap
+### P7c-T2: Settings field + CLI flag + bootstrap ✅
 
 **Acceptance**:
 - [ ] `config/settings.py`: `sandbox_runtime: str = "runc"` field
@@ -43,7 +43,7 @@ unit tests cover runc and runsc kwarg values.
 
 ---
 
-### P7c-T3: Real-gVisor smoke + README + retro
+### P7c-T3: Real-gVisor smoke + README + retro ✅
 
 **Acceptance**:
 - [ ] `tests/execution/test_sandbox_integration.py`: 1 new test

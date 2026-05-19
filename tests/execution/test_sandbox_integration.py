@@ -57,6 +57,28 @@ def _docker_available() -> bool:
     return result.returncode == 0
 
 
+def _gvisor_available() -> bool:
+    """True iff ``docker info`` reports ``runsc`` in the Runtimes section.
+
+    Used for P7c-T3 to gate the gVisor integration smoke separately:
+    Docker daemon may be running with only the default ``runc``,
+    in which case the gVisor test SKIPs (not fails).
+    """
+    if not _docker_available():
+        return False
+    try:
+        result = subprocess.run(
+            ["docker", "info"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    return "runsc" in result.stdout
+
+
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
@@ -154,3 +176,32 @@ class TestSandboxRealDocker:
             result = await sandbox.run_command("echo from-alpine", cwd=tmp_path)
         assert result.exit_code == 0
         assert "from-alpine" in result.output
+
+
+# --------------------------------------------------------------------------- #
+# P7c-T3: gVisor runtime real-Docker smoke (gated separately on runsc avail) #
+# --------------------------------------------------------------------------- #
+
+
+class TestGVisorRuntime:
+    """Real-Docker smoke for ``SandboxExecution(runtime="runsc")``.
+
+    Doubly-gated: Docker daemon reachable (the file-level pytestmark
+    above) AND ``docker info | grep runsc`` succeeds (this class-
+    level skip). On a developer machine without gVisor installed,
+    these tests SKIP — they don't fail.
+    """
+
+    pytestmark = pytest.mark.skipif(
+        not _gvisor_available(),
+        reason="gVisor (runsc) not installed in Docker daemon — skipping",
+    )
+
+    async def test_runsc_runs_echo(self, tmp_path: Path) -> None:
+        # P7c-T3: end-to-end verification that the runtime kwarg
+        # actually dispatches to gVisor. ``echo hello-from-gvisor``
+        # is a minimal command that works in any image with sh.
+        async with SandboxExecution(cwd=tmp_path, runtime="runsc") as sandbox:
+            result = await sandbox.run_command("echo hello-from-gvisor", cwd=tmp_path)
+        assert result.exit_code == 0
+        assert "hello-from-gvisor" in result.output

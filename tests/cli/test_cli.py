@@ -1137,7 +1137,7 @@ class TestSandboxFlags:
         captured_init: dict[str, object] = {}
 
         class _FakeSandbox:
-            def __init__(self, *, cwd, image, network, memory, cpus, pids) -> None:  # type: ignore[no-untyped-def]
+            def __init__(self, *, cwd, image, network, memory, cpus, pids, runtime) -> None:  # type: ignore[no-untyped-def]
                 captured_init.update(
                     cwd=cwd,
                     image=image,
@@ -1145,6 +1145,7 @@ class TestSandboxFlags:
                     memory=memory,
                     cpus=cpus,
                     pids=pids,
+                    runtime=runtime,
                 )
 
             async def __aenter__(self) -> _FakeSandbox:
@@ -1253,6 +1254,72 @@ class TestSandboxFlags:
         assert result.exit_code == 0
         ctx = captured.context
         assert isinstance(ctx.execution_env, _FakeSandbox)  # type: ignore[attr-defined]
+
+    def test_default_runtime_is_runc(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # P7c-T2: default sandbox_runtime is "runc" (Phase 7b
+        # behavior preserved).
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+
+        captured_init: dict[str, object] = {}
+
+        class _FakeSandbox:
+            def __init__(self, **kwargs: object) -> None:
+                captured_init.update(kwargs)
+
+            async def __aenter__(self) -> _FakeSandbox:
+                return self
+
+            async def __aexit__(self, *a: object) -> None:
+                pass
+
+            async def run_command(self, command, cwd, timeout=None):  # type: ignore[no-untyped-def]
+                from openharness.execution import ProcessResult
+
+                return ProcessResult(output="", exit_code=0)
+
+        monkeypatch.setattr(cli_module, "SandboxExecution", _FakeSandbox)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "hi", "--sandbox"])
+        assert result.exit_code == 0
+        assert captured_init["runtime"] == "runc"
+
+    def test_sandbox_runtime_flag_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # P7c-T2: --sandbox-runtime overrides Settings + env var.
+        _set_minimum_env(monkeypatch)
+        # Even with env var set, CLI flag wins.
+        monkeypatch.setenv("OPENHARNESS_SANDBOX_RUNTIME", "runc")
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+
+        captured_init: dict[str, object] = {}
+
+        class _FakeSandbox:
+            def __init__(self, **kwargs: object) -> None:
+                captured_init.update(kwargs)
+
+            async def __aenter__(self) -> _FakeSandbox:
+                return self
+
+            async def __aexit__(self, *a: object) -> None:
+                pass
+
+            async def run_command(self, command, cwd, timeout=None):  # type: ignore[no-untyped-def]
+                from openharness.execution import ProcessResult
+
+                return ProcessResult(output="", exit_code=0)
+
+        monkeypatch.setattr(cli_module, "SandboxExecution", _FakeSandbox)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_module.app,
+            ["ask", "hi", "--sandbox", "--sandbox-runtime", "runsc"],
+        )
+        assert result.exit_code == 0
+        assert captured_init["runtime"] == "runsc"
 
     def test_no_sandbox_flag_overrides_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from openharness.execution.host import HostExecution

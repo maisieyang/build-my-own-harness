@@ -381,6 +381,24 @@ class TestSandboxFields:
         assert settings.sandbox_memory == "1g"
         assert settings.sandbox_cpus == 1.0
         assert settings.sandbox_pids == 256
+        assert settings.sandbox_runtime == "runc"  # P7c-T2 default
+
+    def test_runtime_via_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # P7c-T2: OPENHARNESS_SANDBOX_RUNTIME selects the OCI runtime.
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_SANDBOX_RUNTIME", "runsc")
+        settings = Settings()
+        assert settings.sandbox_runtime == "runsc"
+
+    def test_arbitrary_runtime_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # P7c-T2 (D23.2): no client-side allowlist; Docker daemon
+        # validates at container-create time.
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_SANDBOX_RUNTIME", "kata-runtime")
+        settings = Settings()
+        assert settings.sandbox_runtime == "kata-runtime"
 
     def test_enable_via_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")

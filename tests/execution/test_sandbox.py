@@ -238,6 +238,41 @@ class TestSandboxSpawnConfig:
         assert host["CpuQuota"] == 50_000  # 0.5 CPU
         assert host["PidsLimit"] == 128
 
+    async def test_default_runtime_is_runc(self, tmp_path: Path) -> None:
+        # P7c-T1 (D23.1/D23.4): default runtime preserves Phase 7b
+        # behavior — runc (Docker's own default).
+        docker_cls, _container, _exec = _make_mock_docker()
+        with patch("aiodocker.Docker", docker_cls):
+            async with SandboxExecution(cwd=tmp_path):
+                pass
+
+        host = docker_cls.return_value.containers.create.call_args.kwargs["config"]["HostConfig"]
+        assert host["Runtime"] == "runc"
+
+    async def test_gvisor_runtime_passes_through(self, tmp_path: Path) -> None:
+        # P7c-T1: runtime="runsc" lands as HostConfig.Runtime so the
+        # Docker daemon dispatches to gVisor (assuming runsc is
+        # installed on the host).
+        docker_cls, _container, _exec = _make_mock_docker()
+        with patch("aiodocker.Docker", docker_cls):
+            async with SandboxExecution(cwd=tmp_path, runtime="runsc"):
+                pass
+
+        host = docker_cls.return_value.containers.create.call_args.kwargs["config"]["HostConfig"]
+        assert host["Runtime"] == "runsc"
+
+    async def test_arbitrary_runtime_passes_through(self, tmp_path: Path) -> None:
+        # P7c-T1 (D23.2): no client-side validation. Users can specify
+        # custom OCI runtimes (kata, sysbox, etc.) — Docker daemon
+        # rejects unknown runtimes at container-create time.
+        docker_cls, _container, _exec = _make_mock_docker()
+        with patch("aiodocker.Docker", docker_cls):
+            async with SandboxExecution(cwd=tmp_path, runtime="kata-runtime"):
+                pass
+
+        host = docker_cls.return_value.containers.create.call_args.kwargs["config"]["HostConfig"]
+        assert host["Runtime"] == "kata-runtime"
+
 
 # --------------------------------------------------------------------------- #
 # run_command                                                                 #

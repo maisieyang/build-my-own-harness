@@ -155,6 +155,7 @@ async def _run_ask(
     sandbox_network_override: str | None = None,
     sandbox_memory_override: str | None = None,
     sandbox_cpus_override: float | None = None,
+    sandbox_runtime_override: str | None = None,
     enable_plugin_hooks_override: bool | None = None,
 ) -> None:
     """Build the QueryContext, run the loop, render the events.
@@ -187,6 +188,7 @@ async def _run_ask(
     sandbox_cpus = (
         sandbox_cpus_override if sandbox_cpus_override is not None else settings.sandbox_cpus
     )
+    sandbox_runtime = sandbox_runtime_override or settings.sandbox_runtime
     # P5e-T3: plugin hook discovery is opt-in. CLI flag overrides
     # Settings. When OFF, ``discover_plugin_hooks()`` is never called
     # and bundle ``hooks:`` resolves only against BUILTIN_HOOKS — even
@@ -382,6 +384,7 @@ async def _run_ask(
                     memory=sandbox_memory,
                     cpus=sandbox_cpus,
                     pids=settings.sandbox_pids,
+                    runtime=sandbox_runtime,
                 )
             )
         else:
@@ -572,6 +575,18 @@ def ask(
             "0.5 = half). Overrides OPENHARNESS_SANDBOX_CPUS (default 1.0)."
         ),
     ),
+    sandbox_runtime: str | None = typer.Option(
+        None,
+        "--sandbox-runtime",
+        help=(
+            "OCI runtime for the sandbox container. ``runc`` (default) "
+            "shares the host kernel; ``runsc`` selects gVisor for user-"
+            "space syscall isolation (requires gVisor installed: "
+            "https://gvisor.dev/docs/user_guide/install/). Other "
+            "registered OCI runtimes pass through unchanged. Overrides "
+            "OPENHARNESS_SANDBOX_RUNTIME."
+        ),
+    ),
     enable_plugin_hooks: bool | None = typer.Option(
         None,
         "--enable-plugin-hooks/--no-enable-plugin-hooks",
@@ -620,6 +635,7 @@ def ask(
                 sandbox_network_override=sandbox_network,
                 sandbox_memory_override=sandbox_memory,
                 sandbox_cpus_override=sandbox_cpus,
+                sandbox_runtime_override=sandbox_runtime,
                 enable_plugin_hooks_override=enable_plugin_hooks,
             )
         )
