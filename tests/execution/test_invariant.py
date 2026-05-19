@@ -273,6 +273,71 @@ class TestPhase8MarkdownStoreInvariant:
         "openharness.markdown_store",
     )
 
+
+class TestPhase6PlusConversationCompleteInvariant:
+    """``ConversationCompleteEvent`` is a stream-event type used ONLY by
+    the engine (emit) and the REPL (consume). No other layer should
+    reference it.
+    """
+
+    _PROTECTED_MODULES = (
+        "openharness.permissions.checker",
+        "openharness.permissions.tier_based",
+        "openharness.hooks.executor",
+        "openharness.hooks.registry",
+        "openharness.observability.context",
+        "openharness.observability.logging",
+        "openharness.mcp.client",
+        "openharness.mcp.adapter",
+        "openharness.mcp.pool",
+        "openharness.compaction.hook",
+        "openharness.compaction.truncate",
+        "openharness.skills.model",
+        "openharness.skills.store",
+        "openharness.commands.model",
+        "openharness.commands.store",
+        "openharness.bundles.model",
+        "openharness.bundles.store",
+        "openharness.bundles.registry",
+        "openharness.bundles.apply",
+        "openharness.bundles.hooks",
+        "openharness.bundles.hook_plugins",
+        "openharness.markdown_store.parse",
+        "openharness.markdown_store.store",
+        "openharness.tools.read",
+        "openharness.tools.write",
+        "openharness.tools.edit",
+        "openharness.tools.grep",
+        "openharness.tools.bash",
+        "openharness.tools.load_skill",
+        "openharness.tools.spawn_agent",
+        "openharness.execution.host",
+        "openharness.execution.sandbox",
+        "openharness.prompts",
+    )
+
+    _FORBIDDEN_IDENTIFIERS = ("ConversationCompleteEvent",)
+
+    @staticmethod
+    def _strip_comments_and_docstrings(source: str) -> str:
+        cleaned = re.sub(r'"""[\s\S]*?"""', "", source, flags=re.MULTILINE)
+        cleaned = re.sub(r"'''[\s\S]*?'''", "", cleaned, flags=re.MULTILINE)
+        cleaned_lines = [line.split("#", 1)[0] for line in cleaned.splitlines()]
+        return "\n".join(cleaned_lines)
+
+    def test_protected_modules_do_not_reference_event(self) -> None:
+        for mod_name in self._PROTECTED_MODULES:
+            module = importlib.import_module(mod_name)
+            source = inspect.getsource(module)
+            code = self._strip_comments_and_docstrings(source)
+            for forbidden in self._FORBIDDEN_IDENTIFIERS:
+                pattern = rf"\b{re.escape(forbidden)}\b"
+                assert not re.search(pattern, code), (
+                    f"{mod_name} references {forbidden!r} — Phase 6+ "
+                    f"invariant violated. ConversationCompleteEvent is "
+                    f"engine→REPL only."
+                )
+
     @staticmethod
     def _strip_comments_and_docstrings(source: str) -> str:
         cleaned = re.sub(r'"""[\s\S]*?"""', "", source, flags=re.MULTILINE)

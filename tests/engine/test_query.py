@@ -33,6 +33,8 @@ from openharness.protocols import (
     TextBlock,
     ToolExecutionCompletedEvent,
     ToolExecutionStartedEvent,
+    ToolUseBlock,
+    UsageSnapshot,
 )
 from openharness.tools import ToolRegistry
 
@@ -78,6 +80,7 @@ def _make_context(
     *,
     api_client: object,
     tool_registry: ToolRegistry | None = None,
+    max_turns: int = 20,
 ) -> QueryContext:
     return QueryContext(
         api_client=cast("OpenAICompatibleApiClient", api_client),
@@ -87,6 +90,7 @@ def _make_context(
         cwd=Path("/tmp"),
         model="qwen-plus",
         max_tokens=512,
+        max_turns=max_turns,
     )
 
 
@@ -113,8 +117,12 @@ class TestRunQueryNoToolPath:
         ):
             collected.append(event)
 
-        # Same events come out, in the same order.
-        assert collected == events
+        # P6+-T1: API events flow through unchanged, followed by the
+        # new ConversationCompleteEvent appended at the end.
+        from openharness.protocols import ConversationCompleteEvent
+
+        assert collected[:-1] == events
+        assert isinstance(collected[-1], ConversationCompleteEvent)
         assert client._turn == 1  # one API call
 
     @pytest.mark.parametrize(
@@ -139,7 +147,11 @@ class TestRunQueryNoToolPath:
                 context,
             )
         ]
-        assert len(collected) == 1
+        # P6+-T1: one API event + one ConversationCompleteEvent.
+        from openharness.protocols import ConversationCompleteEvent
+
+        assert len(collected) == 2
+        assert isinstance(collected[-1], ConversationCompleteEvent)
         # Single API turn, no exception raised.
         assert client._turn == 1
 
@@ -739,3 +751,98 @@ class TestRunQueryParallelToolUsesInOneTurn:
         ta_done_idx = events.index(completed[0])
         tb_start_idx = events.index(started[1])
         assert ta_start_idx < ta_done_idx < tb_start_idx
+
+
+# --------------------------------------------------------------------------- #
+# P6+-T1: ConversationCompleteEvent (multi-turn state hand-off)              #
+# --------------------------------------------------------------------------- #
+
+
+class TestConversationCompleteEvent:
+    """P6+-T1: ``run_query`` yields ``ConversationCompleteEvent`` as
+    its LAST event on clean exit (end_turn/max_tokens/stop_sequence).
+    The event carries the full message history so REPL callers can
+    carry forward multi-turn state."""
+
+    async def test_event_is_last_event_yielded(self) -> None:
+        from openharness.protocols import ConversationCompleteEvent
+
+        events: list[ApiStreamEvent] = [
+            ApiTextDeltaEvent(text="hello"),
+            _end_turn_event(text="hello"),
+        ]
+        client = _StubApiClient(events_per_turn=[events])
+        context = _make_context(api_client=client)
+
+        collected = [
+            event
+            async for event in run_query(
+                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+                context,
+            )
+        ]
+        # The final event is the ConversationCompleteEvent.
+        assert isinstance(collected[-1], ConversationCompleteEvent)
+        # And no earlier event is one.
+        assert not any(isinstance(e, ConversationCompleteEvent) for e in collected[:-1])
+
+    async def test_event_includes_user_and_assistant_messages(self) -> None:
+        from openharness.protocols import ConversationCompleteEvent
+
+        end = _end_turn_event(text="response text")
+        client = _StubApiClient(events_per_turn=[[end]])
+        context = _make_context(api_client=client)
+
+        collected = [
+            event
+            async for event in run_query(
+                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+                context,
+            )
+        ]
+        final = collected[-1]
+        assert isinstance(final, ConversationCompleteEvent)
+        # The history contains the original user message + the final
+        # assistant response.
+        assert len(final.messages) == 2
+        assert final.messages[0].role == "user"
+        assert final.messages[1].role == "assistant"
+
+    async def test_not_emitted_on_loop_limit_exceeded(self) -> None:
+        # When the loop hits max_turns without an end_turn, the engine
+        # raises LoopLimitExceeded — no ConversationCompleteEvent is
+        # yielded (the loop didn't complete cleanly). REPL handles
+        # this via the LoopError exception arm.
+        from openharness.engine.errors import LoopLimitExceeded
+        from openharness.protocols import ConversationCompleteEvent
+
+        # Force tool_use forever (so engine never returns end_turn).
+        tool_use_msg = ConversationMessage(
+            role="assistant",
+            content=[ToolUseBlock(id="t1", name="DummyTool", input={})],
+        )
+        complete = ApiMessageCompleteEvent(
+            message=tool_use_msg,
+            usage=UsageSnapshot(input_tokens=1, output_tokens=1),
+            stop_reason="tool_use",
+        )
+        # Simulate a registered tool to keep dispatch happy.
+        registry = ToolRegistry()
+        client = _StubApiClient(events_per_turn=[[complete]] * 5)
+
+        context = _make_context(
+            api_client=client,
+            tool_registry=registry,
+            max_turns=2,
+        )
+
+        events_seen: list[ApiStreamEvent] = []
+        with pytest.raises(LoopLimitExceeded):
+            async for event in run_query(
+                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+                context,
+            ):
+                events_seen.append(event)
+
+        # Did NOT emit a ConversationCompleteEvent before raising.
+        assert not any(isinstance(e, ConversationCompleteEvent) for e in events_seen)

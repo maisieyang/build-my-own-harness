@@ -27,6 +27,7 @@ from openharness.protocols.stream_events import (
     ApiRetryEvent,
     ApiStreamEvent,
     ApiTextDeltaEvent,
+    ConversationCompleteEvent,
     ToolExecutionCompletedEvent,
     ToolExecutionStartedEvent,
 )
@@ -40,6 +41,7 @@ __all__ = [
     "ApiStreamEvent",
     "ApiTextDeltaEvent",
     "ContentBlock",
+    "ConversationCompleteEvent",
     "ConversationMessage",
     "ImageBlock",
     "ImageSource",

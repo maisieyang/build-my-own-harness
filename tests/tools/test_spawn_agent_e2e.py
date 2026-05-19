@@ -135,11 +135,15 @@ class TestSpawnAgentFullChain:
             )
         ]
 
-        # The parent's final event is its turn-2 end_turn.
-        last = events[-1]
-        assert isinstance(last, ApiMessageCompleteEvent)
-        assert last.stop_reason == "end_turn"
-        text_blocks = [b for b in last.message.content if isinstance(b, TextBlock)]
+        # The parent's final event is the ConversationCompleteEvent
+        # (P6+-T1); the LAST ApiMessageCompleteEvent (turn-2 end_turn)
+        # carries the assistant's text.
+        from openharness.protocols import ConversationCompleteEvent
+
+        assert isinstance(events[-1], ConversationCompleteEvent)
+        last_api = [e for e in events if isinstance(e, ApiMessageCompleteEvent)][-1]
+        assert last_api.stop_reason == "end_turn"
+        text_blocks = [b for b in last_api.message.content if isinstance(b, TextBlock)]
         assert any("the answer is 42 words" in b.text for b in text_blocks)
 
         # 3 stub calls: parent turn 1 (tool_use), sub-agent turn 1 (end_turn),

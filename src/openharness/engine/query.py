@@ -60,6 +60,7 @@ from openharness.permissions import Decision, PermissionMode
 from openharness.protocols import (
     ApiMessageCompleteEvent,
     ApiMessageRequest,
+    ConversationCompleteEvent,
     ToolExecutionCompletedEvent,
     ToolExecutionStartedEvent,
     ToolResultBlock,
@@ -257,6 +258,16 @@ async def run_query(
                 )
 
                 if complete_event.stop_reason != "tool_use":
+                    # P6+-T1 (D24.2): emit the final conversation
+                    # state as the LAST event before exit so callers
+                    # (oh chat REPL) can carry forward multi-turn
+                    # history. The list includes the just-completed
+                    # assistant message so the next user turn sees
+                    # the full exchange.
+                    final_messages = append_assistant_message(
+                        messages, list(complete_event.message.content)
+                    )
+                    yield ConversationCompleteEvent(messages=final_messages)
                     return  # end_turn / max_tokens / stop_sequence -> exit
 
                 # Tool dispatch (D6.3 serial). Per D10.4, four recovery paths

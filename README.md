@@ -1034,6 +1034,67 @@ class is gated on `_gvisor_available()` (checks `docker info` for
 See `learnings/phase-7c.md` for the retrospective on the runtime-
 selection pattern.
 
+### Phase 6+ features — `oh chat` multi-turn REPL
+
+Every phase up to 7c is single-shot: `oh ask "..."` runs one query
+and exits. Phase 6+ adds `oh chat`, a multi-turn REPL on top of the
+same engine.
+
+**Basic usage**:
+
+```bash
+oh chat
+oh chat — multi-turn REPL. /help for commands, /exit to quit.
+>>> Read README.md and tell me what this project does
+[Read] path='README.md'
+[Read] → "# OpenHarness ..."
+This project is OpenHarness — a production-grade Python LLM agent harness...
+>>> Now summarize that in one sentence
+A modular agent framework that wraps an LLM with tools, permissions,
+hooks, and a sandbox so it can safely operate on files/shell.
+>>> /exit
+```
+
+**Built-in slash commands** (per D24.3):
+
+- `/exit`, `/quit` — leave the REPL
+- `/clear` — reset conversation history (keeps tools + mode)
+- `/help` — show available commands
+
+Phase 5b user-authored slash commands (e.g. `/review last commit`)
+still work — they expand to user-facing prompts that flow to the LLM.
+
+**Bundle (mode) integration** (per D24.4): if the FIRST user input
+is a slash command with a `mode:` field, the bundle is loaded and
+its overrides persist for the rest of the session. Mid-session mode
+switching is not supported in MVP.
+
+**Exit conditions**:
+
+- `/exit` or `/quit` slash command — clean exit
+- Ctrl+D (EOF) — clean exit
+- Ctrl+C — cancels the current input line (prints hint, continues)
+
+**How the multi-turn state flows**: the engine's `run_query` now
+emits a `ConversationCompleteEvent` as the FINAL event of each
+invocation, carrying the full messages list (user + assistant +
+tool_use + tool_result). The REPL captures that and uses it as the
+next turn's `initial_messages`. The engine itself is unchanged
+between `oh ask` and `oh chat`; only the new event type bridges
+the two surfaces.
+
+**Cross-cutting invariant verified** — Phase 6+ landed with **zero
+diff** vs Phase 7c close on `permissions/`, `hooks/`,
+`observability/`, `mcp/`, `compaction/`, `skills/`, `commands/`,
+`bundles/`, `markdown_store/`, `tools/`, `execution/`,
+`prompts.py`, `config/settings.py`. Only additive diffs:
+`protocols/stream_events.py` (+1 event type), `engine/query.py`
+(emit at exit, ~15 LoC), `_stream_render.py` (untouched — ignores
+unknown events), `cli.py` (+`_run_chat` + `chat` command).
+
+See `learnings/phase-6plus.md` for the retro on the
+`ConversationCompleteEvent` design pattern.
+
 ### Want to verify the wire path against your account?
 
 ```bash

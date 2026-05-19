@@ -70,6 +70,8 @@ async def test_query_context_and_run_query_compose_via_public_path() -> None:
         model="qwen-plus",
     )
 
+    from openharness.protocols import ConversationCompleteEvent
+
     collected = [
         event
         async for event in run_query(
@@ -77,5 +79,7 @@ async def test_query_context_and_run_query_compose_via_public_path() -> None:
             ctx,
         )
     ]
-    assert len(collected) == 1
+    # P6+-T1: one API event + final ConversationCompleteEvent.
+    assert len(collected) == 2
     assert isinstance(collected[0], ApiMessageCompleteEvent)
+    assert isinstance(collected[1], ConversationCompleteEvent)

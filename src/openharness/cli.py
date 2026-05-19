@@ -42,8 +42,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    from openharness.protocols.stream_events import ApiStreamEvent
 from openai import AsyncOpenAI
 from pydantic import ValidationError
 
@@ -425,6 +431,286 @@ async def _run_ask(
 
 
 # --------------------------------------------------------------------------- #
+# P6+: oh chat REPL                                                           #
+# --------------------------------------------------------------------------- #
+
+
+_CHAT_HELP_TEXT = """\
+oh chat — multi-turn REPL commands:
+  /exit, /quit       leave the REPL
+  /clear             reset conversation history (keeps tools + mode)
+  /help              show this message
+
+User-authored slash commands (Phase 5b) work too — type ``/name args``
+to expand a command. Bundles (Phase 5d) resolve on the FIRST message
+of the session and persist for the rest.
+
+Use Ctrl+D (EOF) to exit; Ctrl+C cancels the current input line."""
+
+
+async def _run_chat(
+    *,
+    model_override: str | None,
+    max_tokens: int,
+    permission_mode_override: PermissionMode | None,
+    log_level_override: LogLevel | None,
+    log_format_override: LogFormat | None,
+    tool_result_cap_override: int | None,
+    auto_truncate_override: bool | None,
+    no_skills: bool = False,
+    no_commands: bool = False,
+    sandbox_override: bool | None = None,
+    sandbox_image_override: str | None = None,
+    sandbox_network_override: str | None = None,
+    sandbox_memory_override: str | None = None,
+    sandbox_cpus_override: float | None = None,
+    sandbox_runtime_override: str | None = None,
+    enable_plugin_hooks_override: bool | None = None,
+) -> None:
+    """Multi-turn REPL driver — P6+-T2.
+
+    Builds a QueryContext once, then loops on ``input(">>> ")``,
+    accumulating conversation history across turns. Each turn runs the
+    same ``run_query`` engine ``oh ask`` uses; the new
+    ``ConversationCompleteEvent`` exposes the post-turn message list
+    which becomes the next turn's ``initial_messages``.
+    """
+    # Bootstrap is largely identical to ``_run_ask``. Factoring is a
+    # Phase 9 polish candidate — for now, the duplication is contained
+    # and tested through both commands' integration tests.
+    from openharness.protocols.stream_events import ConversationCompleteEvent
+
+    settings = _load_settings()
+    model = model_override or settings.model
+    permission_mode = (
+        permission_mode_override
+        if permission_mode_override is not None
+        else settings.permission_mode
+    )
+    log_level = log_level_override or settings.log_level
+    log_format = log_format_override or settings.log_format
+    tool_result_cap = (
+        tool_result_cap_override
+        if tool_result_cap_override is not None
+        else settings.tool_result_cap
+    )
+    auto_truncate = (
+        auto_truncate_override if auto_truncate_override is not None else settings.auto_truncate
+    )
+    sandbox_enabled = sandbox_override if sandbox_override is not None else settings.sandbox_enabled
+    sandbox_image = sandbox_image_override or settings.sandbox_image
+    sandbox_network = sandbox_network_override or settings.sandbox_network
+    sandbox_memory = sandbox_memory_override or settings.sandbox_memory
+    sandbox_cpus = (
+        sandbox_cpus_override if sandbox_cpus_override is not None else settings.sandbox_cpus
+    )
+    sandbox_runtime = sandbox_runtime_override or settings.sandbox_runtime
+    enable_plugin_hooks = (
+        enable_plugin_hooks_override
+        if enable_plugin_hooks_override is not None
+        else settings.enable_plugin_hooks
+    )
+
+    configure_logging(level=log_level, format=log_format)
+
+    plugin_hook_catalog: dict[str, HookSpec] = {}
+    if enable_plugin_hooks:
+        plugin_hook_catalog.update(discover_plugin_hooks())
+        fs_catalog = discover_filesystem_hook_plugins(
+            global_dir=Path.home() / ".openharness" / "hooks",
+            project_dir=Path.cwd() / ".openharness" / "hooks",
+        )
+        for fs_name, fs_spec in fs_catalog.items():
+            if fs_name not in plugin_hook_catalog:
+                plugin_hook_catalog[fs_name] = fs_spec
+
+    client = _build_client(settings)
+    registry = create_default_tool_registry()
+    pool = McpClientPool(
+        settings.mcp_servers,
+        trusted_servers=settings.trusted_mcp_servers,
+    )
+
+    async with pool, contextlib.AsyncExitStack() as stack:
+        for adapter in pool.adapters:
+            registry.register(adapter)
+
+        env = detect_environment()
+        skill_store: SkillStore
+        if no_skills:
+            skill_store = EmptySkillStore()
+        else:
+            skill_store = FilesystemSkillStore(
+                global_dir=Path.home() / ".openharness" / "skills",
+                project_dir=env.cwd / ".openharness" / "skills",
+            )
+        if skill_store.discover():
+            registry.register(LoadSkillTool(skill_store))
+
+        hook_registry = HookRegistry()
+        if auto_truncate and tool_result_cap > 0:
+            hook_registry.register(
+                "PostToolUse",
+                TruncateToolResultHook(cap_tokens=tool_result_cap, model=model),
+            )
+
+        execution_env: ExecutionEnvironment
+        if sandbox_enabled:
+            execution_env = await stack.enter_async_context(
+                SandboxExecution(
+                    cwd=env.cwd,
+                    image=sandbox_image,
+                    network=sandbox_network,
+                    memory=sandbox_memory,
+                    cpus=sandbox_cpus,
+                    pids=settings.sandbox_pids,
+                    runtime=sandbox_runtime,
+                )
+            )
+        else:
+            execution_env = _HOST_EXECUTION
+
+        # ``command_store`` is reused per-turn for user-authored
+        # slash commands (Phase 5b).
+        command_store = (
+            FilesystemCommandStore(
+                global_dir=Path.home() / ".openharness" / "commands",
+                project_dir=Path.cwd() / ".openharness" / "commands",
+            )
+            if not no_commands
+            else None
+        )
+
+        # Bundle resolves on FIRST turn only (per D24.4). Tracked
+        # outside the loop so subsequent turns reuse the same context.
+        bundle_resolved: bool = False
+        effective_registry = registry
+        effective_hook_registry = hook_registry
+        effective_settings = settings
+        system_prompt = build_system_prompt(registry.to_api_schema(), env, skill_store=skill_store)
+
+        typer.echo("oh chat — multi-turn REPL. /help for commands, /exit to quit.")
+
+        history: list[ConversationMessage] = []
+
+        while True:
+            try:
+                user_input = await asyncio.to_thread(input, ">>> ")
+            except EOFError:
+                typer.echo("")  # newline after EOF
+                break
+            except KeyboardInterrupt:
+                typer.echo("\n(use /exit to quit)")
+                continue
+
+            user_input = user_input.strip()
+            if not user_input:
+                continue
+
+            # Built-in REPL commands (D24.3).
+            if user_input in ("/exit", "/quit"):
+                break
+            if user_input == "/clear":
+                history = []
+                typer.echo("(conversation cleared)")
+                continue
+            if user_input == "/help":
+                typer.echo(_CHAT_HELP_TEXT)
+                continue
+
+            # Phase 5b slash command expansion (for non-built-in).
+            invoked_command = None
+            if user_input.startswith("/") and command_store is not None:
+                try:
+                    user_input, invoked_command = resolve_command_invocation(
+                        user_input, command_store
+                    )
+                except UnknownCommandError as exc:
+                    typer.echo(f"Unknown command: {exc}", err=True)
+                    continue  # don't exit — let user retry
+
+            # Phase 5d bundle resolution (FIRST turn only, per D24.4).
+            if (
+                not bundle_resolved
+                and invoked_command is not None
+                and invoked_command.mode is not None
+            ):
+                bundle_store = FilesystemBundleStore(
+                    global_dir=Path.home() / ".openharness" / "bundles",
+                    project_dir=Path.cwd() / ".openharness" / "bundles",
+                )
+                bundle = bundle_store.get(invoked_command.mode)
+                if bundle is None:
+                    available = sorted(bundle_store.discover().keys())
+                    typer.echo(
+                        f"Unknown bundle: {invoked_command.mode!r}; "
+                        f"available: {', '.join(available) or '(none)'}",
+                        err=True,
+                    )
+                    continue
+                application = apply_bundle_to_context(
+                    bundle=bundle,
+                    tool_registry=registry,
+                    hook_registry=hook_registry,
+                    settings=settings,
+                    system_prompt="",
+                    plugin_hook_catalog=plugin_hook_catalog,
+                )
+                effective_registry = application.tool_registry
+                effective_hook_registry = application.hook_registry
+                effective_settings = application.settings
+                if bundle.system_prompt is not None:
+                    system_prompt = bundle.system_prompt
+                else:
+                    system_prompt = build_system_prompt(
+                        effective_registry.to_api_schema(),
+                        env,
+                        skill_store=skill_store,
+                    )
+            bundle_resolved = True
+
+            context = QueryContext(
+                api_client=client,
+                tool_registry=effective_registry,
+                permission_checker=TierBasedPermissionChecker(
+                    effective_registry, effective_settings
+                ),
+                hook_registry=effective_hook_registry,
+                system_prompt=system_prompt,
+                cwd=env.cwd,
+                model=model,
+                max_tokens=max_tokens,
+                permission_mode=permission_mode,
+                skill_store=skill_store,
+                max_agent_depth=settings.max_agent_depth,
+                execution_env=execution_env,
+            )
+
+            history.append(ConversationMessage(role="user", content=[TextBlock(text=user_input)]))
+
+            captured: list[ConversationMessage] | None = None
+
+            async def _capture(
+                events_iter: AsyncIterator[ApiStreamEvent],
+            ) -> AsyncIterator[ApiStreamEvent]:
+                nonlocal captured
+                async for ev in events_iter:
+                    if isinstance(ev, ConversationCompleteEvent):
+                        captured = ev.messages
+                    yield ev
+
+            try:
+                await render_stream(_capture(run_query(history, context)))
+            except LoopError as exc:
+                typer.echo(f"Loop error: {exc}", err=True)
+                # Don't break — let user issue /clear or retry.
+                continue
+
+            if captured is not None:
+                history = captured
+
+
+# --------------------------------------------------------------------------- #
 # Typer command surface                                                       #
 # --------------------------------------------------------------------------- #
 
@@ -697,6 +983,75 @@ def ask(
         # Root catch-all for any OpenHarness error not handled above:
         # the rare OpenHarnessApiError-but-not-Auth/Rate/Request, plus
         # P3+ ToolError / PermissionError / HookError once they raise.
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@app.command(help="Open an interactive multi-turn REPL (Phase 6+).")
+def chat(
+    model: str | None = typer.Option(None, "--model", "-m", help="Model name override."),
+    max_tokens: int = typer.Option(
+        DEFAULT_MAX_TOKENS, "--max-tokens", min=1, help="Max tokens per turn."
+    ),
+    auto: bool = typer.Option(False, "--auto", help="Skip confirmations."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="List tool calls; don't execute."),
+    log_level: LogLevel | None = typer.Option(None, "--log-level"),
+    log_format: LogFormat | None = typer.Option(None, "--log-format"),
+    tool_result_cap: int | None = typer.Option(None, "--tool-result-cap", min=0),
+    no_auto_truncate: bool = typer.Option(False, "--no-auto-truncate"),
+    no_skills: bool = typer.Option(False, "--no-skills"),
+    no_commands: bool = typer.Option(False, "--no-commands"),
+    sandbox: bool | None = typer.Option(None, "--sandbox/--no-sandbox"),
+    sandbox_image: str | None = typer.Option(None, "--sandbox-image"),
+    sandbox_network: str | None = typer.Option(None, "--sandbox-network"),
+    sandbox_memory: str | None = typer.Option(None, "--sandbox-memory"),
+    sandbox_cpus: float | None = typer.Option(None, "--sandbox-cpus"),
+    sandbox_runtime: str | None = typer.Option(None, "--sandbox-runtime"),
+    enable_plugin_hooks: bool | None = typer.Option(
+        None, "--enable-plugin-hooks/--no-enable-plugin-hooks"
+    ),
+) -> None:
+    """Multi-turn REPL — same flag surface as ``ask`` minus the prompt arg."""
+    if auto and dry_run:
+        typer.echo("error: --auto and --dry-run are mutually exclusive", err=True)
+        raise typer.Exit(code=2)
+
+    permission_mode_override: PermissionMode | None = None
+    if dry_run:
+        permission_mode_override = PermissionMode.DRY_RUN
+    elif auto:
+        permission_mode_override = PermissionMode.AUTO
+
+    auto_truncate_override: bool | None = False if no_auto_truncate else None
+
+    try:
+        asyncio.run(
+            _run_chat(
+                model_override=model,
+                max_tokens=max_tokens,
+                permission_mode_override=permission_mode_override,
+                log_level_override=log_level,
+                log_format_override=log_format,
+                tool_result_cap_override=tool_result_cap,
+                auto_truncate_override=auto_truncate_override,
+                no_skills=no_skills,
+                no_commands=no_commands,
+                sandbox_override=sandbox,
+                sandbox_image_override=sandbox_image,
+                sandbox_network_override=sandbox_network,
+                sandbox_memory_override=sandbox_memory,
+                sandbox_cpus_override=sandbox_cpus,
+                sandbox_runtime_override=sandbox_runtime,
+                enable_plugin_hooks_override=enable_plugin_hooks,
+            )
+        )
+    except ValidationError as exc:
+        typer.echo(f"Configuration error:\n{exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except (AuthenticationFailure, RateLimitFailure, RequestFailure) as exc:
+        typer.echo(f"API error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except OpenHarnessError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 

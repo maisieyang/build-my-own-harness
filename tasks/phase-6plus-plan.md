@@ -15,7 +15,7 @@ production + ~150 LoC tests.
 
 ## Task list
 
-### P6+-T1: `ConversationCompleteEvent` + engine emits 🔜 NEXT
+### P6+-T1: `ConversationCompleteEvent` + engine emits ✅
 
 **Description**: New stream event type exposing the engine's final
 messages list. Engine yields it as the LAST event of `run_query`.
@@ -43,7 +43,7 @@ messages list. Engine yields it as the LAST event of `run_query`.
 
 ---
 
-### P6+-T2: `_run_chat` async REPL loop
+### P6+-T2: `_run_chat` async REPL loop ✅
 
 **Description**: New CLI helper that drives the multi-turn loop.
 Reuses the existing bootstrap (settings, client, registry, bundles)
@@ -84,7 +84,7 @@ factored as a helper.
 
 ---
 
-### P6+-T3: Invariant + README + retro
+### P6+-T3: Invariant + README + retro ✅
 
 **Acceptance**:
 - [ ] `tests/execution/test_invariant.py` extends forbidden set with

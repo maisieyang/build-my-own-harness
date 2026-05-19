@@ -197,10 +197,14 @@ class TestSkillsEndToEnd:
             )
         ]
 
-        # 6. Final event is end_turn from turn 2.
-        last = events[-1]
-        assert isinstance(last, ApiMessageCompleteEvent)
-        assert last.stop_reason == "end_turn"
+        # 6. Final event is the conversation handoff (P6+-T1); the
+        # LAST ApiMessageCompleteEvent (turn 2's end_turn) is the one
+        # before the new ConversationCompleteEvent.
+        from openharness.protocols import ConversationCompleteEvent
+
+        assert isinstance(events[-1], ConversationCompleteEvent)
+        last_api = [e for e in events if isinstance(e, ApiMessageCompleteEvent)][-1]
+        assert last_api.stop_reason == "end_turn"
 
         # 7. Two LLM turns happened.
         assert len(client.captured_requests) == 2

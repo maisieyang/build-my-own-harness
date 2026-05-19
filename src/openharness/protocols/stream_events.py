@@ -97,6 +97,23 @@ class ToolExecutionCompletedEvent(StrictModel):
     is_error: bool
 
 
+class ConversationCompleteEvent(StrictModel):
+    """P6+-T1: yielded as the FINAL event of ``run_query`` when the
+    loop exits (end_turn reached or max_turns hit).
+
+    Carries the full conversation messages list so callers (notably
+    the ``oh chat`` REPL) can carry forward state across turns —
+    just plug ``event.messages`` back in as ``initial_messages``
+    for the next ``run_query`` invocation.
+
+    ``oh ask``'s renderer ignores this event (no visible output);
+    it's metadata for callers that care about multi-turn state.
+    """
+
+    type: Literal["conversation_complete"] = "conversation_complete"
+    messages: list[ConversationMessage]
+
+
 # Discriminated union -- Pydantic dispatches by the ``type`` field at parse time.
 # Same pattern as ``ContentBlock`` in content.py.
 ApiStreamEvent: TypeAlias = Annotated[
@@ -104,6 +121,7 @@ ApiStreamEvent: TypeAlias = Annotated[
     | ApiMessageCompleteEvent
     | ApiRetryEvent
     | ToolExecutionStartedEvent
-    | ToolExecutionCompletedEvent,
+    | ToolExecutionCompletedEvent
+    | ConversationCompleteEvent,
     Field(discriminator="type"),
 ]
