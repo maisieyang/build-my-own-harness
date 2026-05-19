@@ -34,6 +34,7 @@ from openharness.observability import configure_logging
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
+    from pathlib import Path
 
     from openharness.hooks.result import HookResult
 
@@ -274,3 +275,233 @@ class TestDefaultGroup:
 
 def _events(stream: io.StringIO) -> list[dict[str, object]]:
     return [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
+
+
+# --------------------------------------------------------------------------- #
+# P5f-T1: discover_filesystem_hook_plugins                                    #
+# --------------------------------------------------------------------------- #
+
+
+class _StubModule:
+    """Bare object playing the role of a loaded Python module.
+    Attributes are inspected via ``vars()`` / ``getattr()`` exactly
+    like a real module."""
+
+    def __init__(self, **attrs: object) -> None:
+        for name, value in attrs.items():
+            setattr(self, name, value)
+
+
+def _stub_loader_factory(
+    mapping: dict[str, _StubModule | None],
+) -> Callable[[Path], object | None]:
+    """Return a callable that maps Path → stub module via filename.
+
+    ``mapping`` keys are file basenames (e.g. ``"my_plugin.py"``);
+    values are the module to return (or None to simulate load failure).
+    """
+
+    def _loader(path: Path) -> object | None:
+        return mapping.get(path.name)
+
+    return _loader
+
+
+class TestDiscoverFilesystemHookPlugins:
+    """P5f-T1: filesystem hook plugin discovery — ``*.py`` files in
+    global + project layers."""
+
+    def test_empty_dirs_returns_empty(self) -> None:
+        from openharness.bundles import discover_filesystem_hook_plugins
+
+        catalog = discover_filesystem_hook_plugins()
+        assert catalog == {}
+
+    def test_single_plugin_in_global(self, tmp_path: Path) -> None:
+        from openharness.bundles import discover_filesystem_hook_plugins
+
+        global_dir = tmp_path / "global"
+        global_dir.mkdir()
+        (global_dir / "slack.py").write_text("# stub\n")
+        spec = HookSpec(event="PostToolUse", hook=_dummy_hook)
+        loader = _stub_loader_factory({"slack.py": _StubModule(slack_notify=spec)})
+
+        catalog = discover_filesystem_hook_plugins(global_dir=global_dir, module_loader=loader)
+        assert catalog == {"slack_notify": spec}
+
+    def test_multiple_specs_in_one_file(self, tmp_path: Path) -> None:
+        from openharness.bundles import discover_filesystem_hook_plugins
+
+        d = tmp_path / "global"
+        d.mkdir()
+        (d / "hooks.py").write_text("# stub\n")
+        a = HookSpec(event="PostToolUse", hook=_dummy_hook)
+        b = HookSpec(event="PreToolUse", hook=_other_hook)
+        loader = _stub_loader_factory({"hooks.py": _StubModule(audit=a, deny=b)})
+
+        catalog = discover_filesystem_hook_plugins(global_dir=d, module_loader=loader)
+        assert set(catalog.keys()) == {"audit", "deny"}
+
+    def test_module_load_failure_skipped(self, tmp_path: Path, stream: io.StringIO) -> None:
+        from openharness.bundles import discover_filesystem_hook_plugins
+
+        configure_logging(level="INFO", format="json", stream=stream)
+
+        d = tmp_path / "global"
+        d.mkdir()
+        (d / "good.py").write_text("# stub\n")
+        (d / "bad.py").write_text("# stub\n")
+        good_spec = HookSpec(event="PostToolUse", hook=_dummy_hook)
+        # bad.py returns None from loader → simulates import error
+        loader = _stub_loader_factory({"good.py": _StubModule(g=good_spec), "bad.py": None})
+
+        catalog = discover_filesystem_hook_plugins(global_dir=d, module_loader=loader)
+        assert catalog == {"g": good_spec}
+
+    def test_module_with_no_specs_silently_skipped(
+        self, tmp_path: Path, stream: io.StringIO
+    ) -> None:
+        from openharness.bundles import discover_filesystem_hook_plugins
+
+        configure_logging(level="INFO", format="json", stream=stream)
+
+        d = tmp_path / "global"
+        d.mkdir()
+        (d / "empty.py").write_text("# stub\n")
+        loader = _stub_loader_factory(
+            {"empty.py": _StubModule(unrelated_var=42, some_func=lambda: None)}
+        )
+
+        catalog = discover_filesystem_hook_plugins(global_dir=d, module_loader=loader)
+        assert catalog == {}
+
+    def test_builtin_collision_skipped(self, tmp_path: Path, stream: io.StringIO) -> None:
+        from openharness.bundles import discover_filesystem_hook_plugins
+
+        configure_logging(level="INFO", format="json", stream=stream)
+
+        d = tmp_path / "global"
+        d.mkdir()
+        (d / "rogue.py").write_text("# stub\n")
+        # Plugin attempts to register as `audit_log` (a built-in).
+        rogue = HookSpec(event="PreToolUse", hook=_dummy_hook)
+        loader = _stub_loader_factory({"rogue.py": _StubModule(audit_log=rogue)})
+
+        catalog = discover_filesystem_hook_plugins(global_dir=d, module_loader=loader)
+        assert catalog == {}
+        events = _events(stream)
+        assert any(e.get("event") == "filesystem_hook_collides_with_builtin" for e in events)
+
+    def test_same_layer_collision_first_wins(self, tmp_path: Path, stream: io.StringIO) -> None:
+        from openharness.bundles import discover_filesystem_hook_plugins
+
+        configure_logging(level="INFO", format="json", stream=stream)
+
+        d = tmp_path / "global"
+        d.mkdir()
+        # Two files in same layer both expose ``shared``.
+        (d / "a.py").write_text("# stub\n")
+        (d / "b.py").write_text("# stub\n")
+        spec_a = HookSpec(event="PostToolUse", hook=_dummy_hook)
+        spec_b = HookSpec(event="PreToolUse", hook=_other_hook)
+        loader = _stub_loader_factory(
+            {"a.py": _StubModule(shared=spec_a), "b.py": _StubModule(shared=spec_b)}
+        )
+
+        catalog = discover_filesystem_hook_plugins(global_dir=d, module_loader=loader)
+        # Sorted glob: a.py comes first → wins.
+        assert catalog["shared"] is spec_a
+        events = _events(stream)
+        assert any(e.get("event") == "filesystem_hook_collision" for e in events)
+
+    def test_project_overrides_global(self, tmp_path: Path, stream: io.StringIO) -> None:
+        from openharness.bundles import discover_filesystem_hook_plugins
+
+        configure_logging(level="INFO", format="json", stream=stream)
+
+        global_dir = tmp_path / "global"
+        global_dir.mkdir()
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        (global_dir / "h.py").write_text("# stub\n")
+        (project_dir / "h.py").write_text("# stub\n")
+
+        global_spec = HookSpec(event="PostToolUse", hook=_dummy_hook)
+        project_spec = HookSpec(event="PreToolUse", hook=_other_hook)
+
+        # Discriminate by IMMEDIATE parent dir (not full path string)
+        # because pytest's tmp_path injects the test method name
+        # into the path — e.g. ``test_project_overrides_global0``
+        # contains "global" and would match both paths if we string-
+        # searched the full path. ``path.parent.name`` is the
+        # ``global``/``project`` dir we actually created.
+        def loader(path: Path) -> object | None:
+            if path.parent.name == "global":
+                return _StubModule(shared=global_spec)
+            return _StubModule(shared=project_spec)
+
+        catalog = discover_filesystem_hook_plugins(
+            global_dir=global_dir,
+            project_dir=project_dir,
+            module_loader=loader,
+        )
+        # Project wins.
+        assert catalog["shared"] is project_spec
+        events = _events(stream)
+        assert any(e.get("event") == "filesystem_hook_override" for e in events)
+
+    def test_non_py_files_ignored(self, tmp_path: Path) -> None:
+        from openharness.bundles import discover_filesystem_hook_plugins
+
+        d = tmp_path / "global"
+        d.mkdir()
+        (d / "hook.py").write_text("# stub\n")
+        (d / "README.md").write_text("docs\n")
+        (d / "config.json").write_text("{}\n")
+
+        spec = HookSpec(event="PostToolUse", hook=_dummy_hook)
+        loader = _stub_loader_factory({"hook.py": _StubModule(h=spec)})
+
+        catalog = discover_filesystem_hook_plugins(global_dir=d, module_loader=loader)
+        assert set(catalog.keys()) == {"h"}
+
+    def test_missing_dir_skipped(self, tmp_path: Path) -> None:
+        # Non-existent dir → skip-not-fail, empty catalog.
+        from openharness.bundles import discover_filesystem_hook_plugins
+
+        catalog = discover_filesystem_hook_plugins(
+            global_dir=tmp_path / "does_not_exist",
+        )
+        assert catalog == {}
+
+    def test_default_loader_loads_real_file(self, tmp_path: Path) -> None:
+        # End-to-end: write an actual .py file, default loader imports it.
+        from openharness.bundles import discover_filesystem_hook_plugins
+
+        d = tmp_path / "global"
+        d.mkdir()
+        (d / "real.py").write_text(
+            "from openharness.bundles import hook_spec\n"
+            "@hook_spec('PostToolUse')\n"
+            "async def my_real_hook(ctx):\n"
+            "    return None\n",
+            encoding="utf-8",
+        )
+
+        catalog = discover_filesystem_hook_plugins(global_dir=d)
+        assert "my_real_hook" in catalog
+        assert catalog["my_real_hook"].event == "PostToolUse"
+
+    def test_default_loader_syntax_error_skipped(self, tmp_path: Path, stream: io.StringIO) -> None:
+        from openharness.bundles import discover_filesystem_hook_plugins
+
+        configure_logging(level="INFO", format="json", stream=stream)
+
+        d = tmp_path / "global"
+        d.mkdir()
+        (d / "broken.py").write_text("def syntax error :::\n", encoding="utf-8")
+
+        catalog = discover_filesystem_hook_plugins(global_dir=d)
+        assert catalog == {}
+        events = _events(stream)
+        assert any(e.get("event") == "filesystem_hook_load_failed" for e in events)

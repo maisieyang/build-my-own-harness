@@ -1,4 +1,4 @@
-"""Plugin hook discovery — P5e-T1.
+"""Plugin hook discovery — P5e (entry points) + P5f (filesystem `*.py`).
 
 Per ``decisions/18-phase-5e-boundary.md``: third-party Python packages
 ship hooks via the ``openharness.hooks`` entry-point group.
@@ -43,6 +43,7 @@ from openharness.observability.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
+    from pathlib import Path
 
     from openharness.hooks import Hook
     from openharness.hooks.events import HookEvent
@@ -188,3 +189,174 @@ def discover_plugin_hooks(
         catalog[ep.name] = loaded
 
     return catalog
+
+
+def _default_module_loader(path: Path) -> object | None:
+    """Default loader for filesystem hook plugins — P5f-T1.
+
+    Imports ``path`` as a uniquely-named module to avoid namespace
+    clashes between global/project versions of the same file name.
+    Module name = ``openharness._user_hook_<sha8>_<stem>`` where
+    sha8 is the first 8 hex chars of SHA-256 of the absolute path.
+
+    Returns the loaded module object, or ``None`` if any error
+    occurs during import (warning logged). Same skip-not-fail
+    discipline as the entry-point loader.
+
+    The module is NOT registered into ``sys.modules`` permanently —
+    only stashed there during ``exec_module`` so the module's own
+    ``from foo import bar`` statements can resolve circular refs,
+    then popped before returning.
+    """
+    import hashlib
+    import importlib.util
+    import sys
+
+    try:
+        absolute = path.resolve()
+    except OSError as exc:
+        _logger.warning(
+            "filesystem_hook_path_failed",
+            path=str(path),
+            error=str(exc),
+        )
+        return None
+
+    sha8 = hashlib.sha256(str(absolute).encode()).hexdigest()[:8]
+    module_name = f"openharness._user_hook_{sha8}_{path.stem}"
+
+    try:
+        spec = importlib.util.spec_from_file_location(module_name, absolute)
+    except (OSError, ValueError) as exc:
+        _logger.warning(
+            "filesystem_hook_spec_failed",
+            path=str(path),
+            error=str(exc),
+        )
+        return None
+    if spec is None or spec.loader is None:
+        _logger.warning(
+            "filesystem_hook_spec_invalid",
+            path=str(path),
+        )
+        return None
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module  # temporary, for circular-import
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        # Any error during module-level code execution: syntax error,
+        # ImportError on a missing dependency, RuntimeError thrown from
+        # module-level statement. Skip + warn.
+        _logger.warning(
+            "filesystem_hook_load_failed",
+            path=str(path),
+            error=str(exc),
+        )
+        sys.modules.pop(module_name, None)
+        return None
+    finally:
+        # Even on success, remove from sys.modules so subsequent
+        # imports of unrelated code aren't polluted with our temp
+        # module name.
+        sys.modules.pop(module_name, None)
+    return module
+
+
+def discover_filesystem_hook_plugins(
+    *,
+    global_dir: Path | None = None,
+    project_dir: Path | None = None,
+    module_loader: Callable[[Path], object | None] | None = None,
+) -> dict[str, HookSpec]:
+    """Discover plugin hooks dropped under ``~/.openharness/hooks/*.py``
+    (global) + ``<cwd>/.openharness/hooks/*.py`` (project) — P5f-T1.
+
+    Per decisions/20 D22.1 / D22.3:each ``.py`` file is imported and
+    scanned for module-level :class:`HookSpec` attributes (the
+    decorated names from ``@hook_spec``). The plugin's name == the
+    attribute name on the imported module (file name is irrelevant —
+    one file can export multiple hooks).
+
+    Collision rules (D22.3, mirrors entry-point discovery):
+
+    - Plugin name collides with :data:`BUILTIN_HOOKS` →
+      ``filesystem_hook_collides_with_builtin`` warning, skipped.
+    - Same-layer same-name collision (two files in the same directory
+      both expose ``HookSpec`` with the same name) →
+      ``filesystem_hook_collision`` warning, first-wins.
+    - Project overrides global on same name →
+      ``filesystem_hook_override`` info logged.
+
+    Module load failure (syntax error, ImportError, etc.) →
+    ``filesystem_hook_load_failed`` warning, skip.Module with no
+    ``HookSpec`` attributes is silently skipped (empty hook file is
+    benign).
+
+    The ``module_loader`` test seam (D22.6) lets tests inject stub
+    modules without filesystem I/O. Production defaults to
+    :func:`_default_module_loader`.
+    """
+    if module_loader is None:
+        module_loader = _default_module_loader
+
+    catalog: dict[str, HookSpec] = {}
+    if global_dir is not None:
+        _scan_filesystem_dir(catalog, global_dir, layer="global", module_loader=module_loader)
+    if project_dir is not None:
+        _scan_filesystem_dir(catalog, project_dir, layer="project", module_loader=module_loader)
+    return catalog
+
+
+def _scan_filesystem_dir(
+    catalog: dict[str, HookSpec],
+    directory: Path,
+    *,
+    layer: str,
+    module_loader: Callable[[Path], object | None],
+) -> None:
+    """Scan ``directory`` for ``*.py`` files, load each, merge specs
+    into ``catalog`` honoring collision policy."""
+    if not directory.exists() or not directory.is_dir():
+        return
+    for path in sorted(directory.glob("*.py")):
+        module = module_loader(path)
+        if module is None:
+            continue  # warning already logged inside loader
+        # Walk module attributes; pick up every HookSpec instance.
+        # Sorted attribute names = deterministic ordering for tests
+        # and reproducible discovery across machines.
+        specs = [
+            (attr, getattr(module, attr))
+            for attr in sorted(vars(module).keys())
+            if isinstance(getattr(module, attr, None), HookSpec)
+        ]
+        if not specs:
+            # Empty hook file is benign — file imported cleanly but
+            # exported no HookSpec. Skip silently.
+            continue
+        for name, spec in specs:
+            if name in BUILTIN_HOOKS:
+                _logger.warning(
+                    "filesystem_hook_collides_with_builtin",
+                    name=name,
+                    path=str(path),
+                )
+                continue
+            if name in catalog:
+                if layer == "project":
+                    _logger.info(
+                        "filesystem_hook_override",
+                        name=name,
+                        new_path=str(path),
+                    )
+                    catalog[name] = spec
+                else:
+                    _logger.warning(
+                        "filesystem_hook_collision",
+                        name=name,
+                        skipped_path=str(path),
+                    )
+                continue
+            catalog[name] = spec

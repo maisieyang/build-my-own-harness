@@ -46,6 +46,7 @@ from openharness.bundles.apply import BundleApplication, apply_bundle_to_context
 from openharness.bundles.errors import UnknownBundleError
 from openharness.bundles.hook_plugins import (
     HookSpec,
+    discover_filesystem_hook_plugins,
     discover_plugin_hooks,
     hook_spec,
 )
@@ -69,6 +70,7 @@ __all__ = [
     "UnknownBundleError",
     "WhitelistRegistry",
     "apply_bundle_to_context",
+    "discover_filesystem_hook_plugins",
     "discover_plugin_hooks",
     "hook_spec",
     "parse_bundle",
