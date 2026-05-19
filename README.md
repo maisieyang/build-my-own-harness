@@ -895,6 +895,89 @@ parser + project-override + skip-not-fail).
 
 See `learnings/phase-8.md` for the retro on refactor invariants.
 
+### Phase 5f features — filesystem hook plugins (`*.py` discovery)
+
+Phase 5e shipped Python-entry-point plugin discovery for hooks.
+Phase 5f adds the **symmetric filesystem discovery layer**: drop a
+`.py` file under `~/.openharness/hooks/` (global) or
+`<cwd>/.openharness/hooks/` (project), and `@hook_spec`-decorated
+callables in that file become available to bundle frontmatter — no
+`pip install` required.
+
+**Plugin author workflow** — just drop a file:
+
+```python
+# ~/.openharness/hooks/slack_notify.py
+from openharness.bundles import hook_spec
+
+@hook_spec("PostToolUse")
+async def slack_notify(context):
+    """Notify Slack on tool dispatch complete."""
+    ...
+
+@hook_spec("PreApiCall")
+async def budget_guard(context):
+    """Deny API calls when budget exceeded."""
+    ...
+```
+
+One file can export multiple hooks — each `HookSpec`-typed module
+attribute becomes a plugin. The plugin name == the attribute name on
+the imported module (not the file name).
+
+**End-user enable flow** — Phase 5f reuses Phase 5e's
+`--enable-plugin-hooks` flag (D22.2 — same trust boundary).
+Enabling the flag now activates BOTH discovery sources:
+
+```bash
+oh ask --enable-plugin-hooks "/review last commit"
+# Loads:
+#   1. Entry-point plugins (Phase 5e)
+#   2. ~/.openharness/hooks/*.py + .openharness/hooks/*.py (Phase 5f)
+# Bundle's hooks: [name] frontmatter resolves against union.
+```
+
+**Merge order** (D22.4): entry-point plugins first, filesystem
+second, **first-wins on collision**. Entry-point plugins shadow
+filesystem plugins on the same name — packaged plugins are a
+stronger statement of intent than a dropped file.
+
+**Project overrides global** on the same plugin name within the
+filesystem layer (mirrors commands / skills / bundles convention).
+
+**Module loading** — each `.py` file is imported as a uniquely-
+named module (`openharness._user_hook_<sha8>_<stem>`) using
+`importlib.util.spec_from_file_location`. The SHA-8 prefix avoids
+namespace clashes between global/project versions of the same
+filename. The module is popped from `sys.modules` after
+`exec_module` so it doesn't pollute future imports.
+
+**Skip-not-fail discipline** — same as entry-point discovery and
+parse_X functions:
+
+- File can't be read / spec invalid → `filesystem_hook_path_failed`
+  / `filesystem_hook_spec_failed` warning, skip
+- Module fails to import (syntax error / `ImportError` / runtime
+  error at module level) → `filesystem_hook_load_failed` warning,
+  skip
+- Module has no `HookSpec` attributes → silent skip (benign empty
+  file)
+- Plugin name collides with `BUILTIN_HOOKS` → warning, skip
+- Same-layer same-name collision → first-wins, warning
+
+**Cross-cutting invariant** — Phase 5f landed with **zero diff** vs
+Phase 8 close on `permissions/`, `hooks/`, `engine/`,
+`observability/`, `mcp/`, `compaction/`, `skills/`, `commands/`,
+`protocols/`, `tools/`, `execution/`, `markdown_store/`,
+`bundles/{model,store,registry,errors,hooks,apply}.py`, AND
+`config/settings.py` (no new Settings field — reuses
+`enable_plugin_hooks` from 5e). Only additive diffs: extension to
+`bundles/hook_plugins.py` (~190 LoC for `discover_filesystem_hook_plugins`
++ `_default_module_loader`) and `cli.py` (the catalog assembly now
+merges both discovery sources).
+
+See `learnings/phase-5f.md` for the retrospective.
+
 ### Want to verify the wire path against your account?
 
 ```bash

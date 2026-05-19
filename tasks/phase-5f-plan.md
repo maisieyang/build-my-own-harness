@@ -17,7 +17,7 @@ production + ~120 LoC tests.
 
 ## Task list
 
-### P5f-T1: `discover_filesystem_hook_plugins` 🔜 NEXT
+### P5f-T1: `discover_filesystem_hook_plugins` ✅
 
 **Description**: New loader function + private `_default_module_loader`
 helper in `bundles/hook_plugins.py`. Skip-not-fail discipline; same
@@ -61,7 +61,7 @@ shape as the entry-point loader.
 
 ---
 
-### P5f-T2: CLI bootstrap merges filesystem catalog
+### P5f-T2: CLI bootstrap merges filesystem catalog ✅
 
 **Description**: `cli._run_ask` extends the `discover_plugin_hooks()`
 call to also merge filesystem-discovered plugins. Entry-point
@@ -83,7 +83,7 @@ plugins shadow filesystem plugins on same name (D22.4).
 
 ---
 
-### P5f-T3: Invariant + README + retro
+### P5f-T3: Invariant + README + retro ✅
 
 **Acceptance**:
 - [ ] `tests/execution/test_invariant.py` extends Phase 5d forbidden

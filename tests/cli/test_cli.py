@@ -1600,3 +1600,171 @@ class TestPluginHookDiscovery:
         # discovery off → slack_notify unknown → exit 1.
         assert result.exit_code == 1
         assert "Unknown hook" in result.stderr
+
+
+# --------------------------------------------------------------------------- #
+# P5f-T2: Filesystem hook plugin CLI integration                              #
+# --------------------------------------------------------------------------- #
+
+
+class TestFilesystemHookPlugins:
+    """``~/.openharness/hooks/*.py`` discovery merges into the same
+    catalog as entry-point plugins when ``--enable-plugin-hooks`` is on.
+    """
+
+    def test_filesystem_hook_resolves_when_flag_on(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        project = _isolate_skills_dirs(monkeypatch, tmp_path)
+
+        # Write a real .py hook file under the project's hooks dir.
+        hooks_dir = project / ".openharness" / "hooks"
+        hooks_dir.mkdir(parents=True)
+        (hooks_dir / "my_audit.py").write_text(
+            "from openharness.bundles import hook_spec\n"
+            "@hook_spec('PostToolUse')\n"
+            "async def my_audit(ctx):\n"
+            "    return None\n",
+            encoding="utf-8",
+        )
+
+        # Bundle references the filesystem-discovered hook.
+        cmd_path = project / ".openharness" / "commands"
+        cmd_path.mkdir(parents=True, exist_ok=True)
+        (cmd_path / "x.md").write_text(
+            "---\nname: x\ndescription: x\nmode: m\n---\nbody\n",
+            encoding="utf-8",
+        )
+        _write_bundle_file(
+            project / ".openharness" / "bundles",
+            "m",
+            "uses filesystem hook",
+            hooks=["my_audit"],
+        )
+
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "/x args", "--enable-plugin-hooks"])
+        assert result.exit_code == 0, result.stderr
+        ctx = captured.context
+        post = ctx.hook_registry.get("PostToolUse")  # type: ignore[attr-defined]
+        # Hook from filesystem .py file registered.
+        assert any(getattr(h, "__name__", "") == "my_audit" for h in post)
+
+    def test_entry_point_shadows_filesystem_on_same_name(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # Plugin name appears in BOTH entry-point catalog AND filesystem
+        # discovery — entry-point version wins (D22.4 first-wins).
+        from openharness.bundles import HookSpec
+
+        _set_minimum_env(monkeypatch)
+        project = _isolate_skills_dirs(monkeypatch, tmp_path)
+
+        async def entry_point_version(ctx: object) -> None:
+            del ctx
+            return None
+
+        # Filesystem version of the same plugin name.
+        hooks_dir = project / ".openharness" / "hooks"
+        hooks_dir.mkdir(parents=True)
+        (hooks_dir / "dup.py").write_text(
+            "from openharness.bundles import hook_spec\n"
+            "@hook_spec('PreToolUse')\n"  # different event!
+            "async def shared_name(ctx):\n"
+            "    return None\n",
+            encoding="utf-8",
+        )
+
+        # Bundle references the shared name.
+        cmd_path = project / ".openharness" / "commands"
+        cmd_path.mkdir(parents=True, exist_ok=True)
+        (cmd_path / "x.md").write_text(
+            "---\nname: x\ndescription: x\nmode: m\n---\nbody\n",
+            encoding="utf-8",
+        )
+        _write_bundle_file(
+            project / ".openharness" / "bundles",
+            "m",
+            "test",
+            hooks=["shared_name"],
+        )
+
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        # Entry-point returns the same name with a DIFFERENT event.
+        monkeypatch.setattr(
+            cli_module,
+            "discover_plugin_hooks",
+            lambda: {
+                "shared_name": HookSpec(event="PostToolUse", hook=entry_point_version),
+            },
+        )
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "/x args", "--enable-plugin-hooks"])
+        assert result.exit_code == 0
+        ctx = captured.context
+        # Entry-point version (PostToolUse) wins, filesystem (PreToolUse)
+        # is shadowed.
+        post = ctx.hook_registry.get("PostToolUse")  # type: ignore[attr-defined]
+        pre = ctx.hook_registry.get("PreToolUse")  # type: ignore[attr-defined]
+        assert entry_point_version in post
+        # Filesystem version not registered on PreToolUse — entry-point
+        # shadowed it.
+        assert not any(getattr(h, "__name__", "") == "shared_name" for h in pre)
+
+    def test_filesystem_not_loaded_when_flag_off(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # Both discovery functions skipped when flag off (sentinel).
+        _set_minimum_env(monkeypatch)
+        project = _isolate_skills_dirs(monkeypatch, tmp_path)
+
+        # Write a real .py hook that would load if discovery ran.
+        hooks_dir = project / ".openharness" / "hooks"
+        hooks_dir.mkdir(parents=True)
+        (hooks_dir / "h.py").write_text(
+            "from openharness.bundles import hook_spec\n"
+            "@hook_spec('PostToolUse')\n"
+            "async def fs_hook(ctx):\n"
+            "    return None\n",
+            encoding="utf-8",
+        )
+
+        cmd_path = project / ".openharness" / "commands"
+        cmd_path.mkdir(parents=True, exist_ok=True)
+        (cmd_path / "x.md").write_text(
+            "---\nname: x\ndescription: x\nmode: m\n---\nbody\n",
+            encoding="utf-8",
+        )
+        _write_bundle_file(
+            project / ".openharness" / "bundles",
+            "m",
+            "m",
+            hooks=["fs_hook"],
+        )
+
+        # Sentinel: both discovery funcs should NOT be called.
+        def _should_not_call_entry() -> object:
+            raise AssertionError("discover_plugin_hooks invoked despite flag off")
+
+        def _should_not_call_fs(**kwargs: object) -> object:
+            del kwargs
+            raise AssertionError("discover_filesystem_hook_plugins invoked despite flag off")
+
+        monkeypatch.setattr(cli_module, "discover_plugin_hooks", _should_not_call_entry)
+        monkeypatch.setattr(cli_module, "discover_filesystem_hook_plugins", _should_not_call_fs)
+
+        runner = CliRunner()
+        # Default flag off — bundle refs unknown hook → exit 1.
+        result = runner.invoke(cli_module.app, ["ask", "/x args"])
+        assert result.exit_code == 1
+        assert "Unknown hook" in result.stderr

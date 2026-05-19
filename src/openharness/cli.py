@@ -57,8 +57,10 @@ from openharness.api import (
 )
 from openharness.bundles import (
     FilesystemBundleStore,
+    HookSpec,
     UnknownBundleError,
     apply_bundle_to_context,
+    discover_filesystem_hook_plugins,
     discover_plugin_hooks,
 )
 from openharness.commands import (
@@ -247,13 +249,34 @@ async def _run_ask(
             available = sorted(bundle_store.discover().keys())
             raise UnknownBundleError(invoked_command.mode, available=available)
 
-    # P5e-T3: Plugin hook discovery. Runs ONCE when the user opted in
-    # via Settings or ``--enable-plugin-hooks``. Cheap (one
-    # ``importlib.metadata.entry_points`` call); cached implicitly
-    # because discovery happens before ``apply_bundle_to_context``.
-    # Empty dict when flag off — bundle resolution falls back to
-    # BUILTIN_HOOKS only.
-    plugin_hook_catalog = discover_plugin_hooks() if enable_plugin_hooks else {}
+    # P5e-T3 + P5f-T2: Plugin hook discovery. The flag enables BOTH
+    # discovery sources (per D22.2 — same trust boundary):
+    #
+    # 1. Entry-point plugins (Phase 5e): packages declaring
+    #    ``[project.entry-points."openharness.hooks"]`` in their
+    #    pyproject.toml.
+    # 2. Filesystem hook plugins (Phase 5f): ``.py`` files dropped
+    #    under ``~/.openharness/hooks/`` (global) +
+    #    ``<cwd>/.openharness/hooks/`` (project).
+    #
+    # Merge order (D22.4): entry-point catalog first, filesystem
+    # second, first-wins on collision. Entry-point plugins shadow
+    # filesystem plugins on same name because packaged plugins are a
+    # stronger statement of intent (someone authored a pyproject.toml).
+    plugin_hook_catalog: dict[str, HookSpec] = {}
+    if enable_plugin_hooks:
+        plugin_hook_catalog.update(discover_plugin_hooks())
+        fs_catalog = discover_filesystem_hook_plugins(
+            global_dir=Path.home() / ".openharness" / "hooks",
+            project_dir=Path.cwd() / ".openharness" / "hooks",
+        )
+        for fs_name, fs_spec in fs_catalog.items():
+            if fs_name not in plugin_hook_catalog:
+                plugin_hook_catalog[fs_name] = fs_spec
+            # else: entry-point won; silent (no log noise — the
+            # filesystem-discovered spec hasn't been "skipped", just
+            # never registered because the entry-point version is
+            # equivalent or preferred).
 
     client = _build_client(settings)
     registry = create_default_tool_registry()

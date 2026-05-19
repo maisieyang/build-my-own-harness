@@ -189,9 +189,41 @@ class TestPhase5dCrossCuttingInvariant:
         "HookSpec",
         "hook_spec",
         "discover_plugin_hooks",
+        "discover_filesystem_hook_plugins",
         # Internal module-name leakage check.
         "openharness.bundles",
     )
+
+    @staticmethod
+    def _strip_comments_and_docstrings(source: str) -> str:
+        cleaned = re.sub(r'"""[\s\S]*?"""', "", source, flags=re.MULTILINE)
+        cleaned = re.sub(r"'''[\s\S]*?'''", "", cleaned, flags=re.MULTILINE)
+        cleaned_lines = [line.split("#", 1)[0] for line in cleaned.splitlines()]
+        return "\n".join(cleaned_lines)
+
+    def test_protected_modules_do_not_reference_bundles(self) -> None:
+        for mod_name in self._PROTECTED_MODULES:
+            module = importlib.import_module(mod_name)
+            source = inspect.getsource(module)
+            code = self._strip_comments_and_docstrings(source)
+            for forbidden in self._FORBIDDEN_IDENTIFIERS:
+                pattern = rf"\b{re.escape(forbidden)}\b"
+                assert not re.search(pattern, code), (
+                    f"{mod_name} references {forbidden!r} — Phase 5d "
+                    f"cross-cutting invariant violated. ModeBundle must "
+                    f"compose primitives WITHOUT modifying any of the "
+                    f"layered abstractions."
+                )
+
+    def test_cli_is_the_consumer(self) -> None:
+        # Sanity inverse: cli.py is the ONE legitimate consumer that
+        # loads + applies bundles. If this drops out, T4 wiring broke.
+        import openharness.cli as cli_module
+
+        source = inspect.getsource(cli_module)
+        assert "apply_bundle_to_context" in source
+        assert "FilesystemBundleStore" in source
+        assert "UnknownBundleError" in source
 
 
 class TestPhase8MarkdownStoreInvariant:
@@ -284,37 +316,6 @@ class TestPhase8MarkdownStoreInvariant:
                 f"{mod.__name__} expected to import from markdown_store"
                 f" but does not — refactor may have reverted."
             )
-
-    @staticmethod
-    def _strip_comments_and_docstrings(source: str) -> str:
-        cleaned = re.sub(r'"""[\s\S]*?"""', "", source, flags=re.MULTILINE)
-        cleaned = re.sub(r"'''[\s\S]*?'''", "", cleaned, flags=re.MULTILINE)
-        cleaned_lines = [line.split("#", 1)[0] for line in cleaned.splitlines()]
-        return "\n".join(cleaned_lines)
-
-    def test_protected_modules_do_not_reference_bundles(self) -> None:
-        for mod_name in self._PROTECTED_MODULES:
-            module = importlib.import_module(mod_name)
-            source = inspect.getsource(module)
-            code = self._strip_comments_and_docstrings(source)
-            for forbidden in self._FORBIDDEN_IDENTIFIERS:
-                pattern = rf"\b{re.escape(forbidden)}\b"
-                assert not re.search(pattern, code), (
-                    f"{mod_name} references {forbidden!r} — Phase 5d "
-                    f"cross-cutting invariant violated. ModeBundle must "
-                    f"compose primitives WITHOUT modifying any of the "
-                    f"layered abstractions."
-                )
-
-    def test_cli_is_the_consumer(self) -> None:
-        # Sanity inverse: cli.py is the ONE legitimate consumer that
-        # loads + applies bundles. If this drops out, T4 wiring broke.
-        from openharness import cli as cli_module
-
-        source = inspect.getsource(cli_module)
-        assert "apply_bundle_to_context" in source
-        assert "FilesystemBundleStore" in source
-        assert "UnknownBundleError" in source
 
 
 class TestExecutionEnvironmentSubstrateSwap:
