@@ -193,6 +193,98 @@ class TestPhase5dCrossCuttingInvariant:
         "openharness.bundles",
     )
 
+
+class TestPhase8MarkdownStoreInvariant:
+    """``markdown_store`` is consumed by commands / skills / bundles
+    only. No other layer should reference its identifiers — the
+    extraction is internal to the discovery domain.
+    """
+
+    _PROTECTED_MODULES = (
+        "openharness.permissions.checker",
+        "openharness.permissions.tier_based",
+        "openharness.hooks.executor",
+        "openharness.hooks.registry",
+        "openharness.engine.context",
+        "openharness.engine.query",
+        "openharness.observability.context",
+        "openharness.observability.logging",
+        "openharness.mcp.client",
+        "openharness.mcp.adapter",
+        "openharness.mcp.pool",
+        "openharness.compaction.hook",
+        "openharness.compaction.truncate",
+        "openharness.protocols.content",
+        "openharness.protocols.messages",
+        "openharness.protocols.requests",
+        "openharness.tools.base",
+        "openharness.tools.read",
+        "openharness.tools.write",
+        "openharness.tools.edit",
+        "openharness.tools.grep",
+        "openharness.tools.bash",
+        "openharness.tools.load_skill",
+        "openharness.tools.spawn_agent",
+        "openharness.execution.host",
+        "openharness.execution.sandbox",
+        "openharness.prompts",
+    )
+
+    _FORBIDDEN_IDENTIFIERS = (
+        "FilesystemMarkdownStore",
+        "EmptyMarkdownStore",
+        "MarkdownDocument",
+        "read_frontmatter_dict",
+        "split_frontmatter",
+        "NAME_PATTERN",
+        "FRONTMATTER_FENCE",
+        "openharness.markdown_store",
+    )
+
+    @staticmethod
+    def _strip_comments_and_docstrings(source: str) -> str:
+        cleaned = re.sub(r'"""[\s\S]*?"""', "", source, flags=re.MULTILINE)
+        cleaned = re.sub(r"'''[\s\S]*?'''", "", cleaned, flags=re.MULTILINE)
+        cleaned_lines = [line.split("#", 1)[0] for line in cleaned.splitlines()]
+        return "\n".join(cleaned_lines)
+
+    def test_protected_modules_do_not_reference_markdown_store(self) -> None:
+        for mod_name in self._PROTECTED_MODULES:
+            module = importlib.import_module(mod_name)
+            source = inspect.getsource(module)
+            code = self._strip_comments_and_docstrings(source)
+            for forbidden in self._FORBIDDEN_IDENTIFIERS:
+                pattern = rf"\b{re.escape(forbidden)}\b"
+                assert not re.search(pattern, code), (
+                    f"{mod_name} references {forbidden!r} — Phase 8 "
+                    f"invariant violated. markdown_store/ is consumed "
+                    f"by commands/skills/bundles only."
+                )
+
+    def test_consumers_DO_reference_markdown_store(self) -> None:
+        # Sanity inverse: the three legitimate consumers actually use
+        # markdown_store. If this fails, the refactor reverted somewhere.
+        from openharness.bundles import model as bundles_model_mod
+        from openharness.bundles import store as bundles_store_mod
+        from openharness.commands import model as commands_model_mod
+        from openharness.commands import store as commands_store_mod
+        from openharness.skills import model as skills_model_mod
+        from openharness.skills import store as skills_store_mod
+
+        for mod in (
+            commands_model_mod,
+            commands_store_mod,
+            skills_model_mod,
+            skills_store_mod,
+            bundles_model_mod,
+            bundles_store_mod,
+        ):
+            source = inspect.getsource(mod)
+            assert "markdown_store" in source, (
+                f"{mod.__name__} expected to import from markdown_store"
+                f" but does not — refactor may have reverted."
+            )
+
     @staticmethod
     def _strip_comments_and_docstrings(source: str) -> str:
         cleaned = re.sub(r'"""[\s\S]*?"""', "", source, flags=re.MULTILINE)

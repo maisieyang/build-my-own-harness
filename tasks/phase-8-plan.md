@@ -14,7 +14,7 @@ change (~300 new + ~280 removed).
 
 ## Task list
 
-### P8-T1: `markdown_store/` package foundation 🔜 NEXT
+### P8-T1: `markdown_store/` package foundation ✅
 
 **Description**: Build the new shared module + its tests. No callers
 yet.
@@ -40,7 +40,7 @@ yet.
 
 ---
 
-### P8-T2: Refactor `commands/` to use `markdown_store/`
+### P8-T2: Refactor `commands/` to use `markdown_store/` ✅
 
 **Description**: Replace duplicated code in `commands/model.py` +
 `commands/store.py` with imports from `markdown_store`. Existing
@@ -59,7 +59,7 @@ tests pass unchanged.
 
 ---
 
-### P8-T3: Refactor `skills/` to use `markdown_store/`
+### P8-T3: Refactor `skills/` to use `markdown_store/` ✅
 
 **Description**: Same pattern as T2 for skills.
 
@@ -70,7 +70,7 @@ tests pass unchanged.
 
 ---
 
-### P8-T4: Refactor `bundles/` to use `markdown_store/`
+### P8-T4: Refactor `bundles/` to use `markdown_store/` ✅
 
 **Description**: Same pattern as T2/T3 for bundles.
 
@@ -81,7 +81,7 @@ tests pass unchanged.
 
 ---
 
-### P8-T5: Cross-cutting invariant verification + README + retro
+### P8-T5: Cross-cutting invariant verification + README + retro ✅
 
 **Description**: Verify the refactor preserved all public surfaces +
 write up the experience.

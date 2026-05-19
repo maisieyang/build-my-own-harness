@@ -831,6 +831,70 @@ field. **Phase 5e is extension WITHIN the bundle subsystem** — it
 adds a catalog source without inventing a new lookup path or
 modifying any layer. See `learnings/phase-5e.md`.
 
+### Phase 8 features — `markdown_store/` extraction (rule-of-three refactor)
+
+Phase 5b (commands), 5c (skills), 5d (bundles) each shipped a
+markdown-with-YAML-frontmatter + global/project two-layer
+filesystem-store pattern. By the third copy the rule-of-three
+triggered: Phase 5d retro §3.5 and 5e retro §5 both flagged the
+duplication as Phase 8's job. This phase consolidates.
+
+**What got extracted** to `src/openharness/markdown_store/`:
+
+- `constants.py` — `NAME_PATTERN` (safe-identifier regex) +
+  `FRONTMATTER_FENCE`. Used to be three byte-identical copies.
+- `parse.py` — `split_frontmatter(text)` (string operation, exact
+  behavior of the three duplicate `_split_frontmatter` functions) +
+  `read_frontmatter_dict(path, *, logger_name)` (file read → split →
+  YAML parse → mapping check, with per-domain warning logs threaded
+  through the `logger_name` kwarg so existing log event names
+  preserve byte-identical: `command_read_failed`,
+  `skill_read_failed`, `bundle_read_failed`, etc.).
+- `store.py` — `MarkdownDocument` Protocol (`@property`-style for
+  frozen-dataclass compatibility under mypy strict) +
+  `FilesystemMarkdownStore[T]` generic (constructor takes `parser`
+  callback + `log_event_prefix`) + `EmptyMarkdownStore[T]` sentinel.
+
+**What stayed in each domain**:
+
+- The dataclass itself (`Command` / `Skill` / `Bundle`) with its
+  domain-specific fields + `__post_init__` validation.
+- The domain-specific field extraction in `parse_X` (Skill's
+  `version` coercion, Command's `mode` field, Bundle's 4-layer
+  override extractions — each ~30-60 LoC of dataclass-specific
+  validation).
+
+**Subclass-for-naming pattern** (D21.3): each domain's existing
+`FilesystemXStore` / `EmptyXStore` survives as a one-line subclass
+that fixes the parser. Preserves public class names so callers'
+`isinstance(store, FilesystemCommandStore)` checks and mypy
+annotations keep working without modification.
+
+```python
+# commands/store.py after refactor:
+class FilesystemCommandStore(FilesystemMarkdownStore[Command]):
+    def __init__(self, *, global_dir=None, project_dir=None):
+        super().__init__(
+            global_dir=global_dir, project_dir=project_dir,
+            parser=parse_command, log_event_prefix="command",
+        )
+```
+
+**API-level zero-diff invariant verified** — all 233 existing
+`tests/{commands,skills,bundles}/` tests pass without modification.
+Public API (`parse_command` / `FilesystemSkillStore` / `Bundle` /
+etc.) is byte-identical from the caller's perspective. The refactor
+moves implementation, not interface.
+
+**Net diff**: 6 domain files lose 482 lines (deduplication); new
+`markdown_store/` adds 300 lines + 20 tests. Net repo-level: **-380
+LoC across the duplicated body, but added 20 focused tests for the
+generic primitives** (split happy + 4 error paths, read happy + 4
+error paths + logger_name threading, generic store with stub
+parser + project-override + skip-not-fail).
+
+See `learnings/phase-8.md` for the retro on refactor invariants.
+
 ### Want to verify the wire path against your account?
 
 ```bash
