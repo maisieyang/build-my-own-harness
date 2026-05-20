@@ -1,45 +1,221 @@
-# build-my-own-harness — 项目协作约定
+# CLAUDE.md — How this project was built with Claude Code
 
-## 项目性质
+> This file documents the human-AI collaboration model used to build
+> OpenHarness in **23 days across 17 phases**. It serves a dual
+> purpose:
+>
+> 1. **Public case study** — a reproducible methodology for anyone
+>    curious about deliberate AI-assisted development. The pattern is
+>    domain-agnostic; the specific harness it produced is just the
+>    artifact that proved it works.
+> 2. **Live agent guidance** — Claude Code reads this file when
+>    working on the repo. The rules below shape its behavior, so
+>    they're written as both observations and instructions.
+>
+> The methodology's payoff is documented quantitatively in
+> [`learnings/phase-7.md`](./learnings/phase-7.md) — the project-
+> level meta-retrospective.
 
-单人 + Claude 协作的学习型 LLM harness 项目。**协调成本 ≈ 0，决策大多可逆。**
+---
 
-- **起点**：`REFERENCE.md`（开源 OpenHarness 完整逆向，固定输入）
-- **目标**：(1) 交付生产级 LLM harness  (2) 通过项目实践成为领域专家
-- **策略**：从 0 到 1，capability 级 spec → agent 自主 build → 人审 review
+## The premise
 
-## 工作流
+A single developer + Claude Code as collaborator, building a
+production-grade Python LLM harness as a deliberate learning project.
 
-利用 Claude Code 内置的 Plan / Execute 模式 + 一个明确的 Review 检查点。
+- **Coordination cost ≈ 0**; decisions are mostly reversible
+- **Starting input**: [`REFERENCE.md`](./REFERENCE.md) — the reverse-
+  engineered specification of HKUDS/OpenHarness v0.1.7 (study target,
+  not copy source — see attribution at the top of that file)
+- **Dual goal**: (1) ship a production-grade harness, (2) become a
+  domain expert through implementing it phase by phase
+- **Strategy**: capability-level spec → agent autonomous build → human
+  review at the contract layer
 
-| 阶段 | 工具 / 模式 | 颗粒度 | 谁决定 |
+---
+
+## The four-step phase loop
+
+Each of the 17 phases ran the same loop:
+
+| Step | Where it lives | Granularity | Who decides |
 |---|---|---|---|
-| **Spec** | Claude Code Plan 模式 | capability | 人 |
-| **Build** | Claude Code Execute 模式 | sub-task runtime 决定 | agent |
-| **Review** | walkthrough 对话 | capability | 人 |
+| **1. Boundary doc** | [`decisions/NN-phase-X-boundary.md`](./decisions) | What's in scope / out / which invariant holds | Human |
+| **2. Plan** | [`tasks/phase-X-plan.md`](./tasks) | Capabilities + acceptance criteria (NOT sub-tasks) | Human |
+| **3. Execute** | Claude Code Plan / Execute modes | Sub-tasks resolved at runtime by the agent | Agent |
+| **4. Retro** | [`learnings/phase-X.md`](./learnings) | What was learned, what to predict next | Human (with agent draft) |
 
-**Spec 颗粒度**：
+The loop's most counterintuitive property: **steps 1 and 4 take more
+calendar time than step 3**, but step 3 absorbs that investment with
+compound interest in subsequent phases. The meta-retro §3.1 documents
+this with the Phase 7a/7b/7c sequence: 7c shipped in **12% the LoC of
+7b** because the substrate Protocol was designed correctly in 7a.
 
-- ✅ "P1-T4: oh ask 跑通流式输出 + 错误人话提示 + 集成测试 gated"
-- ❌ "4a Settings → 4b mock → 4c 真 client → 4d 集成 → 4e __init__"
+---
 
-**Build 时 agent 主动停下问**：外部契约决策（公开 API / env / 依赖）/
-不可逆操作（删文件 / 改 schema / 改公开接口）/ 发现 capability 描述需要修正。
+## Spec at the right altitude — capability, not sub-task
 
-**Review 时机**：capability 完成 + 测试 GREEN 后，**commit 前**。
-agent 做代码 ↔ 验收逐条对照的 walkthrough，不要机械 GREEN → COMMIT。
+The plan at step 2 must be **capability-level**, not sub-task-level.
+Reasoning: sub-task decomposition is the agent's strength. If the
+human pre-decomposes, the spec becomes brittle and the agent's
+autonomy gets wasted on busywork.
 
-## 文档分工
+Example at the right altitude:
 
-| 文档 | 角色 | 时机 |
+> ✅ "P1-T4: `oh ask` streaming output + human-readable error
+> messages + integration tests gated behind real API key"
+
+Same capability expressed at the wrong altitude (over-specified):
+
+> ❌ "4a: implement Settings → 4b: write mock client → 4c: real
+> client → 4d: integration test → 4e: `__init__.py` exports"
+
+The over-specified version isn't *wrong*, it's just **redundant work
+for the human** — the agent would decompose it the same way anyway,
+and if the agent's decomposition differs from the human's, the
+agent's is usually right (it's looking at the actual code, the human
+is looking at the plan doc).
+
+---
+
+## When the agent must stop and ask
+
+The agent drives sub-tasks autonomously by default. It stops and
+escalates when one of three categories surfaces:
+
+1. **External contract decisions** — public API shape, environment
+   variable names, new dependencies, anything visible from outside
+   the package boundary
+2. **Irreversible operations** — file deletions, schema migrations,
+   public interface changes, `git filter-repo`, force-pushes
+3. **Capability description is wrong** — the agent discovers the
+   boundary doc's invariant can't hold as stated, or the plan's
+   acceptance criteria are mutually inconsistent, or "the premise of
+   this task is wrong"
+
+The first two are about **blast radius**; the third is about
+**epistemic honesty** — surface the wrong premise before continuing,
+don't paper over it.
+
+---
+
+## Review before commit — never auto-commit on GREEN
+
+After tests pass GREEN and **before any `git commit`**, the agent
+walks through the diff against the acceptance criteria, one checkbox
+at a time. The walkthrough is the review checkpoint; "tests GREEN →
+auto-commit" is explicitly rejected.
+
+This catches:
+
+- The agent technically passed tests but silently skipped an
+  acceptance criterion
+- A test was loose enough to GREEN even though the feature is broken
+  in production
+- A side change drifted into the diff without belonging to the
+  current capability
+
+Once the human signs off via the walkthrough, the commit is created
+in the same turn. No "I'll commit it" without showing the diff first.
+
+---
+
+## Document roles — the trail this repo preserves
+
+| File / directory | Role | When written |
 |---|---|---|
-| `REFERENCE.md` | 起点：OpenHarness 完整逆向（不动） | 一次性输入 |
-| `SPEC.md` | 项目级契约：做什么 / 不做什么 / 边界 | 少变 |
-| `ARCHITECTURE.md` | 战略：Tier / Phase 顺序 / 依赖图 | 跨 Phase 调整 |
-| `tasks/` | 当前 Phase 的 capability 级 todo（**不到 sub-task 级**） | 进入 Phase 前 |
-| `decisions/` | **只**记外部约束 + 不可逆决策 | 决策时 |
-| `learnings/` | 实现策略 + 阶段复盘 | 模块完成后 |
+| [`REFERENCE.md`](./REFERENCE.md) | Starting input — HKUDS/OpenHarness v0.1.7 reverse-engineered spec (study target) | Once, at Phase 0 |
+| [`SPEC.md`](./SPEC.md) | Project contract — what's built, what's not, the behavioral rules | Rarely changes |
+| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | Strategy — tier division, phase ordering, dependency graph | Adjusted between phases |
+| [`tasks/`](./tasks) | Current-phase plan at **capability** granularity, never sub-task | Before each phase |
+| [`decisions/`](./decisions) | **Only** external constraints + irreversible / non-obvious trade-offs (not "we used `uv` instead of `pip`" trivia) | At decision time |
+| [`learnings/`](./learnings) | Per-phase retrospectives — abstractions tested, which held, which broke, predictions for next phase | After each phase ships |
 
-## Tone
+The point of the trail is **not** that future readers will re-read it
+linearly. The point is that **at every moment during the project,
+the human always knows where to add a new thought** without thinking
+about where it goes. That low friction is what enables 17 phases in
+23 days.
 
-用户已内化"框架构建者"心态，对话保持在契约/抽象层，不回退到细节级。
+---
+
+## Tone — staying at framework-builder altitude
+
+Conversations about the project happen at the contract / abstraction
+layer. Once the human has internalized framework-builder mindset, the
+agent does not regress conversation to "add a field here" detail level —
+it engages at the boundary-doc / invariant / trade-off layer.
+
+Example of the right tone (the agent surfaces ratification points):
+
+> User: Let's plan Phase 6.
+>
+> Agent: Phase 6 (Sub-agent) is the third compounding test of Phase
+> 3's abstraction. Before I draft the boundary doc, here are the
+> 4 design ratifications you need to make: (1) is
+> `ToolExecutionContext.parent_query` an acceptable expansion point
+> for sub-agent's recursion? (2) Which 3 fields does the sub-context
+> override? (3) Depth bound = 3 or other? (4) Default-register the
+> `Agent` tool or opt-in? Once you ratify, I write D16.1-D16.8.
+
+Example of the wrong tone (regressing to detail level):
+
+> User: Let's plan Phase 6.
+>
+> Agent: I'll create a file at `src/openharness/tools/spawn_agent.py`
+> with a class `SpawnAgent(BaseTool[SpawnAgentInput])` that has an
+> async `execute` method. Should I make the `name` field default to
+> "Agent"?
+
+The first response is at framework altitude — design space + trade-
+offs. The second is at implementation altitude — file paths + class
+names. **The human's time is worth the first kind of conversation,
+not the second.**
+
+---
+
+## Why this works
+
+See [`learnings/phase-7.md`](./learnings/phase-7.md) §3 — five
+framework-level lessons backed by quantitative evidence:
+
+1. **Abstraction-first compounds** — Phase 7c shipped at 12% of
+   7b's LoC because the substrate Protocol was designed once in 7a
+2. **Layered model holds cross-cutting load** — Phase 5d touched 4
+   layers; 11 protected directories showed zero diff
+3. **Additive kwarg = right extension shape** — Phase 5e + 6+:
+   default = old behavior, opt-in = new feature, existing tests
+   byte-identical
+4. **Source-agnostic catalog** — Phase 5f added a second producer
+   at 60% the cost of the first
+5. **API-level zero-diff = right refactor invariant** — Phase 8
+   extracted a shared module; 233 caller tests unchanged
+
+These are not aspirations. They are quantitative facts produced by
+running the four-step phase loop seventeen times. The methodology
+documented in this file is the load-bearing assumption underneath
+those numbers.
+
+---
+
+## For someone applying this pattern to a different project
+
+The methodology transfers if you preserve these three properties:
+
+1. **The human stays at the contract layer.** Boundary docs and
+   acceptance criteria; never sub-task decomposition or specific
+   class names. The moment the human writes a sub-task plan, the
+   agent's autonomy is wasted on it.
+2. **Every phase ends with a retro before the next phase opens.**
+   The retro forces honest "what did I learn / what to predict for
+   the next phase" reflection. Skipping it accumulates technical and
+   architectural debt that's invisible until phase N+3.
+3. **Review is a walkthrough, not a stamp.** Test pass alone is not
+   acceptance; the human reading the diff against acceptance criteria
+   is. This is the only mechanism that catches "tests passed but
+   feature is wrong" — and that mechanism cannot be delegated.
+
+Everything else (specific file names, the four-step structure, the
+boundary-doc / plan / retro split) is implementation detail of these
+three properties. Adapt the implementation to your domain; keep the
+properties.

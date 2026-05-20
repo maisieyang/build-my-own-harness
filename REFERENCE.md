@@ -1,5 +1,22 @@
 # OpenHarness — 完整逆向工程规格文档
 
+> **Source attribution**: This document is a reverse-engineered specification
+> of **[HKUDS/OpenHarness](https://github.com/HKUDS/OpenHarness)** v0.1.7
+> (MIT licensed). It describes the upstream project's architecture, module
+> boundaries, and API surface — used in *this* repo
+> (`build-my-own-harness`) as the **study target** for a from-scratch
+> reimplementation.
+>
+> **This repo is not affiliated with HKUDS/OpenHarness.** No code is
+> copied — the `src/openharness/` implementation here was rebuilt
+> independently, phase-by-phase, with different design decisions where
+> the original's choices didn't fit the learning project's scope (see
+> [SPEC.md](./SPEC.md) §1 + [ARCHITECTURE.md](./ARCHITECTURE.md) for the
+> scope-narrowing rationale).
+>
+> Upstream license preserved per MIT terms. When the term "OpenHarness"
+> appears below it refers to **HKUDS/OpenHarness**, the upstream project.
+>
 > 基于 OpenHarness v0.1.7 源码逆向分析生成。覆盖全部 36 个子模块、43+ 工具、23 个 Provider、ohmo 个人 Agent 及前端 TUI。
 > 最后更新：2026-04-26
 

@@ -161,8 +161,8 @@ def sanitize_path(path: str | Path, cwd: Path) -> str:
     otherwise ``<redacted>``.
 
     Used at call sites to log path values without leaking absolute paths
-    that encode user identity (``/Users/yangxiyue/...``) or project
-    structure (``/home/work/cbs-hkmo/...``).
+    that encode user identity (``/Users/<user>/...``) or project
+    structure (``/home/work/<project>/...``).
 
     Symlinks + ``..`` are resolved via ``Path.resolve(strict=False)`` so
     non-existent target paths (e.g., Write creating a new file) are still

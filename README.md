@@ -1,24 +1,50 @@
 # OpenHarness
 
-[![CI](https://github.com/yangxiyue/build-my-own-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/yangxiyue/build-my-own-harness/actions/workflows/ci.yml)
+[![CI](https://github.com/maisieyang/build-my-own-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/maisieyang/build-my-own-harness/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 ![Type checked: mypy](https://img.shields.io/badge/type%20checked-mypy%20strict-1f5082)
 
-> **A production-grade Python harness for LLM agents — built from scratch as a learning project.**
+> **A production-grade Python harness for LLM agents — and a documented case study in framework design.**
+> Built solo (single developer + Claude Code) over 23 days across 17 phases.
 
 OpenHarness is a Claude-Code-style agent harness: you give it a prompt,
 it talks to an LLM, the LLM picks tools, the harness runs them safely,
 the loop continues until the LLM says it's done. Everything you'd
-expect from a serious agent runtime — tool dispatch, permission checks,
-hook middleware, structured logging, sandbox execution, slash commands,
-plugin hooks, multi-turn REPL — and nothing you wouldn't.
+expect from a serious agent runtime — tool dispatch, three-tier
+permissions, hook middleware, structured observability, sandboxed
+execution, slash commands, plugin hooks, recursive sub-agents,
+multi-turn REPL — and nothing you wouldn't.
 
-The codebase is the documentation: 18 subsystems, 22 decision records,
-28 per-phase retrospectives, 1240 tests at 97%+ coverage, mypy strict
-throughout. Each `learnings/phase-*.md` explains both the framework
-decisions and the Python patterns that made them work.
+It's **also** a deliberate learning artifact. The repo preserves every
+boundary-doc decision (`decisions/`), every per-phase retrospective
+(`learnings/`), and the full plan/execute trail (`tasks/`) — so you
+can read **not just what was built, but why each trade-off was made
+and what the next phase predicted before being built**.
+
+---
+
+## Two ways to read this repo
+
+- 👉 **Want to use it as a harness?** → jump to [Quickstart](#quickstart)
+- 📖 **Want to learn how it was built?** → read the [meta-retro](./learnings/phase-7.md) (the framework-level case study), then explore [`decisions/`](./decisions) + [`learnings/`](./learnings)
+- 🏗️ **Want to fork / contribute?** → [`ARCHITECTURE.md`](./ARCHITECTURE.md) (tier map) + [`SPEC.md`](./SPEC.md) (project contract) + [`docs/development-log.md`](./docs/development-log.md) (per-phase narrative)
+
+---
+
+## At a glance
+
+| | |
+|---|---|
+| Built in | **23 days** (single developer + Claude Code as collaborator) |
+| Phases shipped | **17** (each via boundary-doc → plan → execute → retro) |
+| Subsystems | **18** under `src/openharness/` |
+| Decision records | **24** in [`decisions/`](./decisions) (per-trade-off rationale) |
+| Retros + essays | **31** in [`learnings/`](./learnings) (18 per-phase + framing essays) |
+| Tests | **1268 passing** at **~97% coverage**, mypy strict, ruff clean |
+| Lines of code | ~10,800 production / ~21,600 tests |
+| Commits | 195 |
 
 ---
 
@@ -31,15 +57,15 @@ Requires Python ≥ 3.10 and [uv](https://docs.astral.sh/uv/).
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # 2. Clone + sync
-git clone https://github.com/yangxiyue/build-my-own-harness.git
+git clone https://github.com/maisieyang/build-my-own-harness.git
 cd build-my-own-harness
 uv sync
 
-# 3. Set two env vars (Qwen via DashScope is the default test target;
-#    swap base_url for OpenAI / DeepSeek / Moonshot / any OpenAI-
-#    compatible endpoint)
-export OPENHARNESS_API_KEY="sk-..."
-export OPENHARNESS_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
+# 3. Set up your provider (any OpenAI-compatible endpoint works:
+#    Qwen via DashScope is the default test target; swap base_url
+#    for OpenAI / DeepSeek / Moonshot / etc.)
+cp .env.example .env
+$EDITOR .env                                  # fill in OPENHARNESS_API_KEY
 
 # 4. Ask away
 uv run oh ask "list 5 git commands"
@@ -69,7 +95,7 @@ framework-builder retrospective.
 - **Streaming tool loop** — the engine's heart. `run_query()` is an
   `AsyncIterator[ApiStreamEvent]` that the LLM drives by emitting
   `tool_use` blocks; the harness dispatches the tool, feeds the
-  result back, and loops until `end_turn`. ([dev-log → Tool Loop](./docs/development-log.md))
+  result back, and loops until `end_turn`.
 - **5 built-in tools** — `Read` / `Write` / `Edit` / `Bash` / `Grep`,
   with Pydantic-validated inputs + structured `ToolResult` outputs.
 - **Three-tier permission system** — hardcoded sensitive-path deny,
@@ -105,6 +131,96 @@ framework-builder retrospective.
 - **Compaction** — Layer 1 per-tool-result truncation via hook;
   Layer 2 reactive PromptTooLong retry by dropping the oldest
   tool-use/tool-result pair.
+
+---
+
+## How this project was built — for the curious reader
+
+OpenHarness isn't just runnable code; it's a **case study in framework
+design under self-imposed production constraints**. The repo preserves
+the full decision and reflection trail.
+
+### The methodology
+
+Each of the 17 phases ran the same four-step loop:
+
+1. **Boundary doc** ([`decisions/NN-phase-X-boundary.md`](./decisions))
+    — what's in scope, what's out, what invariant must hold across
+   the change. Locked **before** any code is written.
+2. **Plan** ([`tasks/phase-X-plan.md`](./tasks))
+    — capabilities with acceptance criteria. Not sub-task granular —
+   the plan is the contract between the framework builder (the
+   human) and the implementer (Claude Code).
+3. **Execute** — Claude Code drives sub-tasks; the human reviews
+   at the contract layer, never the implementation detail. Capability-
+   level spec → agent autonomous build → human review.
+4. **Retro** ([`learnings/phase-X.md`](./learnings))
+    — what was learned, which abstractions held, which broke, what to
+   predict for the next phase. Writes itself **at the end of each
+   phase**, not at the end of the project.
+
+This loop is itself the artifact. The combination "human stays at
+contract layer + machine drives implementation + every phase ends
+in a retro" is the project's most reproducible takeaway, independent
+of the specific harness being built.
+
+### Start here: the meta-retro
+
+**[`learnings/phase-7.md`](./learnings/phase-7.md)** is the project-
+level retrospective covering all 17 phases. Read it for:
+
+- §1 — quantitative summary (~5x faster than original plan; reasoning
+  why)
+- §2 — Phase-by-Phase ship-order timeline (not plan order — ship order
+  reveals which phases compounded)
+- §3 — ⭐ **5 framework-level lessons** with quantitative evidence per lesson
+- §4 — Python-specific patterns that paid off
+- §5 — things that should have been done differently
+- §10 — self-evaluation vs original SPEC
+
+### The 5 framework lessons (compact)
+
+1. **Abstraction-first compounds**. Phase 7a Protocol setup → 7b Docker
+   substrate → 7c gVisor in **12% the LoC of 7b**, because the Protocol
+   was the right shape. Identity-transform is the strongest evidence
+   an abstraction is correct.
+2. **Layered model can hold cross-cutting load**. Phase 5d ModeBundle
+   touched 4 layers simultaneously (system prompt + tool catalog +
+   deny paths + hook chain) — 11 protected dirs showed **zero diff**.
+3. **Additive kwarg = the right shape for extending stable APIs**
+   (Phase 5e + 6+). Default value = old behavior; opt-in = new
+   functionality; existing tests byte-identically pass.
+4. **Source-agnostic catalog** is the extensibility unlock. Phase 5f
+   added a second producer (filesystem) at **60% the cost of the
+   first** (entry points), because the catalog format never carried
+   producer-specific fields.
+5. **API-level zero-diff is the correct invariant for refactors**.
+   Phase 8 extracted `markdown_store/` after rule-of-three triggered
+   (5b/5c/5d) — 233 caller tests unchanged. Rule-of-three is the
+   sweet spot, not earlier.
+
+### The decision trail
+
+24 boundary records in [`decisions/`](./decisions). Most valuable to
+read in isolation:
+
+- [`01-scaffolding.md`](./decisions/01-scaffolding.md)
+   — full toolchain selection rationale (uv / ruff / mypy strict / Pydantic v2 / pytest-asyncio / etc.)
+- [`08-phase-3-boundary.md`](./decisions/08-phase-3-boundary.md)
+   — three-tier permission system design
+- [`17-phase-5d-boundary.md`](./decisions/17-phase-5d-boundary.md)
+   — first cross-layer tenant (the layered model's stress test)
+- [`18-phase-5e-boundary.md`](./decisions/18-phase-5e-boundary.md) + [`20-phase-5f-boundary.md`](./decisions/20-phase-5f-boundary.md)
+   — plugin discovery trust boundary
+- [`22-phase-6plus-boundary.md`](./decisions/22-phase-6plus-boundary.md)
+   — stream-event as final-state mechanism (the right way to expose
+  generator state to a caller)
+
+### The retros
+
+18 per-phase retros + framing essays in [`learnings/`](./learnings).
+Each `phase-N.md` opens with: which abstractions were tested, which
+held, which broke. Read in ship order (see meta-retro §2).
 
 ---
 
@@ -161,6 +277,7 @@ override per-invocation via shell env.
 
 All settings read from environment variables prefixed `OPENHARNESS_`
 (via [`pydantic-settings`](https://docs.pydantic.dev/latest/concepts/pydantic_settings/)).
+See [`.env.example`](./.env.example) for a starter template.
 
 | Env var | Default | Purpose |
 |---|---|---|
@@ -209,7 +326,7 @@ Three layered concerns, sliced vertically by phase:
    Phase 5e/5f's plugins all hang off it.
 
 For the full tier division, dependency graph, and design rationale,
-see [ARCHITECTURE.md](./ARCHITECTURE.md). For per-decision trade-off
+see [`ARCHITECTURE.md`](./ARCHITECTURE.md). For per-decision trade-off
 analysis, see [`decisions/`](./decisions). For framework-builder
 retrospectives, see [`learnings/`](./learnings).
 
@@ -223,13 +340,14 @@ retrospectives, see [`learnings/`](./learnings).
 ├── ARCHITECTURE.md           # Multi-phase strategy (tiers, dependency graph)
 ├── REFERENCE.md              # Reverse-engineered OpenHarness reference
 ├── pyproject.toml            # Single source of truth (deps, ruff, mypy, pytest)
-├── decisions/                # 22 decision records (per-trade-off)
-├── learnings/                # 28 per-phase retrospectives
+├── decisions/                # 24 decision records (per-trade-off)
+├── learnings/                # 18 per-phase retros + framing essays (31 total)
 ├── tasks/                    # Per-phase boundary docs + implementation plans
 ├── docs/
 │   ├── development-log.md    # Per-phase feature narratives (READ FOR HISTORY)
 │   ├── tutorial.md           # Walked-through scenarios (Phase 7 T4)
-│   └── ideas/, learning/     # Drafts + living learning resources
+│   ├── publishing.md         # PyPI runbook
+│   └── ideas/, learning/     # Essays + living learning resources
 ├── examples/                 # Sample commands / skills / bundles / hooks (Phase 7 T4)
 ├── src/openharness/          # 18 subsystems
 │   ├── api/                  # OpenAI-compatible client + retry + translation
@@ -249,7 +367,7 @@ retrospectives, see [`learnings/`](./learnings).
 │   ├── protocols/            # Phase 1 Pydantic v2 wire types (Anthropic-shape)
 │   ├── skills/               # Phase 5c lazy-loaded expertise
 │   └── tools/                # Phase 2 tool registry + 5 built-in tools
-├── tests/                    # ~1240 tests mirroring src/ layout
+├── tests/                    # ~1268 tests mirroring src/ layout
 ├── .github/workflows/ci.yml  # Lint + type-check + test on Python 3.10/3.11
 └── .pre-commit-config.yaml   # Fast hooks only (ruff + hygiene)
 ```
@@ -287,6 +405,11 @@ via [`.github/workflows/ci.yml`](./.github/workflows/ci.yml).
 Integration tests skip when env vars / Docker / gVisor aren't
 available — `tests/` always passes cleanly without external deps.
 
+If you use Claude Code locally, copy
+[`.claude/settings.json.example`](./.claude/settings.json.example)
+to `.claude/settings.json` (gitignored) and replace
+`/path/to/build-my-own-harness` with your actual clone path.
+
 ---
 
 ## Design decisions at a glance
@@ -304,33 +427,48 @@ available — `tests/` always passes cleanly without external deps.
 | Bundle composition | Pre-LLM resolution; engine zero-diff | [`decisions/17-phase-5d-boundary.md`](./decisions/17-phase-5d-boundary.md) |
 | Plugin discovery | Entry points (5e) + `.py` files (5f), opt-in | [`decisions/18-phase-5e-boundary.md`](./decisions/18-phase-5e-boundary.md), [`decisions/20-phase-5f-boundary.md`](./decisions/20-phase-5f-boundary.md) |
 
-Full decision index: [`decisions/`](./decisions) (22 docs).
+Full decision index: [`decisions/`](./decisions) (24 docs).
 
 ---
 
-## What's next
+## SPEC v1 status
 
-Phase 7 (this phase) closes the SPEC v1 boundary — see
-[`decisions/23-phase-7-final-boundary.md`](./decisions/23-phase-7-final-boundary.md)
-and [`tasks/phase-7-final-plan.md`](./tasks/phase-7-final-plan.md).
+✅ **Shipped** in 17 phases over 23 days. See
+[`learnings/phase-7.md`](./learnings/phase-7.md) §10 self-evaluation
+against the original SPEC.
 
-Deferred to Phase 8+:
+**Optional follow-ups** (acknowledged in meta-retro §5 and
+[`decisions/23-phase-7-final-boundary.md`](./decisions/23-phase-7-final-boundary.md) §6,
+none required for SPEC v1):
 
-- **Anthropic native client** (`AnthropicApiClient` — protocols/ is
-  already Anthropic-shape)
-- **LLM auto-compaction Layer 3** (turn-summarization for long sessions)
-- **Memory system** (YAML-frontmatter `~/.openharness/memory/`)
-- **Keyring auth + multi-profile** API key management
+- Anthropic native client (~150 LoC; `protocols/` is already
+  Anthropic-shape, so the wire translation is one-sided)
+- LLM auto-compaction Layer 3 (turn-summarization for long sessions)
+- Memory system (YAML-frontmatter `~/.openharness/memory/`)
+- Keyring auth + multi-profile API key management
 - `oh mcp add/list`, `oh skill run` subcommands
 - REPL polish (`/save`, `/load`, multi-line input)
 - Firecracker substrate (microVM isolation)
 
-See `decisions/23-phase-7-final-boundary.md` §6 for the full deferred
-list with rationale per item.
+---
+
+## Acknowledgments
+
+This project's name and module vocabulary share heritage with
+**[HKUDS/OpenHarness](https://github.com/HKUDS/OpenHarness)** (MIT
+licensed) — the original Python LLM harness. This repo
+(`build-my-own-harness`) is an **independent, from-scratch
+reimplementation** built as a learning artifact: no code is shared,
+implementation details diverge frequently, scope is intentionally
+narrower (see [SPEC.md](./SPEC.md) §1 and
+[ARCHITECTURE.md](./ARCHITECTURE.md) Tier 0 vs Out-of-Scope tables).
+
+[`REFERENCE.md`](./REFERENCE.md) captures the upstream's v0.1.7
+specification as it existed on 2026-04-26 — used here as a study
+target, not a copy source. Full attribution at the top of that file.
 
 ---
 
 ## License
 
-MIT — see [LICENSE](./LICENSE) (lands in Phase 7 T3 alongside the
-PyPI artifact).
+MIT — see [LICENSE](./LICENSE).

@@ -58,7 +58,7 @@ export UV_PUBLISH_TOKEN="pypi-AgENdGVzdC5weXBpLm9yZw...<your-token>..."
 ### 3. Publish to TestPyPI
 
 ```bash
-cd /Users/yangxiyue/2026/aa/build-my-own-harness
+cd /path/to/build-my-own-harness
 
 uv publish \
     --publish-url https://test.pypi.org/legacy/ \

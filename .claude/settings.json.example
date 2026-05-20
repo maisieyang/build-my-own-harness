@@ -1,8 +1,9 @@
 {
+  "_doc": "Template for Claude Code IDE permissions. Copy to .claude/settings.json (gitignored) and replace /path/to/build-my-own-harness with your absolute clone path. See https://docs.claude.com/en/docs/claude-code/iam for the schema.",
   "permissions": {
     "defaultMode": "acceptEdits",
     "allow": [
-      "Read(//Users/yangxiyue/2026/aa/build-my-own-harness/**)",
+      "Read(//path/to/build-my-own-harness/**)",
       "Bash(uv run *)",
       "Bash(uv sync *)",
       "Bash(uv add *)",
