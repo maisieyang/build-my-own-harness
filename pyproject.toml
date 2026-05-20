@@ -4,24 +4,47 @@ build-backend = "hatchling.build"
 
 [project]
 name = "openharness"
-version = "0.0.1"
-description = "A production-grade Python harness for LLM agents — built from scratch as a learning project"
+version = "0.1.0"
+description = "A production-grade Python harness for LLM agents — Claude-Code-style tool loop with sandboxing, hooks, plugins, and multi-turn REPL"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
     { name = "yangxiyue", email = "yangxiyuebupt@gmail.com" },
 ]
-keywords = ["llm", "agent", "harness", "ai", "claude", "openai"]
+keywords = [
+    "llm",
+    "agent",
+    "harness",
+    "ai",
+    "anthropic",
+    "claude",
+    "openai",
+    "qwen",
+    "tool-use",
+    "sandbox",
+    "mcp",
+    "model-context-protocol",
+    "cli",
+]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: Implementation :: CPython",
     "Topic :: Software Development :: Libraries",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Utilities",
+    "Typing :: Typed",
 ]
 dependencies = [
     "pydantic>=2.5",
@@ -56,8 +79,11 @@ openharness = "openharness.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/maisieyang/build-my-own-harness"
-Documentation = "https://github.com/maisieyang/build-my-own-harness/blob/main/ARCHITECTURE.md"
+Repository = "https://github.com/maisieyang/build-my-own-harness"
+Documentation = "https://github.com/maisieyang/build-my-own-harness/blob/main/README.md"
+Changelog = "https://github.com/maisieyang/build-my-own-harness/blob/main/CHANGELOG.md"
 Issues = "https://github.com/maisieyang/build-my-own-harness/issues"
+"Development log" = "https://github.com/maisieyang/build-my-own-harness/blob/main/docs/development-log.md"
 
 # PEP 735 dependency groups — recognized by uv natively
 [dependency-groups]
