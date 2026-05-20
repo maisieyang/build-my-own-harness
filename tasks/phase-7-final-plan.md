@@ -133,7 +133,7 @@ Add `LICENSE` file at repo root; reference in `pyproject.toml`.
 
 ## 4. Task list
 
-### P7-T1: User-facing README rewrite + Quickstart 🔜 NEXT
+### P7-T1: User-facing README rewrite + Quickstart ✅
 
 **Description**: Replace the phase-log README with a user-facing
 rewrite. Move existing narrative to `docs/development-log.md`.
@@ -173,7 +173,7 @@ rewrite. Move existing narrative to `docs/development-log.md`.
 
 ---
 
-### P7-T2: CLI subcommand completion (`oh tools` / `oh config` / `oh hooks`)
+### P7-T2: CLI subcommand completion (`oh tools` / `oh config` / `oh hooks`) ✅
 
 **Description**: 3 subcommand series filling the SPEC §2 gap.
 
@@ -232,7 +232,7 @@ rewrite. Move existing narrative to `docs/development-log.md`.
 
 ---
 
-### P7-T3: Packaging + Distribution metadata
+### P7-T3: Packaging + Distribution metadata ✅
 
 **Description**: Polish `pyproject.toml` for PyPI release;
 TestPyPI dry run.
@@ -282,7 +282,7 @@ TestPyPI dry run.
 
 ---
 
-### P7-T4: Tutorial + Examples
+### P7-T4: Tutorial + Examples ✅
 
 **Description**: Walked-through learning path + sample artifacts
 users can copy.
@@ -314,7 +314,7 @@ users can copy.
 
 ---
 
-### P7-T5: Final retro + DoD closeout
+### P7-T5: Final retro + DoD closeout ✅
 
 **Description**: The "我从 0 构建生产级 harness" retro SPEC §4.7
 explicitly named. Also serves as portfolio artifact.
