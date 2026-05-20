@@ -110,9 +110,7 @@ framework-builder retrospective.
 
 ## CLI reference
 
-Phase 7 ships these subcommands. More (`oh tools list`, `oh config
-show`, `oh hooks list`) are slated for the v0.1 release —
-see [`tasks/phase-7-final-plan.md`](./tasks/phase-7-final-plan.md).
+**Run a query**:
 
 ```bash
 oh ask "<prompt>"                  # Single-shot LLM query
@@ -126,14 +124,36 @@ oh ask "<prompt>" --enable-plugin-hooks              # Load plugin hooks
 
 oh chat                            # Interactive multi-turn REPL
 oh chat --sandbox                  # Same flags as `oh ask`
-
-oh --version
-oh --help
 ```
 
 Inside `oh chat`, built-in slash commands: `/exit`, `/quit`,
 `/clear` (reset history), `/help`. User-authored slash commands
 (`/<name> args`) work the same as in `oh ask`.
+
+**Introspect the framework**:
+
+```bash
+oh tools list                      # Built-in tools (Read/Write/Edit/Bash/Grep/Agent)
+oh tools list --format json        # Same, machine-readable
+oh tools show Read                 # Name, schema, is_read_only, trust_source
+oh tools show Read -f json         # Same, JSON
+
+oh config show                     # Effective Settings (api_key redacted)
+oh config show --format json       # Same, JSON
+oh config edit                     # $EDITOR on ~/.openharness/.env (lower-precedence layer)
+
+oh hooks list                      # Built-in hooks (audit_log / deny_writes)
+oh hooks list --enable-plugin-hooks  # Also include entry-point + filesystem plugins
+oh hooks describe audit_log        # Event + docstring
+
+oh --version
+oh --help
+```
+
+`~/.openharness/.env` is a lower-precedence layer than the project's
+`./.env`, which is lower than shell env vars. Use it for global
+defaults (API keys, log level); override per-project in `./.env`;
+override per-invocation via shell env.
 
 ---
 

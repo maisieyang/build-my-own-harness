@@ -273,6 +273,50 @@ class TestPhase8MarkdownStoreInvariant:
         "openharness.markdown_store",
     )
 
+    @staticmethod
+    def _strip_comments_and_docstrings(source: str) -> str:
+        cleaned = re.sub(r'"""[\s\S]*?"""', "", source, flags=re.MULTILINE)
+        cleaned = re.sub(r"'''[\s\S]*?'''", "", cleaned, flags=re.MULTILINE)
+        cleaned_lines = [line.split("#", 1)[0] for line in cleaned.splitlines()]
+        return "\n".join(cleaned_lines)
+
+    def test_protected_modules_do_not_reference_markdown_store(self) -> None:
+        for mod_name in self._PROTECTED_MODULES:
+            module = importlib.import_module(mod_name)
+            source = inspect.getsource(module)
+            code = self._strip_comments_and_docstrings(source)
+            for forbidden in self._FORBIDDEN_IDENTIFIERS:
+                pattern = rf"\b{re.escape(forbidden)}\b"
+                assert not re.search(pattern, code), (
+                    f"{mod_name} references {forbidden!r} — Phase 8 "
+                    f"invariant violated. markdown_store/ is consumed "
+                    f"by commands/skills/bundles only."
+                )
+
+    def test_consumers_DO_reference_markdown_store(self) -> None:
+        # Sanity inverse: the three legitimate consumers actually use
+        # markdown_store. If this fails, the refactor reverted somewhere.
+        from openharness.bundles import model as bundles_model_mod
+        from openharness.bundles import store as bundles_store_mod
+        from openharness.commands import model as commands_model_mod
+        from openharness.commands import store as commands_store_mod
+        from openharness.skills import model as skills_model_mod
+        from openharness.skills import store as skills_store_mod
+
+        for mod in (
+            commands_model_mod,
+            commands_store_mod,
+            skills_model_mod,
+            skills_store_mod,
+            bundles_model_mod,
+            bundles_store_mod,
+        ):
+            source = inspect.getsource(mod)
+            assert "markdown_store" in source, (
+                f"{mod.__name__} expected to import from markdown_store"
+                f" but does not — refactor may have reverted."
+            )
+
 
 class TestPhase6PlusConversationCompleteInvariant:
     """``ConversationCompleteEvent`` is a stream-event type used ONLY by
@@ -337,50 +381,6 @@ class TestPhase6PlusConversationCompleteInvariant:
                     f"invariant violated. ConversationCompleteEvent is "
                     f"engine→REPL only."
                 )
-
-    @staticmethod
-    def _strip_comments_and_docstrings(source: str) -> str:
-        cleaned = re.sub(r'"""[\s\S]*?"""', "", source, flags=re.MULTILINE)
-        cleaned = re.sub(r"'''[\s\S]*?'''", "", cleaned, flags=re.MULTILINE)
-        cleaned_lines = [line.split("#", 1)[0] for line in cleaned.splitlines()]
-        return "\n".join(cleaned_lines)
-
-    def test_protected_modules_do_not_reference_markdown_store(self) -> None:
-        for mod_name in self._PROTECTED_MODULES:
-            module = importlib.import_module(mod_name)
-            source = inspect.getsource(module)
-            code = self._strip_comments_and_docstrings(source)
-            for forbidden in self._FORBIDDEN_IDENTIFIERS:
-                pattern = rf"\b{re.escape(forbidden)}\b"
-                assert not re.search(pattern, code), (
-                    f"{mod_name} references {forbidden!r} — Phase 8 "
-                    f"invariant violated. markdown_store/ is consumed "
-                    f"by commands/skills/bundles only."
-                )
-
-    def test_consumers_DO_reference_markdown_store(self) -> None:
-        # Sanity inverse: the three legitimate consumers actually use
-        # markdown_store. If this fails, the refactor reverted somewhere.
-        from openharness.bundles import model as bundles_model_mod
-        from openharness.bundles import store as bundles_store_mod
-        from openharness.commands import model as commands_model_mod
-        from openharness.commands import store as commands_store_mod
-        from openharness.skills import model as skills_model_mod
-        from openharness.skills import store as skills_store_mod
-
-        for mod in (
-            commands_model_mod,
-            commands_store_mod,
-            skills_model_mod,
-            skills_store_mod,
-            bundles_model_mod,
-            bundles_store_mod,
-        ):
-            source = inspect.getsource(mod)
-            assert "markdown_store" in source, (
-                f"{mod.__name__} expected to import from markdown_store"
-                f" but does not — refactor may have reverted."
-            )
 
 
 class TestExecutionEnvironmentSubstrateSwap:

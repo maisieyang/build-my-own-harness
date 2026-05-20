@@ -122,8 +122,15 @@ def _load_settings() -> Settings:
     Wrapped (rather than calling ``Settings()`` inline) so tests can
     monkeypatch this single function instead of fiddling with env vars
     or pydantic-settings internals.
+
+    P7-T2 (D25.2):loads ``~/.openharness/.env`` if present(user-global
+    layer)in addition to ``./.env`` from cwd(project layer).Project
+    layer wins because it's later in the env_file tuple.``oh config
+    edit`` opens the user-global file.Both files may be absent — the
+    `OPENHARNESS_*` env vars set directly in the shell always work.
     """
-    return Settings()
+    user_env = Path.home() / ".openharness" / ".env"
+    return Settings(_env_file=(str(user_env), ".env"))
 
 
 def _build_client(settings: Settings) -> OpenAICompatibleApiClient:
@@ -1054,6 +1061,350 @@ def chat(
     except OpenHarnessError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+
+
+# --------------------------------------------------------------------------- #
+# P7-T2: introspection subcommands (oh tools / oh config / oh hooks)         #
+# --------------------------------------------------------------------------- #
+
+
+_CONFIG_TEMPLATE = """\
+# OpenHarness user-global configuration
+#
+# This file is loaded by ``oh ask`` / ``oh chat`` etc. as a LOWER-
+# precedence layer than a ``.env`` in the project's cwd, which in turn
+# is lower precedence than env vars set in your shell.
+#
+# Uncomment + set the values you want. The two required fields are
+# OPENHARNESS_API_KEY and OPENHARNESS_BASE_URL.
+
+# OPENHARNESS_API_KEY="sk-..."
+# OPENHARNESS_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
+# OPENHARNESS_MODEL="qwen-plus"
+
+# Permissions
+# OPENHARNESS_DENY_PATHS="secrets/**,*.env"
+# OPENHARNESS_PERMISSION_MODE="default"  # default / auto / dry_run
+
+# Observability
+# OPENHARNESS_LOG_LEVEL="WARNING"
+# OPENHARNESS_LOG_FORMAT="console"  # console / json
+
+# Sandbox
+# OPENHARNESS_SANDBOX_ENABLED="false"
+# OPENHARNESS_SANDBOX_IMAGE="python:3.12-slim"
+# OPENHARNESS_SANDBOX_RUNTIME="runc"  # runc / runsc (gVisor)
+
+# Plugin hooks (opt-in)
+# OPENHARNESS_ENABLE_PLUGIN_HOOKS="false"
+"""
+
+
+def _redact_secret(value: str | None) -> str:
+    """Last-4-chars redaction for secrets in ``oh config show``."""
+    if not value:
+        return ""
+    if len(value) <= 4:
+        return "***"
+    return f"***{value[-4:]}"
+
+
+# ----- oh tools --------------------------------------------------------------
+
+tools_app = typer.Typer(name="tools", help="Inspect registered tools.")
+app.add_typer(tools_app, name="tools")
+
+
+@tools_app.command("list", help="List the tools registered in the default registry.")
+def tools_list(
+    format: str = typer.Option(
+        "text",
+        "--format",
+        "-f",
+        help="Output format: text (default) or json.",
+    ),
+) -> None:
+    """List the 6 built-in tools (Read/Write/Edit/Bash/Grep/Agent).
+
+    MCP adapters + LoadSkill register conditionally based on Settings
+    + filesystem state, so this offline listing shows only the
+    framework's default catalog. Run ``oh ask --dry-run "..."`` to see
+    the effective registry for a real invocation.
+    """
+    from openharness.tools import create_default_tool_registry
+
+    registry = create_default_tool_registry()
+    if format == "json":
+        import json
+
+        data = [
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "is_read_only": tool.is_read_only,
+                "trust_source": tool.trust_source,
+            }
+            for tool in registry.list_tools()
+        ]
+        typer.echo(json.dumps(data, indent=2))
+        return
+    for tool in registry.list_tools():
+        ro = " [read-only]" if tool.is_read_only else ""
+        typer.echo(f"{tool.name:12s}{ro:13s} {tool.description}")
+
+
+@tools_app.command("show", help="Show a tool's full schema + metadata.")
+def tools_show(
+    name: str = typer.Argument(..., help="Tool name (case-sensitive)."),
+    format: str = typer.Option(
+        "text",
+        "--format",
+        "-f",
+        help="Output format: text (default) or json.",
+    ),
+) -> None:
+    """Print name, description, is_read_only, trust_source, input_schema."""
+    import json
+
+    from openharness.tools import create_default_tool_registry
+
+    registry = create_default_tool_registry()
+    try:
+        tool = registry.get(name)
+    except KeyError:
+        available = ", ".join(t.name for t in registry.list_tools())
+        typer.echo(
+            f"Unknown tool: {name!r}; available: {available}",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+
+    schema = tool.input_model.model_json_schema()
+    if format == "json":
+        typer.echo(
+            json.dumps(
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "is_read_only": tool.is_read_only,
+                    "trust_source": tool.trust_source,
+                    "input_schema": schema,
+                },
+                indent=2,
+            )
+        )
+        return
+
+    typer.echo(f"name:         {tool.name}")
+    typer.echo(f"description:  {tool.description}")
+    typer.echo(f"is_read_only: {tool.is_read_only}")
+    typer.echo(f"trust_source: {tool.trust_source}")
+    typer.echo("input_schema:")
+    for line in json.dumps(schema, indent=2).splitlines():
+        typer.echo(f"  {line}")
+
+
+# ----- oh config -------------------------------------------------------------
+
+config_app = typer.Typer(name="config", help="Inspect or edit OpenHarness configuration.")
+app.add_typer(config_app, name="config")
+
+
+# Field names whose values are redacted on display.
+_SECRET_FIELDS = frozenset({"api_key"})
+
+
+@config_app.command("show", help="Print the effective Settings (env-resolved).")
+def config_show(
+    format: str = typer.Option("text", "--format", "-f"),
+) -> None:
+    """Print Settings as resolved from env vars + .env files.
+
+    ``api_key`` is redacted (last 4 chars + ``***``). If required
+    fields aren't set, prints a friendly hint instead of a stack
+    trace.
+    """
+    import json
+
+    try:
+        settings = _load_settings()
+    except ValidationError as exc:
+        typer.echo(f"Configuration error:\n{exc}", err=True)
+        typer.echo(
+            "\nHint: set OPENHARNESS_API_KEY and OPENHARNESS_BASE_URL "
+            "(via shell env, ~/.openharness/.env, or ./.env), then "
+            "re-run ``oh config show``.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    data = settings.model_dump()
+    for secret_field in _SECRET_FIELDS:
+        if secret_field in data:
+            data[secret_field] = _redact_secret(data[secret_field])
+
+    if format == "json":
+        # ``default=str`` covers tuple-of-pydantic-models like
+        # mcp_servers; pydantic v2's model_dump already converts most.
+        typer.echo(json.dumps(data, indent=2, default=str))
+        return
+
+    width = max(len(k) for k in data) + 2
+    for k, v in data.items():
+        typer.echo(f"{k:<{width}}= {v!r}")
+
+
+@config_app.command("edit", help="Open ~/.openharness/.env in $EDITOR.")
+def config_edit() -> None:
+    """Open the user-global config file in ``$EDITOR``(or ``nano`` /
+    ``vi``). Creates the file with a commented template if absent.
+
+    The file is loaded by ``_load_settings()`` as a lower-precedence
+    layer than ``./.env`` from cwd, which is lower than shell env vars.
+    """
+    import os
+    import shutil
+    import subprocess
+
+    config_dir = Path.home() / ".openharness"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    env_file = config_dir / ".env"
+    if not env_file.exists():
+        env_file.write_text(_CONFIG_TEMPLATE, encoding="utf-8")
+        typer.echo(f"Created {env_file} with template.")
+
+    editor = os.environ.get("EDITOR") or shutil.which("nano") or shutil.which("vi")
+    if editor is None:
+        typer.echo(
+            f"$EDITOR is unset and neither nano nor vi found. Edit {env_file} manually.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # ``check=False``: editor exits with non-zero on user abort (e.g.,
+    # vi :q!); we don't want to surface that as an OpenHarness error.
+    subprocess.run([editor, str(env_file)], check=False)
+
+
+# ----- oh hooks --------------------------------------------------------------
+
+hooks_app = typer.Typer(name="hooks", help="Inspect framework + plugin hooks.")
+app.add_typer(hooks_app, name="hooks")
+
+
+@hooks_app.command("list", help="List built-in hooks (and plugins with --enable-plugin-hooks).")
+def hooks_list(
+    format: str = typer.Option("text", "--format", "-f"),
+    enable_plugin_hooks: bool = typer.Option(
+        False,
+        "--enable-plugin-hooks/--no-enable-plugin-hooks",
+        help="Also discover entry-point + filesystem plugin hooks.",
+    ),
+) -> None:
+    """List ``BUILTIN_HOOKS`` keys + event; with the flag, also list
+    discovered plugins.
+
+    Plugin discovery here is offline-safe — it never invokes the
+    hook;just inspects ``HookSpec.event`` + the source label.
+    """
+    import json
+
+    from openharness.bundles import BUILTIN_HOOKS
+
+    rows: list[dict[str, str]] = [
+        {"name": name, "event": event, "source": "builtin"}
+        for name, (event, _hook) in BUILTIN_HOOKS.items()
+    ]
+
+    if enable_plugin_hooks:
+        from openharness.bundles import (
+            discover_filesystem_hook_plugins,
+            discover_plugin_hooks,
+        )
+
+        for name, spec in discover_plugin_hooks().items():
+            rows.append({"name": name, "event": spec.event, "source": "entry-point"})
+        fs = discover_filesystem_hook_plugins(
+            global_dir=Path.home() / ".openharness" / "hooks",
+            project_dir=Path.cwd() / ".openharness" / "hooks",
+        )
+        for name, spec in fs.items():
+            rows.append({"name": name, "event": spec.event, "source": "filesystem"})
+
+    if format == "json":
+        typer.echo(json.dumps(rows, indent=2))
+        return
+
+    name_width = max((len(r["name"]) for r in rows), default=4) + 2
+    event_width = max((len(r["event"]) for r in rows), default=5) + 2
+    for r in rows:
+        typer.echo(f"{r['name']:<{name_width}}{r['event']:<{event_width}}({r['source']})")
+
+
+@hooks_app.command("describe", help="Describe a hook (event + docstring).")
+def hooks_describe(
+    name: str = typer.Argument(..., help="Hook name."),
+    enable_plugin_hooks: bool = typer.Option(
+        False,
+        "--enable-plugin-hooks/--no-enable-plugin-hooks",
+        help="Look up plugin hooks too.",
+    ),
+) -> None:
+    """Print event + docstring for ``name``.
+
+    Built-in hooks always resolve; plugin hooks require the flag (so
+    we don't import unknown ``.py`` files when the user didn't opt
+    in).
+    """
+    import inspect
+
+    from openharness.bundles import BUILTIN_HOOKS
+
+    event: str
+    if name in BUILTIN_HOOKS:
+        builtin_event, builtin_hook = BUILTIN_HOOKS[name]
+        event = builtin_event
+        source = "builtin"
+        doc = inspect.getdoc(builtin_hook) or "(no docstring)"
+    elif enable_plugin_hooks:
+        from openharness.bundles import (
+            discover_filesystem_hook_plugins,
+            discover_plugin_hooks,
+        )
+
+        plugin_catalog: dict[str, HookSpec] = dict(discover_plugin_hooks())
+        for fs_name, fs_spec in discover_filesystem_hook_plugins(
+            global_dir=Path.home() / ".openharness" / "hooks",
+            project_dir=Path.cwd() / ".openharness" / "hooks",
+        ).items():
+            plugin_catalog.setdefault(fs_name, fs_spec)
+
+        if name not in plugin_catalog:
+            available = sorted(set(BUILTIN_HOOKS.keys()) | set(plugin_catalog.keys()))
+            typer.echo(
+                f"Unknown hook: {name!r}; available: {', '.join(available)}",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        spec = plugin_catalog[name]
+        event = spec.event
+        source = "plugin"
+        doc = inspect.getdoc(spec.hook) or "(no docstring)"
+    else:
+        available = sorted(BUILTIN_HOOKS.keys())
+        typer.echo(
+            f"Unknown hook: {name!r}; available (built-in): "
+            f"{', '.join(available)}. "
+            f"Add --enable-plugin-hooks to include plugins.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    typer.echo(f"name:   {name}")
+    typer.echo(f"event:  {event}")
+    typer.echo(f"source: {source}")
+    typer.echo("")
+    typer.echo(doc)
 
 
 # --------------------------------------------------------------------------- #
