@@ -23,8 +23,8 @@
 | **Phase 数** | 7 | **17**(原 7 个 + 10 个 split / bonus / closeout) |
 | **生产代码 LoC** | 未定 | **~10,800 行**(`src/openharness/`) |
 | **测试代码 LoC** | 未定 | **~21,600 行**(`tests/`) |
-| **测试覆盖率** | ≥70% (Phase 1 DoD) → ≥95% (P3-T6.6b 升级) | **~97%**(gate 95%) |
-| **测试数量** | 未定 | **1268 passing + 8 skipped**(Docker / gVisor / real-LLM integration) |
+| **测试覆盖率** | ≥70% (Phase 1 DoD) → ≥95% (P3-T6.6b 升级) | **95.33%** Python 3.11 / **95.24%** Python 3.10 on CI (gate 95%). 注:Phase 7 close 时本地报 ~97%,但带着 dev-side `.env`;CI clean-env 实测 95.33%,差距源自 dev `.env` 让一些 fall-through 路径被穿过。OSS push 后修正,见 fix commits `3b5a99e` + `9aa9f4b` 的 retro 复盘。 |
+| **测试数量** | 未定 | **1274 passing on CI** + **11 deselected**(`@pytest.mark.integration`:MCP smoke + Docker / gVisor / real-LLM)。1277 total defined。 |
 | **Commit 数** | 未定 | **195** |
 | **Subsystem 数** | Tier 0 必做 12 项 | **18**(`src/openharness/` 下的目录) |
 | **Decision docs** | 每个非平凡决策一份 | **23**(`decisions/00-23`) |
@@ -203,7 +203,7 @@ async def run_query(messages, context) -> AsyncIterator[ApiStreamEvent]:
 
 ### 5.1 不该 ship `0.0.1`,应该 ship `0.1.0` 起步
 
-**问题**: `pyproject.toml` Phase 1 起就 `version = "0.0.1"`,直到 Phase 7 T3 才 bump 到 0.1.0。`0.0.x` 在 semver 习俗里是 "this is a prototype, expect everything to break" —— 1268 个测试 + 97% 覆盖率 + mypy strict 的项目不是 prototype。
+**问题**: `pyproject.toml` Phase 1 起就 `version = "0.0.1"`,直到 Phase 7 T3 才 bump 到 0.1.0。`0.0.x` 在 semver 习俗里是 "this is a prototype, expect everything to break" —— 1274 个测试 + 95.33% 覆盖率 + mypy strict 的项目不是 prototype。
 
 **应该这样**: Phase 1 就用 `0.1.0` 起步,signal "implementation real, API still pre-committed"。Phase 7 不需要做"第一次正式 release bump"这个 ceremony。
 
@@ -293,7 +293,7 @@ async def run_query(messages, context) -> AsyncIterator[ApiStreamEvent]:
 - [x] T4 `examples/` directory(6 copy-pastable files)
 - [x] T4 `tests/test_examples.py`(8 tests verifying each example parses)
 - [x] T5 `learnings/phase-7.md` meta-retro(本文件)
-- [x] 1268 tests passing,8 skipped(Docker / gVisor / real-LLM integration)
+- [x] 1274 tests passing on CI(Python 3.10/3.11),11 integration-gated, 8 skipif-gated(Docker / gVisor / real-LLM)
 - [x] coverage ≥ 95% maintained throughout
 - [x] mypy --strict clean(190 source files)
 - [x] ruff check + format clean
@@ -335,7 +335,7 @@ async def run_query(messages, context) -> AsyncIterator[ApiStreamEvent]:
 
 **SPEC §1 双重目标**:
 
-1. **Production deliverable**: ✅ 1268 tests,97%+ coverage,17 phases,可 `uv build` 产 wheel + sdist。仅缺 user 自己 fire 的 PyPI publish。
+1. **Production deliverable**: ✅ 1274 tests passing on CI,95.33% coverage(Python 3.11),17 phases,可 `uv build` 产 wheel + sdist。仅缺 user 自己 fire 的 PyPI publish。
 2. **Capability training**: ✅ 23 decision docs + 29 retros + 18 subsystems + 5 个 framework-level lesson(§3)+ 3 个 Python-specific lesson(§4)。**对外作品的核心 artifact 是这份 retro 本身 + 28 个 phase retro**。
 
 **SPEC §1 时间预算**: 2-3 个月 → 23 天。**~5x 提前**。原因不是工作快,是 phase 颗粒度细 + 每 phase 严格 boundary→plan→execute→retro。
@@ -354,6 +354,6 @@ async def run_query(messages, context) -> AsyncIterator[ApiStreamEvent]:
 >
 > **SPEC 押注的 layered abstraction + abstraction-first + rule-of-three
 > 三个 framework design pattern,在 17 个 phase 的累积压力下全部
-> 兑现。1268 个测试 / 18 个 subsystem / 23 天交付。最大单点
+> 兑现。1274 个测试 / 18 个 subsystem / 23 天交付。最大单点
 > outstanding 是 Anthropic native client(150 LoC,~1 天)+ PyPI
 > publish(用户 fire button)。SPEC v1 boundary 在此 close。**

@@ -42,7 +42,7 @@ and what the next phase predicted before being built**.
 | Subsystems | **18** under `src/openharness/` |
 | Decision records | **24** in [`decisions/`](./decisions) (per-trade-off rationale) |
 | Retros + essays | **31** in [`learnings/`](./learnings) (18 per-phase + framing essays) |
-| Tests | **1268 passing** at **~97% coverage**, mypy strict, ruff clean |
+| Tests | **1274 passing on CI** at **95.33% coverage** (Python 3.11), mypy strict, ruff clean |
 | Lines of code | ~10,800 production / ~21,600 tests |
 | Commits | 195 |
 
@@ -367,7 +367,7 @@ retrospectives, see [`learnings/`](./learnings).
 │   ├── protocols/            # Phase 1 Pydantic v2 wire types (Anthropic-shape)
 │   ├── skills/               # Phase 5c lazy-loaded expertise
 │   └── tools/                # Phase 2 tool registry + 5 built-in tools
-├── tests/                    # ~1268 tests mirroring src/ layout
+├── tests/                    # ~1277 tests mirroring src/ layout
 ├── .github/workflows/ci.yml  # Lint + type-check + test on Python 3.10/3.11
 └── .pre-commit-config.yaml   # Fast hooks only (ruff + hygiene)
 ```

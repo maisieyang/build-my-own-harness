@@ -26,8 +26,8 @@ candidate Phase 8+ work in
 
 First public release. The SPEC v1 boundary closes here: a feature-
 complete Python LLM agent harness with 16 capability phases shipped
-over ~3.5 weeks, 1260+ tests at 97%+ coverage, mypy strict + ruff
-clean throughout.
+over ~3.5 weeks, 1274 tests passing on CI at 95.33% coverage,
+mypy strict + ruff clean throughout.
 
 ### Added — engine + tool loop
 
@@ -123,9 +123,11 @@ clean throughout.
 
 ### Quality bars
 
-- **1260 tests passing**, 8 skipped (gated Docker + gVisor
-  integration smokes).
-- **97%+ coverage** (gate: ≥95% global).
+- **1274 tests passing** on CI (Python 3.10/3.11), 11 integration-
+  gated (`@pytest.mark.integration`: MCP smoke + real-LLM), 8 skipif-
+  gated (Docker / gVisor / real-API).
+- **95.33% coverage** on Python 3.11 / **95.24%** on Python 3.10
+  (gate: ≥95% global).
 - **mypy --strict** clean throughout (188 source files).
 - **ruff** check + format clean.
 - **CI**: Python 3.10 and 3.11 on GitHub Actions.
