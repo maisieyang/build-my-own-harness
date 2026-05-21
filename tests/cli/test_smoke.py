@@ -28,8 +28,17 @@ def test_ask_help_lists_flags() -> None:
     result = runner.invoke(app, ["ask", "--help"])
 
     assert result.exit_code == 0
-    assert "--model" in result.stdout
-    assert "--max-tokens" in result.stdout
+    # Typer 0.13+ renders help via rich with ANSI escape codes + line-
+    # wrapping; on narrow terminals ``--model`` may be split across
+    # columns by box-drawing chars. Strip ANSI + collapse whitespace
+    # before substring-checking so the assertion is stable across
+    # CI runner widths.
+    import re
+
+    plain = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", result.stdout)
+    plain = re.sub(r"\s+", " ", plain)
+    assert "--model" in plain
+    assert "--max-tokens" in plain
 
 
 def test_version_flag_prints_version() -> None:
