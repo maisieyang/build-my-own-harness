@@ -28,7 +28,7 @@ and what the next phase predicted before being built**.
 ## Two ways to read this repo
 
 - 👉 **Want to use it as a harness?** → jump to [Quickstart](#quickstart)
-- 📖 **Want to learn how it was built?** → read the [meta-retro](./learnings/phase-7.md) (the framework-level case study), then explore [`decisions/`](./decisions) + [`learnings/`](./learnings)
+- 📖 **Want to learn how it was built — and apply the methodology to your own project?** → start with [**PLAYBOOK.md**](./PLAYBOOK.md) (the 4-step methodology distilled from the 17-phase build, ~6500 字 中文), then the [meta-retro](./learnings/phase-7.md) for quantitative evidence + [`decisions/`](./decisions) and [`learnings/`](./learnings) for the trail
 - 🏗️ **Want to fork / contribute?** → [`ARCHITECTURE.md`](./ARCHITECTURE.md) (tier map) + [`SPEC.md`](./SPEC.md) (project contract) + [`docs/development-log.md`](./docs/development-log.md) (per-phase narrative)
 
 ---
@@ -139,6 +139,14 @@ framework-builder retrospective.
 OpenHarness isn't just runnable code; it's a **case study in framework
 design under self-imposed production constraints**. The repo preserves
 the full decision and reflection trail.
+
+If you want **the actionable distillation** (how to apply this
+methodology to your own project), read **[`PLAYBOOK.md`](./PLAYBOOK.md)**
+first — a ~6500-character Chinese playbook covering the 4-step phase
+loop, when the agent must stop and ask, review-before-commit, the trail
+discipline, and 5 framework lessons + 3 anti-patterns with quantitative
+evidence. The rest of this section is the source material the playbook
+draws from.
 
 ### The methodology
 
