@@ -25,10 +25,11 @@ and what the next phase predicted before being built**.
 
 ---
 
-## Two ways to read this repo
+## Four entry points
 
 - 👉 **Want to use it as a harness?** → jump to [Quickstart](#quickstart)
-- 📖 **Want to learn how it was built — and apply the methodology to your own project?** → start with [**PLAYBOOK.md**](./PLAYBOOK.md) (the 4-step methodology distilled from the 17-phase build, ~6500 字 中文), then the [meta-retro](./learnings/phase-7.md) for quantitative evidence + [`decisions/`](./decisions) and [`learnings/`](./learnings) for the trail
+- 📖 **Engineer — want to learn how it was built / apply the methodology?** → [**PLAYBOOK.md**](./PLAYBOOK.md) (4-step methodology + architecture + 5 framework lessons + 3 anti-patterns;~6500 字 中文)
+- 🎯 **PM — want LLM/Agent product decision frameworks + cross-role collab playbook?** → [**PLAYBOOK-PM.md**](./PLAYBOOK-PM.md) (18,500 字 中文,8 个 Part:harness 产品视角 / 11 个真实产品决策 / LLM 机制速通 / 评测灰度 A/B / 跨角色协作 / 5 个反面案例,带 DeepSeek JD 技术词清单对照)
 - 🏗️ **Want to fork / contribute?** → [`ARCHITECTURE.md`](./ARCHITECTURE.md) (tier map) + [`SPEC.md`](./SPEC.md) (project contract) + [`docs/development-log.md`](./docs/development-log.md) (per-phase narrative)
 
 ---
