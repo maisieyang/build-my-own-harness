@@ -337,3 +337,130 @@ class TestUserGlobalEnvLayer:
 
         settings = cli_module._load_settings()
         assert settings.api_key == "sk-shell-only"
+
+
+# --------------------------------------------------------------------------- #
+# oh config edit — no-editor-available path                                   #
+# --------------------------------------------------------------------------- #
+
+
+class TestConfigEditNoEditor:
+    def test_exits_when_no_editor_and_no_fallback(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """If ``$EDITOR`` is unset AND neither ``nano`` nor ``vi`` is on
+        PATH, ``oh config edit`` writes the template, then exits 1 with
+        an instructive message."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setenv("HOME", str(fake_home))
+        monkeypatch.delenv("EDITOR", raising=False)
+        # Empty PATH → ``shutil.which`` finds neither ``nano`` nor ``vi``.
+        monkeypatch.setenv("PATH", "")
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["config", "edit"])
+        assert result.exit_code == 1
+        combined = result.stdout + (result.stderr or "")
+        assert "$EDITOR is unset" in combined
+        # The template file should STILL have been written.
+        assert (fake_home / ".openharness" / ".env").exists()
+
+
+# --------------------------------------------------------------------------- #
+# oh hooks — plugin-aware paths                                               #
+# --------------------------------------------------------------------------- #
+
+
+class TestHooksWithPluginDiscovery:
+    def test_list_with_flag_includes_filesystem_plugins(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``oh hooks list --enable-plugin-hooks`` discovers and shows
+        ``.py`` plugins under ``~/.openharness/hooks/``."""
+        fake_home = tmp_path / "home"
+        hooks_dir = fake_home / ".openharness" / "hooks"
+        hooks_dir.mkdir(parents=True)
+        # Minimal plugin: registers one PostToolUse hook named
+        # ``audit_extra`` via the hook_spec decorator.
+        (hooks_dir / "audit_extra.py").write_text(
+            "from openharness.bundles import hook_spec\n\n"
+            "@hook_spec('PostToolUse')\n"
+            "async def audit_extra(_ctx):\n"
+            "    return None\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("HOME", str(fake_home))
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_module.app,
+            ["hooks", "list", "--enable-plugin-hooks", "--format", "json"],
+        )
+        assert result.exit_code == 0
+        data = json.loads(result.stdout)
+        names = {row["name"]: row for row in data}
+        assert "audit_log" in names  # builtin still present
+        assert "audit_extra" in names  # filesystem plugin discovered
+        assert names["audit_extra"]["source"] == "filesystem"
+        assert names["audit_extra"]["event"] == "PostToolUse"
+
+    def test_describe_filesystem_plugin_hook(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``oh hooks describe <plugin_name> --enable-plugin-hooks`` prints
+        the plugin's event + docstring."""
+        fake_home = tmp_path / "home"
+        hooks_dir = fake_home / ".openharness" / "hooks"
+        hooks_dir.mkdir(parents=True)
+        (hooks_dir / "audit_extra.py").write_text(
+            "from openharness.bundles import hook_spec\n\n"
+            "@hook_spec('PostToolUse')\n"
+            "async def audit_extra(_ctx):\n"
+            '    """Extra audit log written to the filesystem."""\n'
+            "    return None\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("HOME", str(fake_home))
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_module.app,
+            ["hooks", "describe", "audit_extra", "--enable-plugin-hooks"],
+        )
+        assert result.exit_code == 0
+        assert "name:" in result.stdout
+        assert "audit_extra" in result.stdout
+        assert "PostToolUse" in result.stdout
+        assert "source: plugin" in result.stdout
+        assert "Extra audit log" in result.stdout
+
+    def test_describe_unknown_with_flag_lists_plugin_and_builtin(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Unknown hook name with ``--enable-plugin-hooks`` lists both
+        sources in the ``available`` hint."""
+        fake_home = tmp_path / "home"
+        hooks_dir = fake_home / ".openharness" / "hooks"
+        hooks_dir.mkdir(parents=True)
+        (hooks_dir / "myplugin.py").write_text(
+            "from openharness.bundles import hook_spec\n\n"
+            "@hook_spec('PreToolUse')\n"
+            "async def myplugin(_ctx):\n"
+            "    return None\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("HOME", str(fake_home))
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_module.app,
+            ["hooks", "describe", "nonexistent", "--enable-plugin-hooks"],
+        )
+        assert result.exit_code == 1
+        combined = result.stdout + (result.stderr or "")
+        assert "Unknown hook" in combined
+        # Both builtins and the discovered plugin should appear in the
+        # "available:" list.
+        assert "audit_log" in combined
+        assert "myplugin" in combined

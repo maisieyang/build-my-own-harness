@@ -38,11 +38,19 @@ if TYPE_CHECKING:
     from openharness.protocols.stream_events import ApiStreamEvent
 
 
-# Skip everything in this module when npx is missing.
-pytestmark = pytest.mark.skipif(
-    shutil.which("npx") is None,
-    reason="npx not installed — MCP filesystem smoke requires Node.js",
-)
+# Skip everything in this module when npx is missing + opt out of the
+# repo-root ``_clean_openharness_env`` isolation. These tests spawn real
+# Node subprocesses via ``npx``, which needs a real ``$HOME`` for
+# ``~/.npm`` cache resolution (a tmp HOME makes npx behave but ship
+# empty tool catalogs intermittently). Marked ``integration`` so the
+# root conftest leaves the env intact.
+pytestmark = [
+    pytest.mark.skipif(
+        shutil.which("npx") is None,
+        reason="npx not installed — MCP filesystem smoke requires Node.js",
+    ),
+    pytest.mark.integration,
+]
 
 
 def _filesystem_cfg(tmp_path: Path) -> McpServerConfig:

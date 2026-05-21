@@ -208,3 +208,125 @@ class TestMultiTurnHistory:
         # Roles in turn 2: user, assistant, user.
         roles = [m.role for m in captured_initial_messages[1]]
         assert roles == ["user", "assistant", "user"]
+
+
+# --------------------------------------------------------------------------- #
+# REPL recovery paths — continue back to prompt instead of breaking the loop. #
+# --------------------------------------------------------------------------- #
+
+
+class TestReplRecoveryPaths:
+    def test_keyboard_interrupt_continues(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Ctrl-C at the prompt prints a hint and re-prompts (no exit)."""
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
+
+        # First input() raises KeyboardInterrupt, second returns /exit.
+        call_count = [0]
+
+        def _next(prompt: str = "") -> str:
+            del prompt
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise KeyboardInterrupt
+            return "/exit"
+
+        import builtins
+
+        monkeypatch.setattr(builtins, "input", _next)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["chat"])
+        assert result.exit_code == 0
+        # The "(use /exit to quit)" hint is rendered to stdout, not stderr.
+        assert "use /exit to quit" in result.stdout
+
+    def test_empty_input_continues_without_invoking_llm(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Empty / whitespace-only input re-prompts; no LLM round-trip."""
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
+
+        called: list[int] = []
+
+        async def _run_query_spy(
+            initial_messages: list[ConversationMessage], context: object
+        ) -> AsyncIterator[ApiStreamEvent]:
+            del context
+            called.append(1)
+            yield ApiMessageCompleteEvent(
+                message=ConversationMessage(role="assistant", content=[TextBlock(text="x")]),
+                usage=UsageSnapshot(input_tokens=1, output_tokens=1),
+                stop_reason="end_turn",
+            )
+            yield ConversationCompleteEvent(
+                messages=[
+                    *initial_messages,
+                    ConversationMessage(role="assistant", content=[TextBlock(text="x")]),
+                ]
+            )
+
+        monkeypatch.setattr(cli_module, "run_query", _run_query_spy)
+        _stub_input_sequence(monkeypatch, ["", "   ", "/exit"])
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["chat"])
+        assert result.exit_code == 0
+        # Two empty inputs + /exit → 0 LLM calls.
+        assert called == []
+
+    def test_unknown_slash_command_continues(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A ``/<name>`` with no matching command file prints + continues."""
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
+        # Bare HOME (root conftest sets it to an empty isolation dir) →
+        # no ~/.openharness/commands → store yields nothing.
+        _stub_input_sequence(monkeypatch, ["/nonexistent_command", "/exit"])
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["chat"])
+        assert result.exit_code == 0
+        combined = result.stdout + (result.stderr or "")
+        assert "Unknown command" in combined
+
+    def test_loop_error_continues(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A LoopError during ``run_query`` is caught and the prompt re-enters."""
+        from openharness.errors import LoopError
+
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
+
+        async def _raising_run_query(
+            initial_messages: list[ConversationMessage], context: object
+        ) -> AsyncIterator[ApiStreamEvent]:
+            del initial_messages, context
+            if False:  # never executes; satisfies async-generator shape
+                yield  # pragma: no cover
+            raise LoopError("synthetic loop limit hit")
+
+        monkeypatch.setattr(cli_module, "run_query", _raising_run_query)
+        _stub_input_sequence(monkeypatch, ["please", "/exit"])
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["chat"])
+        assert result.exit_code == 0
+        combined = result.stdout + (result.stderr or "")
+        assert "Loop error" in combined
+        assert "synthetic loop limit hit" in combined
+
+
+# --------------------------------------------------------------------------- #
+# chat() entry-point flag validation                                          #
+# --------------------------------------------------------------------------- #
+
+
+class TestChatFlagValidation:
+    def test_auto_and_dry_run_mutually_exclusive(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``--auto`` and ``--dry-run`` together fails fast with exit 2."""
+        _set_minimum_env(monkeypatch)
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["chat", "--auto", "--dry-run"])
+        assert result.exit_code == 2
+        combined = result.stdout + (result.stderr or "")
+        assert "mutually exclusive" in combined
