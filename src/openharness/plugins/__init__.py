@@ -38,6 +38,13 @@ from openharness.plugins.errors import (
     PluginInstallError,
     PluginManifestError,
 )
+from openharness.plugins.loader import (
+    NAMESPACE_SEPARATOR,
+    LayeredStore,
+    LoadedPluginCatalogs,
+    PluginLoader,
+    namespaced,
+)
 from openharness.plugins.model import (
     PLUGIN_NAME_PATTERN,
     ComponentRef,
@@ -47,12 +54,17 @@ from openharness.plugins.model import (
 )
 
 __all__ = [
+    "NAMESPACE_SEPARATOR",
     "PLUGIN_NAME_PATTERN",
     "ComponentRef",
     "HookRef",
+    "LayeredStore",
+    "LoadedPluginCatalogs",
     "PluginConflictError",
     "PluginInstallError",
+    "PluginLoader",
     "PluginManifest",
     "PluginManifestError",
+    "namespaced",
     "parse_manifest",
 ]
