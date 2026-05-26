@@ -116,6 +116,7 @@ from openharness.protocols import (
     ConversationMessage,
     TextBlock,
 )
+from openharness.services.session_memory import get_session_memory_dir
 from openharness.skills.store import EmptySkillStore, FilesystemSkillStore, SkillStore
 from openharness.tools import LoadSkillTool, create_default_tool_registry
 
@@ -303,6 +304,9 @@ async def _run_ask(
     enable_plugin_hooks_override: bool | None = None,
     enable_plugins_override: bool | None = None,
     enable_memory_override: bool | None = None,
+    compact_threshold_override: float | None = None,
+    no_auto_compact: bool = False,
+    no_extract: bool = False,
 ) -> None:
     """Build the QueryContext, run the loop, render the events.
 
@@ -360,6 +364,21 @@ async def _run_ask(
     enable_memory = (
         enable_memory_override if enable_memory_override is not None else settings.enable_memory
     )
+    # P11-T5: compact + extraction CLI flags fold into nested Settings.
+    # ``--no-auto-compact`` flips ``compact.enabled=False`` regardless
+    # of env. ``--compact-threshold 0.5`` overrides
+    # ``compact.threshold_ratio``. ``--no-extract`` flips
+    # ``extraction.enabled=False``. Other CompactSettings /
+    # ExtractionSettings knobs use env-only override
+    # (``OPENHARNESS_COMPACT__FULL_COMPACT_TIMEOUT_S`` etc.) — no CLI
+    # flag for every field to keep the surface area small.
+    compact_enabled = settings.compact.enabled and not no_auto_compact
+    compact_threshold_ratio = (
+        compact_threshold_override
+        if compact_threshold_override is not None
+        else settings.compact.threshold_ratio
+    )
+    extract_enabled = settings.extraction.enabled and not no_extract
 
     # P3-T5.5e:configure logging FIRST so any subsequent error path
     # (client build / system prompt build) is observable.
@@ -655,6 +674,22 @@ async def _run_ask(
             # P7b-T2: substrate the BashTool delegates to. Default
             # HostExecution singleton when ``--sandbox`` is off.
             execution_env=execution_env,
+            # P11-T5: compact + extraction wiring. memory_store is the
+            # write-path entry for Phase 11 extraction (uses Phase 10's
+            # FilesystemMemoryStore). session_memory_path points at the
+            # 5-slot checkpoint compact L3 reads (None when memory
+            # subsystem disabled — engine still runs L2 + L4).
+            compact_enabled=compact_enabled,
+            compact_threshold_ratio=compact_threshold_ratio,
+            compact_full_max_tokens=settings.compact.full_compact_max_tokens,
+            compact_full_timeout_s=settings.compact.full_compact_timeout_s,
+            session_memory_path=(
+                get_session_memory_dir(env.cwd) / "checkpoint.md" if enable_memory else None
+            ),
+            memory_store=memory_store,
+            extract_enabled=extract_enabled,
+            extract_max_records=settings.extraction.max_records_per_turn,
+            extract_timeout_s=settings.extraction.timeout_s,
         )
 
         initial_messages = [
@@ -673,6 +708,9 @@ _CHAT_HELP_TEXT = """\
 oh chat — multi-turn REPL commands:
   /exit, /quit       leave the REPL
   /clear             reset conversation history (keeps tools + mode)
+  /compact           force full LLM-based compaction of the conversation
+                     (Phase 11 D29.6) — replaces history with a 9-slot
+                     summary regardless of token threshold
   /help              show this message
 
 User-authored slash commands (Phase 5b) work too — type ``/name args``
@@ -702,6 +740,9 @@ async def _run_chat(
     enable_plugin_hooks_override: bool | None = None,
     enable_plugins_override: bool | None = None,
     enable_memory_override: bool | None = None,
+    compact_threshold_override: float | None = None,
+    no_auto_compact: bool = False,
+    no_extract: bool = False,
 ) -> None:
     """Multi-turn REPL driver — P6+-T2.
 
@@ -759,6 +800,14 @@ async def _run_chat(
     enable_memory = (
         enable_memory_override if enable_memory_override is not None else settings.enable_memory
     )
+    # P11-T5: compact + extraction wiring — same shape as ``_run_ask``.
+    compact_enabled = settings.compact.enabled and not no_auto_compact
+    compact_threshold_ratio = (
+        compact_threshold_override
+        if compact_threshold_override is not None
+        else settings.compact.threshold_ratio
+    )
+    extract_enabled = settings.extraction.enabled and not no_extract
 
     configure_logging(level=log_level, format=log_format)
 
@@ -915,6 +964,41 @@ async def _run_chat(
             if user_input == "/help":
                 typer.echo(_CHAT_HELP_TEXT)
                 continue
+            # P11-T5 (D29.6): force full LLM-based compaction. Same
+            # primitive as auto-compact L4, but invoked unconditionally
+            # on the current history. Replaces ``history`` with a single
+            # user-role message carrying the 9-slot summary so the next
+            # turn picks it up as compressed context. No-op on empty
+            # history. Errors surface inline; history is unchanged on
+            # failure.
+            if user_input == "/compact":
+                if not history:
+                    typer.echo("(no conversation to compact)")
+                    continue
+                from openharness.services.compact import (
+                    estimate_message_tokens,
+                    full_compact,
+                )
+
+                before_tokens = estimate_message_tokens(history, model=model)
+                try:
+                    new_history, did_apply = await full_compact(
+                        history,
+                        model=model,
+                        api_client=client,
+                        max_tokens=settings.compact.full_compact_max_tokens,
+                        timeout_seconds=settings.compact.full_compact_timeout_s,
+                    )
+                except Exception as exc:
+                    typer.echo(f"(/compact failed: {exc})", err=True)
+                    continue
+                if not did_apply:
+                    typer.echo("(/compact: nothing to summarize)")
+                    continue
+                history = new_history
+                after_tokens = estimate_message_tokens(history, model=model)
+                typer.echo(f"(compacted: {before_tokens} → {after_tokens} tokens)")
+                continue
 
             # Phase 5b slash command expansion (for non-built-in).
             invoked_command = None
@@ -1009,6 +1093,20 @@ async def _run_chat(
                 skill_store=skill_store,
                 max_agent_depth=settings.max_agent_depth,
                 execution_env=execution_env,
+                # P11-T5: compact + extraction. Mirrors ``_run_ask``.
+                # Rebuilt per turn so /compact-toggled flags (future)
+                # take effect on the next turn.
+                compact_enabled=compact_enabled,
+                compact_threshold_ratio=compact_threshold_ratio,
+                compact_full_max_tokens=settings.compact.full_compact_max_tokens,
+                compact_full_timeout_s=settings.compact.full_compact_timeout_s,
+                session_memory_path=(
+                    get_session_memory_dir(env.cwd) / "checkpoint.md" if enable_memory else None
+                ),
+                memory_store=memory_store,
+                extract_enabled=extract_enabled,
+                extract_max_records=settings.extraction.max_records_per_turn,
+                extract_timeout_s=settings.extraction.timeout_s,
             )
 
             history.append(ConversationMessage(role="user", content=[TextBlock(text=user_input)]))
@@ -1233,6 +1331,37 @@ def ask(
             "OPENHARNESS_ENABLE_MEMORY."
         ),
     ),
+    compact_threshold: float | None = typer.Option(
+        None,
+        "--compact-threshold",
+        min=0.0,
+        max=1.0,
+        help=(
+            "Auto-compact threshold as a fraction of the model's context "
+            "window (Phase 11 D29.3). Above this ratio, auto-compact "
+            "escalates L2→L3→L4. Overrides "
+            "OPENHARNESS_COMPACT__THRESHOLD_RATIO (default 0.83)."
+        ),
+    ),
+    no_auto_compact: bool = typer.Option(
+        False,
+        "--no-auto-compact",
+        help=(
+            "Disable proactive auto-compact (Phase 11). The engine's "
+            "reactive prompt-too-long retry remains active as the last-"
+            "resort safety net. Useful for tests that need byte-stable "
+            "request shape or when L4 LLM cost is unwanted."
+        ),
+    ),
+    no_extract: bool = typer.Option(
+        False,
+        "--no-extract",
+        help=(
+            "Disable the per-turn memory-extraction secondary pass "
+            "(Phase 11 D29.5). The main conversation is unaffected. "
+            "Overrides OPENHARNESS_EXTRACTION__ENABLED."
+        ),
+    ),
 ) -> None:
     """Stream a single LLM response (with tool dispatch) to stdout."""
     if auto and dry_run:
@@ -1274,6 +1403,9 @@ def ask(
                 enable_plugin_hooks_override=enable_plugin_hooks,
                 enable_plugins_override=enable_plugins,
                 enable_memory_override=enable_memory,
+                compact_threshold_override=compact_threshold,
+                no_auto_compact=no_auto_compact,
+                no_extract=no_extract,
             )
         )
     except ValidationError as exc:
@@ -1375,6 +1507,23 @@ def chat(
             "Overrides OPENHARNESS_ENABLE_MEMORY."
         ),
     ),
+    compact_threshold: float | None = typer.Option(
+        None,
+        "--compact-threshold",
+        min=0.0,
+        max=1.0,
+        help="Auto-compact threshold (Phase 11). Overrides OPENHARNESS_COMPACT__THRESHOLD_RATIO.",
+    ),
+    no_auto_compact: bool = typer.Option(
+        False,
+        "--no-auto-compact",
+        help="Disable proactive auto-compact (Phase 11). Reactive PTL retry still active.",
+    ),
+    no_extract: bool = typer.Option(
+        False,
+        "--no-extract",
+        help="Disable per-turn memory extraction (Phase 11 D29.5).",
+    ),
 ) -> None:
     """Multi-turn REPL — same flag surface as ``ask`` minus the prompt arg."""
     if auto and dry_run:
@@ -1410,6 +1559,9 @@ def chat(
                 enable_plugin_hooks_override=enable_plugin_hooks,
                 enable_plugins_override=enable_plugins,
                 enable_memory_override=enable_memory,
+                compact_threshold_override=compact_threshold,
+                no_auto_compact=no_auto_compact,
+                no_extract=no_extract,
             )
         )
     except ValidationError as exc:

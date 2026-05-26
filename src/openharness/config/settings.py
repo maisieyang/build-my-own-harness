@@ -94,6 +94,107 @@ class MemorySettings(BaseModel):
     )
 
 
+class CompactSettings(BaseModel):
+    """Tunables for the Phase 11 auto-compact pipeline (D29.3 + D29.8).
+
+    Env-var overrides use double-underscore: ``OPENHARNESS_COMPACT__THRESHOLD_RATIO=0.7``
+    sets ``settings.compact.threshold_ratio``.
+
+    ``enabled=False`` disables L2-L4 entirely; Phase 4's L1 microcompact
+    + reactive PTL retry still run (L1 lives in the PostToolUse hook,
+    not this pipeline). The CLI ``--no-auto-compact`` flag flips this.
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable the L2-L4 auto-compact pipeline. When false, the "
+            "engine skips proactive compaction; Phase 4's reactive "
+            "PTL retry remains as the last-resort safety net. "
+            "Override: ``OPENHARNESS_COMPACT__ENABLED`` env / "
+            "``--no-auto-compact`` CLI flag."
+        ),
+    )
+    threshold_ratio: float = Field(
+        default=0.83,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Fraction of the model's context window that triggers "
+            "auto-compact. Default 0.83 matches HKUDS upstream. "
+            "Lower values compact more aggressively (saves PTL risk, "
+            "costs more L4 LLM calls). Override: "
+            "``OPENHARNESS_COMPACT__THRESHOLD_RATIO`` / "
+            "``--compact-threshold`` CLI flag."
+        ),
+    )
+    full_compact_max_tokens: int = Field(
+        default=20_000,
+        ge=1,
+        description=(
+            "max_tokens for the L4 summarize LLM call. 20k matches "
+            "HKUDS — the 9-slot summary fits comfortably."
+        ),
+    )
+    full_compact_timeout_s: float = Field(
+        default=25.0,
+        gt=0.0,
+        description=(
+            "Timeout for the L4 summarize LLM call. Above this, the "
+            "summarize() asyncio.wait_for raises TimeoutError and L4 "
+            "returns un-compacted (engine reactive PTL still catches)."
+        ),
+    )
+
+
+class ExtractionSettings(BaseModel):
+    """Tunables for the Phase 11 memory-extraction secondary pass (D29.5).
+
+    Env-var overrides: ``OPENHARNESS_EXTRACTION__MODEL=qwen-turbo``
+    sets ``settings.extraction.model``. CLI ``--no-extract`` flips
+    ``enabled=False``.
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable the per-turn extraction secondary pass. When false, "
+            "the engine never invokes extract_memories_from_turn; agent "
+            "writes to the memory store via filesystem tools instead. "
+            "Override: ``OPENHARNESS_EXTRACTION__ENABLED`` env / "
+            "``--no-extract`` CLI flag."
+        ),
+    )
+    max_records_per_turn: int = Field(
+        default=3,
+        ge=0,
+        description=(
+            "Cap on memories proposed per turn. The LLM may suggest "
+            "more; only the first ``max_records_per_turn`` get written. "
+            "0 disables (same as ``enabled=False`` but keeps the LLM "
+            "call for observability)."
+        ),
+    )
+    model: str | None = Field(
+        default=None,
+        description=(
+            "Model for the extraction LLM call. ``None`` (default) uses "
+            "the same model as the main conversation. Set to a cheaper "
+            "variant (e.g., ``qwen-turbo``) to save cost. Phase 11 sub-"
+            "decision per boundary doc."
+        ),
+    )
+    timeout_s: float = Field(
+        default=30.0,
+        gt=0.0,
+        description=(
+            "Timeout for the extraction LLM call. Extraction is best-"
+            "effort — timeout returns ExtractionResult with error set; "
+            "the turn still completes."
+        ),
+    )
+
+
 class Settings(BaseSettings):
     """OpenHarness runtime configuration.
 
@@ -393,6 +494,27 @@ class Settings(BaseSettings):
             "``OPENHARNESS_MEMORY__MAX_FILES=10`` overrides "
             "``memory.max_files``. See :class:`MemorySettings` for the "
             "full set of per-field knobs."
+        ),
+    )
+
+    # P11-T5 (decisions/26 D29.8): Phase 11 compact + extraction
+    # nested settings. Use the same double-underscore env convention
+    # as `memory`. Phase 4's `tool_result_cap` + `auto_truncate` are
+    # L1 microcompact knobs (independent of these L2-L4 knobs).
+    compact: CompactSettings = Field(
+        default_factory=CompactSettings,
+        description=(
+            "Nested compact-pipeline tunables (D29.3 + D29.8). Env vars: "
+            "``OPENHARNESS_COMPACT__THRESHOLD_RATIO`` / "
+            "``OPENHARNESS_COMPACT__ENABLED`` etc. See :class:`CompactSettings`."
+        ),
+    )
+    extraction: ExtractionSettings = Field(
+        default_factory=ExtractionSettings,
+        description=(
+            "Nested extraction tunables (D29.5 + D29.8). Env vars: "
+            "``OPENHARNESS_EXTRACTION__ENABLED`` / "
+            "``OPENHARNESS_EXTRACTION__MODEL`` etc. See :class:`ExtractionSettings`."
         ),
     )
 

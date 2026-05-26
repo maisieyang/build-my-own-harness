@@ -65,3 +65,9 @@ def _clean_openharness_env(
     home_dir = tmp_path_factory.mktemp("isolation_home")
     monkeypatch.chdir(cwd_dir)
     monkeypatch.setenv("HOME", str(home_dir))
+    # P11-T5: extraction defaults ON in production (D29.5 + D29.8) but
+    # tests using a stub LLM client get spurious ``memory_extract_failed``
+    # warnings since the stub can't satisfy the JSON-output extraction
+    # prompt. Default OFF for tests; tests that exercise extraction
+    # explicitly set ``OPENHARNESS_EXTRACTION__ENABLED=true``.
+    monkeypatch.setenv("OPENHARNESS_EXTRACTION__ENABLED", "false")

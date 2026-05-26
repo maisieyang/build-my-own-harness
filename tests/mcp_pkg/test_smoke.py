@@ -100,6 +100,14 @@ class TestCliWithFilesystemServer:
     ) -> None:
         monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-fake-test")
         monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://fake.example.com/v1")
+        # P11-T5: this test stubs ``_build_client`` to capture the
+        # single main-conversation request. Extraction (default-ON
+        # since D29.5) would call the stub a SECOND time at turn end
+        # with ``tools_disabled=True``, overwriting ``last_request``
+        # with an empty tools list. ``integration`` marker bypasses
+        # the repo-root conftest's default extraction-off env var, so
+        # we set it explicitly here.
+        monkeypatch.setenv("OPENHARNESS_EXTRACTION__ENABLED", "false")
         monkeypatch.setenv(
             "OPENHARNESS_MCP_SERVERS",
             json.dumps(
