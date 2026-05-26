@@ -50,11 +50,13 @@ from openharness.memory.model import (
     parse_memory,
 )
 from openharness.memory.paths import get_project_memory_dir
+from openharness.memory.relevance import select_relevant_memories
 from openharness.memory.store import (
     EmptyMemoryStore,
     FilesystemMemoryStore,
     MemoryStore,
 )
+from openharness.memory.usage import mark_memory_used
 
 __all__ = [
     "EmptyMemoryStore",
@@ -67,5 +69,7 @@ __all__ = [
     "UnknownMemoryError",
     "compute_memory_signature",
     "get_project_memory_dir",
+    "mark_memory_used",
     "parse_memory",
+    "select_relevant_memories",
 ]
