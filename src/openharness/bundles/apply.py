@@ -109,7 +109,17 @@ def apply_bundle_to_context(
     new_hooks = _clone_hook_registry(hook_registry)
     for name in bundle.hook_names:
         event, hook_fn = resolve_hook(name, plugin_catalog=plugin_hook_catalog)
-        new_hooks.register(event, hook_fn)
+        # P11-T6 (D29.7): preserve plugin-declared re-run flag so
+        # PreApiCall hooks whose injected content must survive PTL
+        # retry rebuild get re-fired by the engine. Built-in hooks
+        # (BUILTIN_HOOKS) don't currently set this; only plugin
+        # ``HookSpec`` instances expose the field.
+        re_run = (
+            plugin_hook_catalog is not None
+            and name in plugin_hook_catalog
+            and plugin_hook_catalog[name].re_run_on_reactive_rebuild
+        )
+        new_hooks.register(event, hook_fn, re_run_on_reactive_rebuild=re_run)
 
     return BundleApplication(
         tool_registry=new_registry,
@@ -125,9 +135,21 @@ def _clone_hook_registry(base: HookRegistry) -> HookRegistry:
     Re-registration preserves order (registration order = execution
     order per P3-T4 D8.J). Bundle hooks appended via the caller will
     fire AFTER these base hooks for the same event.
+
+    P11-T6 (D29.7): preserves the ``re_run_on_reactive_rebuild`` flag
+    on PreApiCall hooks across the clone — otherwise bundle resolution
+    would silently drop the property mid-session.
     """
     cloned = HookRegistry()
+    # ``_reactive_rerun_hook_ids`` is keyed by ``id(hook)``; since we
+    # re-register the *same* callable objects (not copies), the IDs
+    # transfer 1:1.
+    reactive_rerun_ids = base._reactive_rerun_hook_ids
     for event in _ALL_HOOK_EVENTS:
         for hook in base.get(event):
-            cloned.register(event, hook)
+            cloned.register(
+                event,
+                hook,
+                re_run_on_reactive_rebuild=id(hook) in reactive_rerun_ids,
+            )
     return cloned

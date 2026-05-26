@@ -37,14 +37,34 @@ class HookRegistry:
         # defaultdict so register on a new event doesn't require seeding;
         # the executor will get an empty list for unseen events via get().
         self._hooks: dict[HookEvent, list[Hook]] = defaultdict(list)
+        # P11-T6 (D29.7): parallel set of PreApiCall hooks flagged to
+        # re-run after a reactive PTL rebuild. ``id()``-keyed so closures
+        # / bound methods that don't hash identically by value still
+        # match. Membership is checked from :func:`get_reactive_rerun`.
+        self._reactive_rerun_hook_ids: set[int] = set()
 
-    def register(self, event: HookEvent, hook: Hook) -> None:
+    def register(
+        self,
+        event: HookEvent,
+        hook: Hook,
+        *,
+        re_run_on_reactive_rebuild: bool = False,
+    ) -> None:
         """Append ``hook`` to the FIFO chain for ``event``.
 
         Multiple hooks for the same event run in registration order
         (Three-Axis J). To run a hook BEFORE another, register it first.
+
+        ``re_run_on_reactive_rebuild`` (P11-T6 D29.7): if True AND
+        ``event == "PreApiCall"``, the hook is re-fired after the
+        engine's reactive PTL retry rebuilds the request — so
+        injected content (memory, dynamic system prompt segments)
+        survives the rebuild. No-op for non-PreApiCall events; the
+        engine's reactive loop only re-runs PreApiCall hooks.
         """
         self._hooks[event].append(hook)
+        if re_run_on_reactive_rebuild and event == "PreApiCall":
+            self._reactive_rerun_hook_ids.add(id(hook))
 
     def get(self, event: HookEvent) -> list[Hook]:
         """Return the registered hooks for ``event`` in registration order.
@@ -54,6 +74,18 @@ class HookRegistry:
         during chain execution).
         """
         return list(self._hooks[event])
+
+    def get_reactive_rerun(self, event: HookEvent) -> list[Hook]:
+        """Return the subset of ``event`` hooks flagged for reactive
+        rebuild re-run (P11-T6 D29.7).
+
+        Always returns ``[]`` when ``event != "PreApiCall"`` — the
+        engine only invokes this for the PTL retry path. Preserves
+        registration order from the underlying ``_hooks[event]`` list.
+        """
+        if event != "PreApiCall" or not self._reactive_rerun_hook_ids:
+            return []
+        return [hook for hook in self._hooks[event] if id(hook) in self._reactive_rerun_hook_ids]
 
     def is_empty(self) -> bool:
         """True iff no hooks are registered for any event.

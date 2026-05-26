@@ -76,13 +76,24 @@ class HookSpec:
     Plugin authors construct via :func:`hook_spec` decorator;framework
     consumers (``discover_plugin_hooks``) read the fields. Frozen so
     a HookSpec can't be tampered with post-discovery.
+
+    P11-T6 (D29.7) adds ``re_run_on_reactive_rebuild`` for PreApiCall
+    hooks whose effect must survive the engine's PTL retry rebuild
+    (e.g. memory-injection hooks — without the re-run, the rebuilt
+    request loses the injected content). Default False keeps existing
+    hooks behaviour-identical.
     """
 
     event: HookEvent
     hook: Hook
+    re_run_on_reactive_rebuild: bool = False
 
 
-def hook_spec(event: HookEvent) -> Callable[[Hook], HookSpec]:
+def hook_spec(
+    event: HookEvent,
+    *,
+    re_run_on_reactive_rebuild: bool = False,
+) -> Callable[[Hook], HookSpec]:
     """Decorator wrapping a hook function in a :class:`HookSpec`.
 
     Plugin authors apply at the function definition site::
@@ -91,12 +102,24 @@ def hook_spec(event: HookEvent) -> Callable[[Hook], HookSpec]:
         async def my_audit(context):
             ...
 
+    For PreApiCall hooks whose injected content must survive a PTL
+    retry (Phase 4 reactive truncation), pass
+    ``re_run_on_reactive_rebuild=True``::
+
+        @hook_spec("PreApiCall", re_run_on_reactive_rebuild=True)
+        async def inject_memory(context):
+            ...
+
     The decorated name becomes the entry-point attribute target;
     discovery loads the wrapped :class:`HookSpec` and registers it.
     """
 
     def decorator(fn: Hook) -> HookSpec:
-        return HookSpec(event=event, hook=fn)
+        return HookSpec(
+            event=event,
+            hook=fn,
+            re_run_on_reactive_rebuild=re_run_on_reactive_rebuild,
+        )
 
     return decorator
 

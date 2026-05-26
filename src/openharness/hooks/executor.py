@@ -33,7 +33,7 @@ from openharness.hooks.result import HookResult
 from openharness.observability import get_logger
 
 if TYPE_CHECKING:
-    from openharness.hooks.context import HookContext
+    from openharness.hooks.context import Hook, HookContext
     from openharness.hooks.events import HookEvent
     from openharness.hooks.registry import HookRegistry
 
@@ -48,6 +48,8 @@ async def execute_hook_chain(
     registry: HookRegistry,
     event: HookEvent,
     ctx: HookContext,
+    *,
+    hook_subset: list[Hook] | None = None,
 ) -> HookResult | None:
     """Run all hooks registered for ``event``, returning the accumulated
     result(or ``None`` if all hooks passed through).
@@ -61,8 +63,15 @@ async def execute_hook_chain(
     - :class:`HookError`  — a hook itself raised an exception.
       Before raising, the executor fires OnError hooks one-level deep
       (avoiding infinite recursion).
+
+    ``hook_subset`` (P11-T6 D29.7): when provided, only the supplied
+    hooks run instead of the full ``registry.get(event)`` chain. Used
+    by the engine's reactive PTL re-run path to fire only PreApiCall
+    hooks flagged with ``re_run_on_reactive_rebuild``. The subset is
+    treated AS IF it were the full chain — OnError dispatch, deny /
+    modify accumulation rules all apply identically.
     """
-    hooks = registry.get(event)
+    hooks = hook_subset if hook_subset is not None else registry.get(event)
     if not hooks:
         return None  # zero overhead when no hooks registered
 

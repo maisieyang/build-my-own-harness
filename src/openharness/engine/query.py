@@ -300,6 +300,36 @@ async def run_query(
                             messages=messages,
                             tools=context.tool_registry.to_api_schema() or None,
                         )
+                        # P11-T6 (D29.7): re-fire PreApiCall hooks flagged
+                        # ``re_run_on_reactive_rebuild=True``. Closes
+                        # Phase 4 retro §6 — memory-injection hooks (and
+                        # any other PreApiCall hook whose effect must
+                        # survive the rebuild) opt in via the flag and
+                        # see the freshly-truncated request. Hooks not
+                        # flagged are NOT re-run (default behaviour
+                        # preserved). PostToolUse / PreToolUse never
+                        # re-run here — the only event that gets a
+                        # second-chance after PTL is PreApiCall.
+                        rerun_hooks = context.hook_registry.get_reactive_rerun("PreApiCall")
+                        if rerun_hooks:
+                            rerun_result = await execute_hook_chain(
+                                context.hook_registry,
+                                "PreApiCall",
+                                PreApiCallContext(request=request, turn=_turn),
+                                hook_subset=rerun_hooks,
+                            )
+                            if rerun_result is not None:
+                                if rerun_result.decision == "deny":
+                                    raise LoopError(
+                                        f"PreApiCall hook denied rebuilt turn "
+                                        f"{_turn}: {rerun_result.message or 'unspecified'}"
+                                    ) from ptl_exc
+                                if (
+                                    rerun_result.decision == "modify"
+                                    and rerun_result.new_request is not None
+                                    and isinstance(rerun_result.new_request, ApiMessageRequest)
+                                ):
+                                    request = rerun_result.new_request
                     except OpenHarnessApiError as exc:
                         await execute_hook_chain(
                             context.hook_registry,
