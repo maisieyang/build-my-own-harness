@@ -65,6 +65,7 @@ from openharness.protocols import (
     ToolExecutionStartedEvent,
     ToolResultBlock,
 )
+from openharness.services.compact import auto_compact_if_needed
 from openharness.tools.base import ToolExecutionContext, ToolResult
 
 if TYPE_CHECKING:
@@ -152,6 +153,33 @@ async def run_query(
                     model=context.model,
                     max_tokens=context.max_tokens,
                 )
+
+                # P11-T3.3f (D29.3): proactive compact escalation. Runs
+                # BEFORE PreApiCall hooks so hooks see compact-modified
+                # messages (memory-injection hooks etc. operate on the
+                # already-condensed view). L1-L3 are deterministic +
+                # token-cheap; L4 is the only LLM call and only fires
+                # when L1-L3 don't free enough. Reactive PTL retry below
+                # remains the last-resort safety net.
+                if context.compact_enabled:
+                    messages, compact_result = await auto_compact_if_needed(
+                        messages,
+                        model=context.model,
+                        api_client=context.api_client,
+                        session_memory_path=context.session_memory_path,
+                        enabled=True,
+                        threshold_ratio=context.compact_threshold_ratio,
+                        full_compact_max_tokens=context.compact_full_max_tokens,
+                        full_compact_timeout_s=context.compact_full_timeout_s,
+                    )
+                    if compact_result.compact_kind != "none":
+                        logger.info(
+                            "auto_compact",
+                            kind=compact_result.compact_kind,
+                            applied_levels=list(compact_result.applied_levels),
+                            original_tokens=compact_result.original_tokens,
+                            final_tokens=compact_result.final_tokens,
+                        )
 
                 request = ApiMessageRequest(
                     model=context.model,

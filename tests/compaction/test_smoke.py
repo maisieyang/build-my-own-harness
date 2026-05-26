@@ -48,7 +48,14 @@ if TYPE_CHECKING:
     from openharness.protocols.stream_events import ApiStreamEvent
 
 
-_BIG_OUTPUT = "x" * 80_000  # ~20k tokens — far over the 10k default cap
+# ~50k chars → ~12.5k tokens with byte-ratio fallback → ~16k after
+# Phase 11's 4/3 padding. Sized to:
+# - Still trigger Phase 4's L1 truncation (default cap_tokens=10_000)
+# - Stay UNDER Phase 11's L0 threshold (qwen-plus 32k * 0.83 = 26.5k)
+#   so the new L2 context-collapse doesn't fire and contaminate L1
+#   contract tests. T5 will add --no-auto-compact for the right way
+#   to opt out of L2-L4.
+_BIG_OUTPUT = "x" * 50_000
 
 
 class _BigInput(BaseModel):

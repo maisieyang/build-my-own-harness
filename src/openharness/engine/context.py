@@ -87,3 +87,21 @@ class QueryContext:
     # ``--sandbox`` CLI flag. Sub-agent inherits this field via
     # ``dataclasses.replace`` automatically.
     execution_env: ExecutionEnvironment = field(default_factory=lambda: _HOST_EXECUTION)
+    # P11-T3.3f (decisions/26 D29.3): proactive auto-compact knobs.
+    # Engine calls ``auto_compact_if_needed`` BEFORE each LLM request
+    # (in front of PreApiCall hooks) when ``compact_enabled=True``.
+    # All defaults match the boundary doc D29.8 — pre-Phase-11 callers
+    # using the no-kwarg constructor get the same auto-compact
+    # threshold (~26.5k tokens for qwen-plus) without explicit opt-in.
+    # The full-compact L4 LLM call only fires when L1-L3 don't free
+    # enough; existing reactive PTL retry in the loop remains the
+    # final safety net.
+    compact_enabled: bool = True
+    compact_threshold_ratio: float = 0.83
+    compact_full_max_tokens: int = 20_000
+    compact_full_timeout_s: float = 25.0
+    # When set, compact L3 reads this 5-slot checkpoint file (written
+    # by ``services.session_memory.update_session_memory_file``) to
+    # skip the L4 LLM call entirely. ``None`` (default) skips L3 — L0
+    # / L2 / L4 still run.
+    session_memory_path: Path | None = None
