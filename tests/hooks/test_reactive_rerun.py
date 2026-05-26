@@ -273,6 +273,95 @@ class TestExecuteHookChainSubset:
         assert fired == ["b"]
 
 
+class TestReactiveRerunHookSemantics:
+    """Verify the engine's reactive PTL rerun honors deny / modify
+    semantics from the flagged subset."""
+
+    @pytest.mark.asyncio
+    async def test_rerun_deny_raises_loop_error(self) -> None:
+        from openharness.errors import LoopError
+        from openharness.hooks.result import HookResult as Result
+
+        # Allow on first call (original chain), deny on second (rerun
+        # after PTL rebuild). Without this split, the deny would fire
+        # in the original chain and the rebuild code path never runs.
+        call_count = {"n": 0}
+
+        async def deny_on_rerun(_ctx: PreApiCallContext) -> Result | None:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return None
+            return Result.deny("rerun policy violation")
+
+        registry = HookRegistry()
+        registry.register("PreApiCall", deny_on_rerun, re_run_on_reactive_rebuild=True)
+        stub = _PtlOnceThenEnd()
+        ctx = _ctx(stub, registry)
+
+        with pytest.raises(LoopError, match="denied rebuilt turn"):
+            async for _ev in run_query(_messages_with_pair(), ctx):
+                pass
+
+    @pytest.mark.asyncio
+    async def test_rerun_modify_replaces_request(self) -> None:
+        # Flagged hook on rerun modifies the request — engine should
+        # use the modified request when streaming the second attempt.
+        from openharness.hooks.result import HookResult as Result
+        from openharness.protocols import ApiMessageRequest
+
+        modified_seen: list[bool] = []
+
+        async def modifier(ctx: PreApiCallContext) -> Result | None:
+            # Detect the rerun by checking that messages have shrunk
+            # (engine truncated before re-firing us).
+            if len(ctx.request.messages) < 3:
+                marker = ApiMessageRequest(
+                    model=ctx.request.model,
+                    max_tokens=ctx.request.max_tokens,
+                    system="REWRITTEN",
+                    messages=ctx.request.messages,
+                    tools=ctx.request.tools,
+                )
+                return Result.modify_request(marker)
+            return None
+
+        # Stub captures the second-call request to confirm the modify
+        # actually swung through to the API.
+        class _PtlThenRecord:
+            def __init__(self) -> None:
+                self.calls = 0
+                self.last_system: str | None = None
+
+            async def stream_message(
+                self,
+                request: ApiMessageRequest,
+            ) -> AsyncIterator[ApiStreamEvent]:
+                self.calls += 1
+                self.last_system = request.system
+                if self.calls == 1:
+                    if False:  # pragma: no cover
+                        yield  # type: ignore[unreachable]
+                    raise PromptTooLongFailure("ctx_exceeded", status_code=400)
+                yield ApiMessageCompleteEvent.model_validate(
+                    {
+                        "message": {"role": "assistant", "content": []},
+                        "usage": {"input_tokens": 1, "output_tokens": 1},
+                        "stop_reason": "end_turn",
+                    }
+                )
+
+        registry = HookRegistry()
+        registry.register("PreApiCall", modifier, re_run_on_reactive_rebuild=True)
+        stub = _PtlThenRecord()
+        ctx = _ctx(stub, registry)
+
+        async for _ev in run_query(_messages_with_pair(), ctx):
+            pass
+
+        modified_seen.append(stub.last_system == "REWRITTEN")
+        assert modified_seen == [True]
+
+
 class TestHookRegistryRerunInitialState:
     def test_fresh_registry_has_empty_rerun_set(self) -> None:
         registry = HookRegistry()

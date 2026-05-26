@@ -253,3 +253,51 @@ class TestUpdateAndRead:
         assert content is not None
         assert "test goal" in content
         assert "## Current State" in content
+
+
+class TestCapTruncationCascade:
+    """P11-T7 coverage backfill — exercises stages 2 + 3 of the
+    cap-truncation cascade (after Recent Conversation drains, Active
+    Artifacts shrink; if still over cap, hard-truncate)."""
+
+    def test_conversation_pop_path(self) -> None:
+        # Many huge conversation messages — popping should reduce
+        # below cap before draining entirely.
+        from openharness.protocols import (
+            ConversationMessage as CM,
+        )
+        from openharness.protocols import (
+            TextBlock as TB,
+        )
+        from openharness.services.session_memory import _render_5_slot
+
+        huge_msgs = [CM(role="user", content=[TB(text="x" * 1500)]) for _ in range(15)]
+        rendered = _render_5_slot({}, huge_msgs)
+        assert len(rendered) <= 12_000
+
+    def test_artifact_pop_path(self) -> None:
+        # Provide artifact lines so long that even after last-N cap
+        # the rendered output blows past 12k → cascade must drop
+        # artifacts to fit.
+        from openharness.services.session_memory import _render_5_slot
+
+        huge_files = [f"src/file_{i}.py - " + ("x" * 1500) for i in range(10)]
+        rendered = _render_5_slot(
+            {"recent_files": huge_files},
+            [],
+        )
+        assert len(rendered) <= 12_000
+
+    def test_hard_truncate_path(self) -> None:
+        # Third stage: task_focus_state.goal is so huge that even
+        # after dropping all artifacts + conversation, base sections
+        # alone overflow → hard truncate kicks in.
+        from openharness.services.session_memory import _render_5_slot
+
+        huge_goal = "x" * 20_000
+        rendered = _render_5_slot(
+            {"task_focus_state": {"goal": huge_goal}},
+            [],
+        )
+        assert len(rendered) <= 12_000
+        assert "truncated to fit cap" in rendered

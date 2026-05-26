@@ -480,3 +480,196 @@ class TestExtractionPromptIntegrity:
 
     def test_prompt_includes_no_secrets_guidance(self) -> None:
         assert "Secrets" in EXTRACTION_SYSTEM_PROMPT or "secrets" in EXTRACTION_SYSTEM_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# 5. Per-field validation branches (P11-T7 coverage backfill)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractInvalidRecordBranches:
+    """Each invalid-record reason path exercised individually so the
+    ``_build_memory_from_record`` validation branches stay covered as
+    the schema evolves."""
+
+    @pytest.mark.asyncio
+    async def test_record_not_dict(self, tmp_path: Path) -> None:
+        store = FilesystemMemoryStore(project_dir=tmp_path)
+        client = _JsonResponseStub({"memories": ["not a dict"]})
+        result = await extract_memories_from_turn(
+            cwd=tmp_path,
+            api_client=client,
+            model="qwen-plus",
+            messages=[_user("u"), _assistant("a")],
+            memory_store=store,
+        )
+        assert result.written == ()
+        assert result.error is None
+
+    @pytest.mark.asyncio
+    async def test_record_invalid_scope(self, tmp_path: Path) -> None:
+        store = FilesystemMemoryStore(project_dir=tmp_path)
+        client = _JsonResponseStub(
+            {
+                "memories": [
+                    {
+                        "type": "project",
+                        "scope": "bogus_scope",
+                        "name": "x",
+                        "description": "d",
+                        "body": "b",
+                    }
+                ]
+            }
+        )
+        result = await extract_memories_from_turn(
+            cwd=tmp_path,
+            api_client=client,
+            model="qwen-plus",
+            messages=[_user("u"), _assistant("a")],
+            memory_store=store,
+        )
+        assert result.written == ()
+
+    @pytest.mark.asyncio
+    async def test_record_missing_name(self, tmp_path: Path) -> None:
+        store = FilesystemMemoryStore(project_dir=tmp_path)
+        client = _JsonResponseStub(
+            {
+                "memories": [
+                    {
+                        "type": "project",
+                        "scope": "private",
+                        "description": "d",
+                        "body": "b",
+                    }
+                ]
+            }
+        )
+        result = await extract_memories_from_turn(
+            cwd=tmp_path,
+            api_client=client,
+            model="qwen-plus",
+            messages=[_user("u"), _assistant("a")],
+            memory_store=store,
+        )
+        assert result.written == ()
+
+    @pytest.mark.asyncio
+    async def test_record_missing_description(self, tmp_path: Path) -> None:
+        store = FilesystemMemoryStore(project_dir=tmp_path)
+        client = _JsonResponseStub(
+            {
+                "memories": [
+                    {
+                        "type": "project",
+                        "scope": "private",
+                        "name": "x",
+                        "body": "b",
+                    }
+                ]
+            }
+        )
+        result = await extract_memories_from_turn(
+            cwd=tmp_path,
+            api_client=client,
+            model="qwen-plus",
+            messages=[_user("u"), _assistant("a")],
+            memory_store=store,
+        )
+        assert result.written == ()
+
+    @pytest.mark.asyncio
+    async def test_record_missing_body(self, tmp_path: Path) -> None:
+        store = FilesystemMemoryStore(project_dir=tmp_path)
+        client = _JsonResponseStub(
+            {
+                "memories": [
+                    {
+                        "type": "project",
+                        "scope": "private",
+                        "name": "x",
+                        "description": "d",
+                    }
+                ]
+            }
+        )
+        result = await extract_memories_from_turn(
+            cwd=tmp_path,
+            api_client=client,
+            model="qwen-plus",
+            messages=[_user("u"), _assistant("a")],
+            memory_store=store,
+        )
+        assert result.written == ()
+
+    @pytest.mark.asyncio
+    async def test_record_name_fails_post_init_regex(self, tmp_path: Path) -> None:
+        # Memory name regex is restrictive (e.g. "name with spaces" fails)
+        store = FilesystemMemoryStore(project_dir=tmp_path)
+        client = _JsonResponseStub(
+            {
+                "memories": [
+                    {
+                        "type": "project",
+                        "scope": "private",
+                        "name": "Has Spaces And Capitals",
+                        "description": "d",
+                        "body": "b",
+                    }
+                ]
+            }
+        )
+        result = await extract_memories_from_turn(
+            cwd=tmp_path,
+            api_client=client,
+            model="qwen-plus",
+            messages=[_user("u"), _assistant("a")],
+            memory_store=store,
+        )
+        assert result.written == ()
+
+    @pytest.mark.asyncio
+    async def test_memories_not_a_list(self, tmp_path: Path) -> None:
+        store = FilesystemMemoryStore(project_dir=tmp_path)
+        client = _JsonResponseStub({"memories": "should be list"})
+        result = await extract_memories_from_turn(
+            cwd=tmp_path,
+            api_client=client,
+            model="qwen-plus",
+            messages=[_user("u"), _assistant("a")],
+            memory_store=store,
+        )
+        assert result.error is not None
+        assert "memories not a list" in result.error
+
+    @pytest.mark.asyncio
+    async def test_render_handles_tool_use_and_result_blocks(self, tmp_path: Path) -> None:
+        # Exercises the tool_use / tool_result branches inside
+        # _render_messages_for_extraction.
+        from openharness.protocols.content import ToolResultBlock
+
+        store = FilesystemMemoryStore(project_dir=tmp_path)
+        client = _JsonResponseStub({"memories": []})
+        messages = [
+            _user("hi"),
+            ConversationMessage(
+                role="assistant",
+                content=[ToolUseBlock(id="t1", name="Read", input={"path": "/x"})],
+            ),
+            ConversationMessage(
+                role="user",
+                content=[ToolResultBlock(tool_use_id="t1", content="ok content " * 100)],
+            ),
+        ]
+        result = await extract_memories_from_turn(
+            cwd=tmp_path,
+            api_client=client,
+            model="qwen-plus",
+            messages=messages,
+            memory_store=store,
+        )
+        # Did not crash; memories list empty so no writes
+        assert result.written == ()
+        # The prompt sent included tool_use / tool_result rendering
+        assert client.last_request is not None
