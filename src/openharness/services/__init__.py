@@ -37,6 +37,16 @@ Public API (so far):
 
 from __future__ import annotations
 
+from openharness.services.compact import (
+    CompactResult,
+    auto_compact_if_needed,
+    estimate_message_tokens,
+    full_compact,
+    get_context_window,
+    threshold_tokens,
+    try_context_collapse,
+    try_session_memory_compaction,
+)
 from openharness.services.session_memory import (
     get_session_memory_dir,
     read_session_memory,
@@ -45,8 +55,16 @@ from openharness.services.session_memory import (
 from openharness.services.summarize import summarize
 
 __all__ = [
+    "CompactResult",
+    "auto_compact_if_needed",
+    "estimate_message_tokens",
+    "full_compact",
+    "get_context_window",
     "get_session_memory_dir",
     "read_session_memory",
     "summarize",
+    "threshold_tokens",
+    "try_context_collapse",
+    "try_session_memory_compaction",
     "update_session_memory_file",
 ]
