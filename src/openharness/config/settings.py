@@ -28,12 +28,70 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from pydantic import Field, field_validator
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from openharness.mcp import McpServerConfig
 from openharness.observability.logging import LogFormat, LogLevel
 from openharness.permissions import PermissionMode
+
+# ---------------------------------------------------------------------------
+# Nested sub-models — P10-T4.4e (D28.10)
+# ---------------------------------------------------------------------------
+
+
+class MemorySettings(BaseModel):
+    """Tunables for the memory subsystem's read path.
+
+    Lives as a nested sub-model on :class:`Settings`. Env-var overrides
+    use the double-underscore convention from ``env_nested_delimiter``:
+    ``OPENHARNESS_MEMORY__MAX_FILES=10`` sets ``settings.memory.max_files``.
+
+    All caps are tuned for the Phase 10 "expected memory count <100
+    per project" assumption. A project crossing that scale should
+    increase ``max_files`` (more bodies injected per turn) and possibly
+    lower ``max_body_chars`` (cap individual body verbosity to keep
+    the total token budget reasonable).
+    """
+
+    max_files: int = Field(
+        default=5,
+        ge=0,
+        description=(
+            "Top-N cap for ``select_relevant_memories`` — at most this "
+            "many memory bodies injected into the ``## Relevant Memories`` "
+            "section per turn. ``0`` disables the section entirely."
+        ),
+    )
+    max_entrypoint_bytes: int = Field(
+        default=8_000,
+        ge=0,
+        description=(
+            "Byte cap for the MEMORY.md entrypoint injected into the "
+            "``## Memory`` section. Larger files are not loaded at all "
+            "(Phase 10 doesn't truncate the index — the file is meant "
+            "to be a small TOC by convention)."
+        ),
+    )
+    max_body_chars: int = Field(
+        default=8_000,
+        ge=0,
+        description=(
+            "Per-memory body truncation cap for the ``## Relevant "
+            "Memories`` section. Bodies above this cap get a "
+            "``\\n...[truncated]...\\n`` marker. Matches HKUDS upstream."
+        ),
+    )
+    max_claude_md_chars: int = Field(
+        default=12_000,
+        ge=0,
+        description=(
+            "Per-CLAUDE.md-file char cap for the cascade load. Files "
+            "above this size are truncated with a marker — caps the "
+            "worst case where a user writes a 100k-char CLAUDE.md that "
+            "would otherwise blow the prompt budget."
+        ),
+    )
 
 
 class Settings(BaseSettings):
@@ -52,6 +110,12 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        # P10-T4.4e: enables nested-model env-var overrides like
+        # ``OPENHARNESS_MEMORY__MAX_FILES=10`` setting
+        # ``settings.memory.max_files``. The ``__`` delimiter is the
+        # pydantic-settings convention; ``_`` would collide with field
+        # names that contain underscores (``max_files``).
+        env_nested_delimiter="__",
     )
 
     api_key: str = Field(
@@ -279,6 +343,56 @@ class Settings(BaseSettings):
             "OPENHARNESS_ENABLE_PLUGIN_HOOKS. Overridden by the "
             "``--enable-plugin-hooks`` / ``--no-enable-plugin-hooks`` "
             "CLI flag."
+        ),
+    )
+
+    # P9-T3 (decisions/24 D27.4): plugin discovery is opt-in. Same
+    # safety pattern as ``enable_plugin_hooks`` — plugins ship
+    # arbitrary Python code (hook modules), so default off + explicit
+    # consent. When ON, ``cli._run_ask`` / ``_run_chat`` constructs a
+    # PluginLoader, discovers ``~/.openharness/plugins/<name>/manifest.yaml``,
+    # fans out the 5 component types via LayeredStore wrappers + hook
+    # catalog merge + mcp_servers append.
+    enable_plugins: bool = Field(
+        default=False,
+        description=(
+            "Enable discovery + loading of plugins from "
+            "``~/.openharness/plugins/<name>/manifest.yaml`` (P9 / "
+            "decisions/24). When false (default), ``oh plugins list`` "
+            "still works (read-only introspection) but plugin "
+            "components are NOT registered into the running registry. "
+            "Env var: OPENHARNESS_ENABLE_PLUGINS. Overridden by the "
+            "``--enable-plugins`` / ``--no-enable-plugins`` CLI flag."
+        ),
+    )
+
+    # P10-T4.4e (decisions/25 D28.10): memory subsystem opt-OUT.
+    # **Deviation from plugins' opt-in pattern**: memory is read-only +
+    # side-effect-free in Phase 10 (the only write is ``use_count++`` to
+    # a private user-dir file). No code-execution risk. Default ON so
+    # the harness "knows the project" out of the box; opting out is for
+    # users who explicitly want a stateless harness.
+    enable_memory: bool = Field(
+        default=True,
+        description=(
+            "Enable the memory subsystem (Phase 10, D28.10). When true "
+            "(default), the CLI assembles a :class:`FilesystemMemoryStore` "
+            "at ``~/.openharness/memory/<basename>-<sha1(cwd)>/``, loads "
+            "the CLAUDE.md cascade, and injects both into the system "
+            "prompt per turn. When false, neither section appears — "
+            "the prompt is byte-identical to the pre-Phase-10 layout. "
+            "Env var: OPENHARNESS_ENABLE_MEMORY. Overridden by the "
+            "``--enable-memory`` / ``--no-enable-memory`` CLI flag."
+        ),
+    )
+    memory: MemorySettings = Field(
+        default_factory=MemorySettings,
+        description=(
+            "Nested memory subsystem tunables (D28.10). Env vars use the "
+            "double-underscore convention: "
+            "``OPENHARNESS_MEMORY__MAX_FILES=10`` overrides "
+            "``memory.max_files``. See :class:`MemorySettings` for the "
+            "full set of per-field knobs."
         ),
     )
 

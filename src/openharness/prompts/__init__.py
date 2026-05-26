@@ -25,6 +25,15 @@ verified by :mod:`tests.prompts.test_byte_identical`.
 
 from __future__ import annotations
 
+from openharness.prompts.claudemd import (
+    discover_claude_md_files,
+    load_claude_md_prompt,
+)
+from openharness.prompts.memory_inject import (
+    MemoryManifest,
+    format_memory_index_section,
+    format_relevant_memories_section,
+)
 from openharness.prompts.system import (
     EnvironmentInfo,
     build_system_prompt,
@@ -33,6 +42,11 @@ from openharness.prompts.system import (
 
 __all__ = [
     "EnvironmentInfo",
+    "MemoryManifest",
     "build_system_prompt",
     "detect_environment",
+    "discover_claude_md_files",
+    "format_memory_index_section",
+    "format_relevant_memories_section",
+    "load_claude_md_prompt",
 ]

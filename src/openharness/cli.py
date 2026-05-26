@@ -74,6 +74,7 @@ from openharness.commands import (
     UnknownCommandError,
     resolve_command_invocation,
 )
+from openharness.commands.model import Command  # noqa: TC001 — runtime use in LayeredStore generic
 from openharness.compaction import TruncateToolResultHook
 from openharness.config import Settings
 from openharness.engine import QueryContext, run_query
@@ -82,20 +83,44 @@ from openharness.execution import ExecutionEnvironment, SandboxExecution
 from openharness.execution.host import _HOST_EXECUTION
 from openharness.hooks import HookRegistry
 from openharness.mcp import McpClientPool
+from openharness.memory import (
+    FilesystemMemoryStore,
+    MemoryStore,
+    get_project_memory_dir,
+    mark_memory_used,
+    select_relevant_memories,
+)
 from openharness.observability import configure_logging
 
 # Typer reflects ``Literal[...]`` types at RUNTIME to build Click Choice
 # constraints — moving these into ``TYPE_CHECKING`` would break ``--log-level
 # TRACE``-rejection and the corresponding test.
-from openharness.observability.logging import LogFormat, LogLevel  # noqa: TC001
+from openharness.observability.logging import (
+    LogFormat,
+    LogLevel,
+    get_logger,
+)
 from openharness.permissions import PermissionMode, TierBasedPermissionChecker
-from openharness.prompts import build_system_prompt, detect_environment
+from openharness.plugins import (
+    LayeredStore,
+    LoadedPluginCatalogs,
+    PluginLoader,
+)
+from openharness.prompts import (
+    MemoryManifest,
+    build_system_prompt,
+    detect_environment,
+    load_claude_md_prompt,
+)
 from openharness.protocols import (
     ConversationMessage,
     TextBlock,
 )
 from openharness.skills.store import EmptySkillStore, FilesystemSkillStore, SkillStore
 from openharness.tools import LoadSkillTool, create_default_tool_registry
+
+if TYPE_CHECKING:
+    from openharness.config.settings import MemorySettings
 
 # Phase 1 default. Lifted into a CLI flag (``--max-tokens``) so users can
 # tune for short prompts or longer essays without editing code; kept
@@ -146,9 +171,115 @@ def _build_client(settings: Settings) -> OpenAICompatibleApiClient:
     return OpenAICompatibleApiClient(sdk=sdk)
 
 
+def _load_plugin_catalogs(
+    enable_plugins: bool,
+    plugins_dir: Path | None = None,
+) -> LoadedPluginCatalogs:
+    """Discover + fan-out plugins under ``~/.openharness/plugins/`` (P9-T3).
+
+    Returns empty :class:`LoadedPluginCatalogs` when ``enable_plugins``
+    is False (default safety — plugins ship arbitrary Python via hook
+    modules, must be explicitly opted in per decisions/24 D27.4).
+
+    When True, instantiates a :class:`PluginLoader`, discovers manifest
+    files, and fans out into namespaced component catalogs ready to be
+    wrapped via :class:`LayeredStore` (commands/skills/bundles), merged
+    into ``plugin_hook_catalog`` (hooks), or appended to the MCP server
+    list (mcp_servers).
+
+    Emits the ``plugins_loaded`` observability event for trace-stitching.
+    """
+    if not enable_plugins:
+        return LoadedPluginCatalogs()
+    target_dir = (
+        plugins_dir if plugins_dir is not None else (Path.home() / ".openharness" / "plugins")
+    )
+    loader = PluginLoader(target_dir)
+    manifests = loader.discover()
+    catalogs = loader.fan_out(manifests)
+    logger = get_logger("plugins")
+    logger.info(
+        "plugins_loaded",
+        count=len(manifests),
+        names=sorted(manifests.keys()),
+        plugins_dir=str(target_dir),
+    )
+    return catalogs
+
+
 # --------------------------------------------------------------------------- #
 # Core async entry point                                                      #
 # --------------------------------------------------------------------------- #
+
+
+def _build_memory_manifest_for_query(
+    *,
+    memory_store: MemoryStore,
+    memory_dir: Path,
+    query: str,
+    memory_settings: MemorySettings,
+) -> MemoryManifest:
+    """Compute the :class:`MemoryManifest` to inject for ``query`` — P10-T4.4f.
+
+    Three steps:
+
+    1. ``select_relevant_memories(query, ...)`` — score + filter the
+       discovered memories against query tokens; keep top-N per
+       ``memory_settings.max_files``.
+    2. ``mark_memory_used(m)`` on each picked memory — atomic
+       frontmatter rewrite that increments ``use_count`` and stamps
+       ``last_used_at``. Closes the loop Phase 13's stale-memory GC
+       needs.
+    3. ``_load_memory_entrypoint(memory_dir, max_bytes=...)`` — read
+       the optional ``MEMORY.md`` index file if it exists and fits
+       under the byte cap.
+
+    Returns a :class:`MemoryManifest` ready to flow through
+    :func:`build_system_prompt`'s ``memory_manifest`` kwarg.
+    Empty manifest (no relevant memories AND no MEMORY.md) is fine —
+    the formatters return ``None`` per section and ``build_system_prompt``
+    omits both.
+    """
+    memories = memory_store.discover().values()
+    relevant = select_relevant_memories(
+        query,
+        memories,
+        max_results=memory_settings.max_files,
+    )
+    for memory in relevant:
+        # Writes to disk — atomic via tempfile + os.replace. Failure
+        # logs ``memory_usage_update_failed`` and is non-blocking.
+        mark_memory_used(memory)
+    entrypoint = _load_memory_entrypoint(memory_dir, max_bytes=memory_settings.max_entrypoint_bytes)
+    return MemoryManifest(
+        entrypoint_content=entrypoint,
+        relevant=tuple(relevant),
+    )
+
+
+def _load_memory_entrypoint(memory_dir: Path, *, max_bytes: int) -> str | None:
+    """Read ``MEMORY.md`` from ``memory_dir`` if it exists + fits under cap.
+
+    Phase 10 (D28.6) doesn't truncate the index — by convention MEMORY.md
+    is a small TOC. Files exceeding ``max_bytes`` are skipped entirely
+    (returns ``None`` so ``## Memory`` section is omitted) rather than
+    truncated with a marker, because a half-cut index is less useful
+    than no index at all (the LLM can't navigate it).
+
+    Returns ``None`` on: file doesn't exist, oversize, permission
+    denied, or decode error. No log on the "doesn't exist" common
+    case — projects without MEMORY.md are the normal Phase 10 state.
+    """
+    entrypoint_path = memory_dir / "MEMORY.md"
+    if not entrypoint_path.exists():
+        return None
+    try:
+        content = entrypoint_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    if len(content.encode("utf-8")) > max_bytes:
+        return None
+    return content
 
 
 async def _run_ask(
@@ -170,6 +301,8 @@ async def _run_ask(
     sandbox_cpus_override: float | None = None,
     sandbox_runtime_override: str | None = None,
     enable_plugin_hooks_override: bool | None = None,
+    enable_plugins_override: bool | None = None,
+    enable_memory_override: bool | None = None,
 ) -> None:
     """Build the QueryContext, run the loop, render the events.
 
@@ -211,10 +344,33 @@ async def _run_ask(
         if enable_plugin_hooks_override is not None
         else settings.enable_plugin_hooks
     )
+    # P9-T3 (decisions/24 D27.4): plugin discovery is opt-in. CLI flag
+    # overrides Settings. When OFF, plugin components are not loaded
+    # into the running registry — but ``oh plugins list`` (T4) still
+    # works for read-only introspection.
+    enable_plugins = (
+        enable_plugins_override if enable_plugins_override is not None else settings.enable_plugins
+    )
+    # P10-T4.4f (decisions/25 D28.10): memory subsystem opt-OUT. CLI
+    # flag overrides Settings. When OFF, no FilesystemMemoryStore is
+    # constructed, no CLAUDE.md cascade is loaded, system prompt is
+    # byte-identical to pre-Phase-10 layout. Default ON because memory
+    # is read-only + side-effect-free (only side effect is use_count++
+    # in a private user-dir file).
+    enable_memory = (
+        enable_memory_override if enable_memory_override is not None else settings.enable_memory
+    )
 
     # P3-T5.5e:configure logging FIRST so any subsequent error path
     # (client build / system prompt build) is observable.
     configure_logging(level=log_level, format=log_format)
+
+    # P9-T3: Discover + fan out plugin catalogs BEFORE any of the 5
+    # extension subsystems are constructed, so each store can be wrapped
+    # with :class:`LayeredStore` immediately. Empty catalogs returned
+    # when ``enable_plugins`` is False — LayeredStore over empty dict
+    # is functionally identical to the base store.
+    plugin_catalogs = _load_plugin_catalogs(enable_plugins)
 
     # P5b-T3: Slash command expansion. Runs BEFORE the rest of bootstrap
     # so the resolved prompt flows through normally — engine never sees
@@ -236,11 +392,18 @@ async def _run_ask(
     # P5d-T4: ``resolve_command_invocation`` also surfaces the resolved
     # ``Command`` so we can read ``Command.mode`` for ModeBundle loading
     # (Phase 5d's first cross-layer composition tenant).
+    #
+    # P9-T3: wrap with :class:`LayeredStore` so plugin-namespaced
+    # commands (e.g., ``/my-plugin__deploy``) resolve via the same path.
     invoked_command = None
     if not no_commands:
-        command_store = FilesystemCommandStore(
+        base_command_store = FilesystemCommandStore(
             global_dir=Path.home() / ".openharness" / "commands",
             project_dir=Path.cwd() / ".openharness" / "commands",
+        )
+        command_store = LayeredStore(
+            base=base_command_store,
+            plugin_catalog=plugin_catalogs.commands,
         )
         prompt, invoked_command = resolve_command_invocation(prompt, command_store)
 
@@ -253,11 +416,18 @@ async def _run_ask(
     # call lives below, AFTER the base ToolRegistry + HookRegistry are
     # assembled, so the bundle composes against the fully-built
     # primitives (including MCP adapters + LoadSkill).
+    #
+    # P9-T3: bundle_store is also LayeredStore-wrapped so plugin bundles
+    # (``my-plugin__ops-mode``) resolve identically.
     bundle = None
     if invoked_command is not None and invoked_command.mode is not None:
-        bundle_store = FilesystemBundleStore(
+        base_bundle_store = FilesystemBundleStore(
             global_dir=Path.home() / ".openharness" / "bundles",
             project_dir=Path.cwd() / ".openharness" / "bundles",
+        )
+        bundle_store = LayeredStore(
+            base=base_bundle_store,
+            plugin_catalog=plugin_catalogs.bundles,
         )
         bundle = bundle_store.get(invoked_command.mode)
         if bundle is None:
@@ -292,6 +462,16 @@ async def _run_ask(
             # filesystem-discovered spec hasn't been "skipped", just
             # never registered because the entry-point version is
             # equivalent or preferred).
+    # P9-T3: Plugin-shipped hooks (declared in manifest's ``hooks:``
+    # field) merge into the same catalog under namespaced keys
+    # (``my-plugin__audit``). Plugin hooks live in plugin_catalogs.hooks
+    # only when enable_plugins is True (empty dict otherwise — no-op).
+    for ns_name, hook_spec in plugin_catalogs.hooks.items():
+        if ns_name not in plugin_hook_catalog:
+            plugin_hook_catalog[ns_name] = hook_spec
+        # else: collision between plugin-shipped hook and another
+        # discovery source — first-wins, like the entry-point /
+        # filesystem precedence above.
 
     client = _build_client(settings)
     registry = create_default_tool_registry()
@@ -300,8 +480,14 @@ async def _run_ask(
     # lives for the lifetime of the query — adapters' McpClient references
     # must stay valid through run_query. Empty config (no MCP servers) is
     # a no-op pool.
+    #
+    # P9-T3: append plugin-shipped MCP servers (already namespaced via
+    # ``<plugin>__<server>`` by PluginLoader.fan_out). User's
+    # ``trusted_mcp_servers`` whitelist still applies — to trust a
+    # plugin server, add the namespaced name explicitly.
+    combined_mcp_servers = settings.mcp_servers + plugin_catalogs.mcp_servers
     pool = McpClientPool(
-        settings.mcp_servers,
+        combined_mcp_servers,
         trusted_servers=settings.trusted_mcp_servers,
     )
     # P7b-T2: AsyncExitStack lets us conditionally enter SandboxExecution
@@ -317,14 +503,23 @@ async def _run_ask(
         # same name. ``--no-skills`` swaps in :class:`EmptySkillStore` for
         # testing / debug; default scans both layers.
         env = detect_environment()
-        skill_store: SkillStore
+        base_skill_store: SkillStore
         if no_skills:
-            skill_store = EmptySkillStore()
+            base_skill_store = EmptySkillStore()
         else:
-            skill_store = FilesystemSkillStore(
+            base_skill_store = FilesystemSkillStore(
                 global_dir=Path.home() / ".openharness" / "skills",
                 project_dir=env.cwd / ".openharness" / "skills",
             )
+        # P9-T3: LayeredStore-wrap so plugin-namespaced skills
+        # (``my-plugin__react-testing``) flow through the same
+        # ``LoadSkillTool`` lookup + ``build_system_prompt`` catalog
+        # injection. Plugin catalog empty → LayeredStore is a
+        # transparent passthrough.
+        skill_store: SkillStore = LayeredStore(
+            base=base_skill_store,
+            plugin_catalog=plugin_catalogs.skills,
+        )
         # Register LoadSkill iff at least one skill is discovered — keeps
         # the tool catalog clean when no skills are authored. Discovery
         # warms the store's cache,so subsequent ``build_system_prompt``
@@ -370,17 +565,49 @@ async def _run_ask(
             effective_hook_registry = application.hook_registry
             effective_settings = application.settings
 
+        # P10-T4.4f: memory subsystem assembly. When enabled, construct
+        # FilesystemMemoryStore + load CLAUDE.md cascade ONCE per
+        # ``oh ask`` invocation. The per-query memory manifest (relevance
+        # scoring + use_count tick) is computed below at prompt-build
+        # time so the user's actual ``prompt`` arg drives selection.
+        memory_dir: Path | None = None
+        memory_store: MemoryStore | None = None
+        claude_md_content: str | None = None
+        if enable_memory:
+            memory_dir = get_project_memory_dir(env.cwd)
+            memory_store = FilesystemMemoryStore(project_dir=memory_dir)
+            memory_store.discover()  # warm cache for relevance pass
+            claude_md_content = load_claude_md_prompt(
+                env.cwd,
+                max_chars_per_file=settings.memory.max_claude_md_chars,
+            )
+
         # System prompt is built AFTER MCP tools + LoadSkill register so
         # the LLM's tool catalog includes them. Skill catalog is injected
         # by ``build_system_prompt`` itself via the ``skill_store`` kwarg.
         # P5d-T4: bundle.system_prompt REPLACES base when set; otherwise
         # build against EFFECTIVE registry so the tool catalog reflects
-        # any whitelist filter.
+        # any whitelist filter. P10-T4.4f: when memory is enabled AND
+        # the bundle doesn't override, also inject ``claude_md_content``
+        # + a per-query ``MemoryManifest`` so the LLM sees project
+        # instructions + relevant memories alongside tools / env.
         if bundle is not None and bundle.system_prompt is not None:
             system_prompt = bundle.system_prompt
         else:
+            memory_manifest: MemoryManifest | None = None
+            if memory_store is not None and memory_dir is not None:
+                memory_manifest = _build_memory_manifest_for_query(
+                    memory_store=memory_store,
+                    memory_dir=memory_dir,
+                    query=prompt,
+                    memory_settings=settings.memory,
+                )
             system_prompt = build_system_prompt(
-                effective_registry.to_api_schema(), env, skill_store=skill_store
+                effective_registry.to_api_schema(),
+                env,
+                skill_store=skill_store,
+                claude_md_content=claude_md_content,
+                memory_manifest=memory_manifest,
             )
 
         # P7b-T2 (D18.2): conditionally enter SandboxExecution.
@@ -473,6 +700,8 @@ async def _run_chat(
     sandbox_cpus_override: float | None = None,
     sandbox_runtime_override: str | None = None,
     enable_plugin_hooks_override: bool | None = None,
+    enable_plugins_override: bool | None = None,
+    enable_memory_override: bool | None = None,
 ) -> None:
     """Multi-turn REPL driver — P6+-T2.
 
@@ -517,8 +746,25 @@ async def _run_chat(
         if enable_plugin_hooks_override is not None
         else settings.enable_plugin_hooks
     )
+    # P9-T3 (decisions/24 D27.4): plugin discovery is opt-in. Same
+    # shape as ``_run_ask``.
+    enable_plugins = (
+        enable_plugins_override if enable_plugins_override is not None else settings.enable_plugins
+    )
+    # P10-T4.4f: memory subsystem opt-OUT. Same shape as ``_run_ask``.
+    # When enabled, memory_manifest is rebuilt **per turn** with the
+    # current user_input as the relevance query — so multi-turn
+    # conversations get fresh memory selection each turn instead of
+    # only at session start.
+    enable_memory = (
+        enable_memory_override if enable_memory_override is not None else settings.enable_memory
+    )
 
     configure_logging(level=log_level, format=log_format)
+
+    # P9-T3: plugin catalogs discovered + faned out up front; passed
+    # through to each store wrapper + hook catalog + MCP pool.
+    plugin_catalogs = _load_plugin_catalogs(enable_plugins)
 
     plugin_hook_catalog: dict[str, HookSpec] = {}
     if enable_plugin_hooks:
@@ -530,11 +776,17 @@ async def _run_chat(
         for fs_name, fs_spec in fs_catalog.items():
             if fs_name not in plugin_hook_catalog:
                 plugin_hook_catalog[fs_name] = fs_spec
+    # P9-T3: merge plugin-shipped hooks (namespaced).
+    for ns_name, hook_spec in plugin_catalogs.hooks.items():
+        if ns_name not in plugin_hook_catalog:
+            plugin_hook_catalog[ns_name] = hook_spec
 
     client = _build_client(settings)
     registry = create_default_tool_registry()
+    # P9-T3: combine env-derived MCP servers with plugin-shipped (namespaced).
+    combined_mcp_servers = settings.mcp_servers + plugin_catalogs.mcp_servers
     pool = McpClientPool(
-        settings.mcp_servers,
+        combined_mcp_servers,
         trusted_servers=settings.trusted_mcp_servers,
     )
 
@@ -543,14 +795,19 @@ async def _run_chat(
             registry.register(adapter)
 
         env = detect_environment()
-        skill_store: SkillStore
+        base_skill_store: SkillStore
         if no_skills:
-            skill_store = EmptySkillStore()
+            base_skill_store = EmptySkillStore()
         else:
-            skill_store = FilesystemSkillStore(
+            base_skill_store = FilesystemSkillStore(
                 global_dir=Path.home() / ".openharness" / "skills",
                 project_dir=env.cwd / ".openharness" / "skills",
             )
+        # P9-T3: LayeredStore wrap — empty plugin catalog → transparent.
+        skill_store: SkillStore = LayeredStore(
+            base=base_skill_store,
+            plugin_catalog=plugin_catalogs.skills,
+        )
         if skill_store.discover():
             registry.register(LoadSkillTool(skill_store))
 
@@ -578,23 +835,57 @@ async def _run_chat(
             execution_env = _HOST_EXECUTION
 
         # ``command_store`` is reused per-turn for user-authored
-        # slash commands (Phase 5b).
-        command_store = (
-            FilesystemCommandStore(
+        # slash commands (Phase 5b). P9-T3: LayeredStore wrap so
+        # plugin-namespaced commands resolve via the same path.
+        command_store: LayeredStore[Command] | None
+        if no_commands:
+            command_store = None
+        else:
+            base_command_store = FilesystemCommandStore(
                 global_dir=Path.home() / ".openharness" / "commands",
                 project_dir=Path.cwd() / ".openharness" / "commands",
             )
-            if not no_commands
-            else None
-        )
+            command_store = LayeredStore(
+                base=base_command_store,
+                plugin_catalog=plugin_catalogs.commands,
+            )
+
+        # P10-T4.4f: memory subsystem assembled ONCE per ``oh chat``
+        # session. Per-turn ``MemoryManifest`` rebuild happens inside
+        # the loop with the current user_input as the relevance query.
+        memory_dir: Path | None = None
+        memory_store: MemoryStore | None = None
+        claude_md_content: str | None = None
+        if enable_memory:
+            memory_dir = get_project_memory_dir(env.cwd)
+            memory_store = FilesystemMemoryStore(project_dir=memory_dir)
+            memory_store.discover()  # warm cache for per-turn relevance pass
+            claude_md_content = load_claude_md_prompt(
+                env.cwd,
+                max_chars_per_file=settings.memory.max_claude_md_chars,
+            )
 
         # Bundle resolves on FIRST turn only (per D24.4). Tracked
         # outside the loop so subsequent turns reuse the same context.
+        # P10-T4.4f: ``bundle_overrides_prompt`` separates "bundle set
+        # ``system_prompt`` (skip memory injection)" from "bundle did
+        # nothing (do memory injection)" — both cases have
+        # ``bundle_resolved=True`` after first turn.
         bundle_resolved: bool = False
+        bundle_overrides_prompt: bool = False
         effective_registry = registry
         effective_hook_registry = hook_registry
         effective_settings = settings
-        system_prompt = build_system_prompt(registry.to_api_schema(), env, skill_store=skill_store)
+        # Initial system_prompt — fallback for the memory-disabled path
+        # AND for the brief window before the loop's first iteration
+        # rebuilds with memory. CLAUDE.md threads through; memory
+        # manifest does NOT (no user query yet).
+        system_prompt = build_system_prompt(
+            registry.to_api_schema(),
+            env,
+            skill_store=skill_store,
+            claude_md_content=claude_md_content,
+        )
 
         typer.echo("oh chat — multi-turn REPL. /help for commands, /exit to quit.")
 
@@ -642,9 +933,13 @@ async def _run_chat(
                 and invoked_command is not None
                 and invoked_command.mode is not None
             ):
-                bundle_store = FilesystemBundleStore(
+                base_bundle_store = FilesystemBundleStore(
                     global_dir=Path.home() / ".openharness" / "bundles",
                     project_dir=Path.cwd() / ".openharness" / "bundles",
+                )
+                bundle_store = LayeredStore(
+                    base=base_bundle_store,
+                    plugin_catalog=plugin_catalogs.bundles,
                 )
                 bundle = bundle_store.get(invoked_command.mode)
                 if bundle is None:
@@ -668,13 +963,36 @@ async def _run_chat(
                 effective_settings = application.settings
                 if bundle.system_prompt is not None:
                     system_prompt = bundle.system_prompt
+                    bundle_overrides_prompt = True
                 else:
                     system_prompt = build_system_prompt(
                         effective_registry.to_api_schema(),
                         env,
                         skill_store=skill_store,
+                        claude_md_content=claude_md_content,
                     )
             bundle_resolved = True
+
+            # P10-T4.4f: rebuild system_prompt with per-turn memory
+            # manifest unless the bundle explicitly overrode the prompt
+            # (bundle.system_prompt set → user opted out of harness-
+            # composed sections, memory included). Runs every turn so
+            # multi-turn conversations get fresh relevance scoring
+            # against the current user_input.
+            if memory_store is not None and memory_dir is not None and not bundle_overrides_prompt:
+                memory_manifest = _build_memory_manifest_for_query(
+                    memory_store=memory_store,
+                    memory_dir=memory_dir,
+                    query=user_input,
+                    memory_settings=settings.memory,
+                )
+                system_prompt = build_system_prompt(
+                    effective_registry.to_api_schema(),
+                    env,
+                    skill_store=skill_store,
+                    claude_md_content=claude_md_content,
+                    memory_manifest=memory_manifest,
+                )
 
             context = QueryContext(
                 api_client=client,
@@ -891,6 +1209,30 @@ def ask(
             "OPENHARNESS_ENABLE_PLUGIN_HOOKS."
         ),
     ),
+    enable_plugins: bool | None = typer.Option(
+        None,
+        "--enable-plugins/--no-enable-plugins",
+        help=(
+            "Enable discovery + loading of plugins from "
+            "~/.openharness/plugins/<name>/manifest.yaml (Phase 9). "
+            "Default OFF — plugin components are not registered into "
+            "the running registry unless this flag is set. ``oh plugins "
+            "list`` still works without it (read-only introspection). "
+            "Overrides OPENHARNESS_ENABLE_PLUGINS."
+        ),
+    ),
+    enable_memory: bool | None = typer.Option(
+        None,
+        "--enable-memory/--no-enable-memory",
+        help=(
+            "Enable the memory subsystem (Phase 10, D28.10). When ON "
+            "(default), CLAUDE.md cascade + per-project durable memory "
+            "are injected into the system prompt. When OFF, neither "
+            "section appears — useful for a stateless harness or for "
+            "isolating from a misbehaving memory file. Overrides "
+            "OPENHARNESS_ENABLE_MEMORY."
+        ),
+    ),
 ) -> None:
     """Stream a single LLM response (with tool dispatch) to stdout."""
     if auto and dry_run:
@@ -930,6 +1272,8 @@ def ask(
                 sandbox_cpus_override=sandbox_cpus,
                 sandbox_runtime_override=sandbox_runtime,
                 enable_plugin_hooks_override=enable_plugin_hooks,
+                enable_plugins_override=enable_plugins,
+                enable_memory_override=enable_memory,
             )
         )
     except ValidationError as exc:
@@ -1017,6 +1361,20 @@ def chat(
     enable_plugin_hooks: bool | None = typer.Option(
         None, "--enable-plugin-hooks/--no-enable-plugin-hooks"
     ),
+    enable_plugins: bool | None = typer.Option(
+        None,
+        "--enable-plugins/--no-enable-plugins",
+        help="Enable plugin discovery + loading (Phase 9). Default OFF.",
+    ),
+    enable_memory: bool | None = typer.Option(
+        None,
+        "--enable-memory/--no-enable-memory",
+        help=(
+            "Enable the memory subsystem (Phase 10). Default ON. "
+            "Per-turn relevance scoring + CLAUDE.md injection. "
+            "Overrides OPENHARNESS_ENABLE_MEMORY."
+        ),
+    ),
 ) -> None:
     """Multi-turn REPL — same flag surface as ``ask`` minus the prompt arg."""
     if auto and dry_run:
@@ -1050,6 +1408,8 @@ def chat(
                 sandbox_cpus_override=sandbox_cpus,
                 sandbox_runtime_override=sandbox_runtime,
                 enable_plugin_hooks_override=enable_plugin_hooks,
+                enable_plugins_override=enable_plugins,
+                enable_memory_override=enable_memory,
             )
         )
     except ValidationError as exc:

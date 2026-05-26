@@ -26,7 +26,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from openharness.prompts.memory_inject import (
+    format_memory_index_section,
+    format_relevant_memories_section,
+)
+
 if TYPE_CHECKING:
+    from openharness.prompts.memory_inject import MemoryManifest
     from openharness.protocols import ToolSpec
     from openharness.skills.store import SkillStore
 
@@ -83,25 +89,46 @@ def build_system_prompt(
     env: EnvironmentInfo,
     *,
     skill_store: SkillStore | None = None,
+    claude_md_content: str | None = None,
+    memory_manifest: MemoryManifest | None = None,
 ) -> str:
-    """Assemble the system prompt from base instructions, tool catalog,
-    optional skill catalog, and environment block.
+    """Assemble the system prompt from base + tools + skills + env + memory.
 
     Per ``decisions/06`` D6.5: this function's signature is the load-bearing
-    contract; Phase 3 personalization and Phase 4 memory both extend the
-    body by appending more sections, not by changing the call surface.
-    P5c-T3 keeps the contract: ``skill_store`` is keyword-only, defaults
-    to ``None``, and an empty store contributes no section — existing
-    callers that ignore Phase 5c get byte-identical prompts.
+    contract; later phases extend the body by appending more sections, not
+    by changing the call surface. P5c-T3 added ``skill_store`` keyword-
+    only. **P10-T4.4d (D28.6)** adds two more:
 
-    Sections are joined by blank lines and use Markdown ``##`` headers
-    (D11.3). Skill catalog (when present) lands between Tools and
-    Environment so the LLM reads "here are the tools (LoadSkill among
-    them), here are the named skills LoadSkill can expand, here is your
-    environment."
+    - ``claude_md_content``: pre-rendered output of
+      :func:`openharness.prompts.claudemd.load_claude_md_prompt`. When
+      ``None`` (or empty after the load returns ``None``), no
+      ``## Project Instructions`` section is emitted.
+    - ``memory_manifest``: a :class:`MemoryManifest` carrying the
+      MEMORY.md entrypoint + relevance-scored bodies. Each contributes
+      its own section (``## Memory`` and ``## Relevant Memories``); both
+      are independently skipped if absent.
 
-    Per ``decisions/12`` L3:catalog is **always-on** (names + descriptions
-    only, no bodies) — bodies arrive on demand via :class:`LoadSkillTool`.
+    Section order (D28.6):
+
+    1. base instructions
+    2. ``## Tools``
+    3. ``## Available Skills`` (if skill_store present + non-empty)
+    4. ``## Environment``
+    5. ``## Project Instructions`` (if claude_md_content present)
+    6. ``## Memory`` (if memory_manifest.entrypoint_content present)
+    7. ``## Relevant Memories`` (if memory_manifest.relevant non-empty)
+
+    All sections joined by blank lines (``\\n\\n``). Same Markdown-``##``
+    convention as P2-T5 (D11.3). The byte-identical invariant
+    (P10-T4.4a) holds: when ALL three optional kwargs default to None,
+    the output is byte-exact to today's prompt — existing 233+ caller
+    tests pass unchanged.
+
+    The new memory sections come AFTER Environment because the
+    LLM's attention-recency bias should land on the most query-specific
+    context (memory) closer to the user message, while project-stable
+    context (CLAUDE.md) sits between Environment and Memory for the
+    same reason.
     """
     sections = [
         _BASE_INSTRUCTIONS,
@@ -112,6 +139,15 @@ def build_system_prompt(
         if skills_section is not None:
             sections.append(skills_section)
     sections.append(_format_environment_section(env))
+    if claude_md_content is not None:
+        sections.append(claude_md_content)
+    if memory_manifest is not None:
+        memory_index = format_memory_index_section(memory_manifest)
+        if memory_index is not None:
+            sections.append(memory_index)
+        relevant = format_relevant_memories_section(memory_manifest.relevant)
+        if relevant is not None:
+            sections.append(relevant)
     return "\n\n".join(sections)
 
 
