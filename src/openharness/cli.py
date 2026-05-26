@@ -1767,6 +1767,138 @@ def hooks_describe(
     typer.echo(doc)
 
 
+# ----- oh memory -------------------------------------------------------------
+# P10-T5: read-only inspection subcommands per D28.11.
+# No add / edit / remove — write surface defers to Phase 11's extraction
+# secondary pass + future CLI add command.
+
+memory_app = typer.Typer(
+    name="memory",
+    help="Inspect project memory store (read-only — no add/edit in Phase 10).",
+)
+app.add_typer(memory_app, name="memory")
+
+
+@memory_app.command("list", help="List memories in this project's store.")
+def memory_list(
+    format: str = typer.Option(
+        "text",
+        "--format",
+        "-f",
+        help="Output format: text (default) or json.",
+    ),
+) -> None:
+    """List memories sorted by ``(-use_count, name)`` — most-used first.
+
+    Empty store → single ``(no memories — storage at <path>)`` line so
+    the user sees WHERE to drop a hand-written memory file. Malformed
+    files don't appear (``parse_memory`` returns ``None`` + warning
+    log;the store skips them silently). To see warnings,
+    re-run with ``--log-level INFO``.
+    """
+    import json
+
+    from openharness.memory.paths import get_project_memory_dir
+    from openharness.memory.store import FilesystemMemoryStore
+
+    storage_dir = get_project_memory_dir(Path.cwd())
+    store = FilesystemMemoryStore(project_dir=storage_dir)
+    memories = list(store.discover().values())
+
+    if not memories:
+        if format == "json":
+            typer.echo("[]")
+            return
+        typer.echo(f"(no memories — storage at {storage_dir})")
+        return
+
+    memories.sort(key=lambda m: (-m.use_count, m.name))
+
+    if format == "json":
+        data = [
+            {
+                "name": m.name,
+                "id": m.id,
+                "type": m.type.value,
+                "scope": m.scope.value,
+                "use_count": m.use_count,
+                "last_used_at": (m.last_used_at.isoformat() if m.last_used_at else None),
+                "updated_at": m.updated_at.isoformat(),
+                "description": m.description,
+                "source_path": str(m.source_path),
+            }
+            for m in memories
+        ]
+        typer.echo(json.dumps(data, indent=2))
+        return
+
+    # Text format: aligned columns. Description truncated to 60 chars so
+    # long descriptions don't blow out the line width.
+    name_width = max(len(m.name) for m in memories) + 2
+    type_width = max(len(m.type.value) for m in memories) + 2
+    use_width = max(len(str(m.use_count)) for m in memories) + 2
+    use_width = max(use_width, 5)  # min "use" header width
+    for m in memories:
+        desc = m.description if len(m.description) <= 60 else m.description[:57] + "..."
+        last_used = m.last_used_at.isoformat() if m.last_used_at else "(never)"
+        typer.echo(
+            f"{m.name:<{name_width}}"
+            f"{m.type.value:<{type_width}}"
+            f"{m.use_count:<{use_width}}"
+            f"{last_used:<32}"
+            f"{desc}"
+        )
+
+
+@memory_app.command("show", help="Show a memory's full frontmatter + body.")
+def memory_show(
+    name_or_id: str = typer.Argument(..., help="Memory name OR id."),
+) -> None:
+    """Look up by ``name`` first, fall back to ``id``.
+
+    Prints the raw markdown file content (frontmatter + body) so the
+    user sees exactly what's on disk. Missing memory → exit 1 with
+    available names listed (mirrors :class:`UnknownCommandError`).
+    """
+    from openharness.memory.paths import get_project_memory_dir
+    from openharness.memory.store import FilesystemMemoryStore
+
+    storage_dir = get_project_memory_dir(Path.cwd())
+    store = FilesystemMemoryStore(project_dir=storage_dir)
+    catalog = store.discover()
+
+    # Lookup by name first
+    memory = catalog.get(name_or_id)
+    # Fallback: lookup by id
+    if memory is None:
+        for m in catalog.values():
+            if m.id == name_or_id:
+                memory = m
+                break
+
+    if memory is None:
+        available = sorted(catalog.keys())
+        available_str = ", ".join(available) if available else "(none — storage empty)"
+        typer.echo(
+            f"Unknown memory: {name_or_id!r}; available: {available_str}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    typer.echo(memory.source_path.read_text(encoding="utf-8"))
+
+
+@memory_app.command("path", help="Print the memory storage directory for cwd.")
+def memory_path() -> None:
+    """Resolve + print the per-project memory dir path. Exits 0 even
+    when the directory doesn't exist yet — the path is computable per
+    D28.1 (lazy mkdir on first write).
+    """
+    from openharness.memory.paths import get_project_memory_dir
+
+    typer.echo(str(get_project_memory_dir(Path.cwd())))
+
+
 # --------------------------------------------------------------------------- #
 # Entry point                                                                 #
 # --------------------------------------------------------------------------- #
