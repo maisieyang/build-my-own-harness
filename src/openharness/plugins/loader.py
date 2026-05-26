@@ -440,6 +440,19 @@ class PluginLoader:
         # time; bundles already pulls in commands/skills indirectly.
         from openharness.bundles.model import parse_bundle
 
+        # D27.7 + P9-T3 review: a bundle inside the same plugin that
+        # references this plugin's own hooks by their unprefixed name
+        # (e.g. ``hook_names: [audit]``) must be rewritten to the
+        # namespaced form, because that's the key under which
+        # :meth:`_fan_out_hooks` registered the hook in the eventual
+        # plugin_hook_catalog. Same shape as how we already namespace
+        # ``bundle.name``: the plugin author writes naturally;fan_out
+        # applies the prefix. Unprefixed names that DON'T belong to
+        # this plugin pass through unchanged so they can resolve
+        # against ``BUILTIN_HOOKS`` or filesystem-discovered hook
+        # plugins at apply_bundle time.
+        own_hook_names = {h.name for h in manifest.hooks}
+
         for ref in manifest.bundles:
             path = manifest.source_path / ref.file
             bundle = parse_bundle(path)
@@ -452,8 +465,15 @@ class PluginLoader:
                 )
                 continue
             ns_name = namespaced(plugin_name, bundle.name)
+            ns_hook_names = tuple(
+                namespaced(plugin_name, h) if h in own_hook_names else h for h in bundle.hook_names
+            )
             try:
-                ns_bundle = replace(bundle, name=ns_name)
+                ns_bundle = replace(
+                    bundle,
+                    name=ns_name,
+                    hook_names=ns_hook_names,
+                )
             except (
                 ValueError
             ) as exc:  # pragma: no cover - defensive: namespaced name provably satisfies regex

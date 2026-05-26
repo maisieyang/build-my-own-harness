@@ -368,6 +368,163 @@ class TestFanOutMarkdownComponents:
 
 
 # --------------------------------------------------------------------------- #
+# PluginLoader.fan_out() — bundle hook_names rewrite (D27.7 follow-up)        #
+# --------------------------------------------------------------------------- #
+
+
+class TestFanOutBundleHookRewrite:
+    """A bundle inside a plugin that references the plugin's own hook by
+    unprefixed name (``hooks: [audit]``) must be rewritten so that
+    ``bundle.hook_names`` carries the namespaced form (``my-plugin__audit``)
+    — the same key under which :meth:`_fan_out_hooks` registers the
+    HookSpec. Unprefixed names that do NOT belong to this plugin pass
+    through unchanged so they can resolve against ``BUILTIN_HOOKS`` or
+    filesystem-discovered hook plugins at apply_bundle time.
+
+    Rule per D27.7 + P9-T3 review: plugin fan_out is the right layer to
+    apply namespace prefixes to plugin-declared component references;
+    the plugin author writes naturally and lets the framework
+    namespace what it owns.
+    """
+
+    def test_bundle_own_hook_reference_rewritten(self, tmp_path: Path) -> None:
+        plugin_dir = tmp_path / "my-plugin"
+        _write_manifest(
+            plugin_dir,
+            """\
+            name: my-plugin
+            version: 0.1.0
+            description: bundle referencing plugin-own hook
+            hooks:
+              - module: h
+                name: audit
+            bundles:
+              - file: bundles/ops.md
+            """,
+        )
+        _write_md(
+            plugin_dir / "bundles" / "ops.md",
+            """\
+            ---
+            name: ops
+            description: Ops mode bundle
+            hooks:
+              - audit
+            ---
+
+            You are an operations expert.
+            """,
+        )
+        (plugin_dir / "h.py").write_text(
+            textwrap.dedent(
+                """\
+                from openharness.bundles import hook_spec
+
+
+                @hook_spec("PostToolUse")
+                async def audit(_ctx):
+                    return None
+                """
+            ),
+            encoding="utf-8",
+        )
+        loader = PluginLoader(tmp_path)
+        catalogs = loader.fan_out(loader.discover())
+        bundle = catalogs.bundles["my-plugin__ops"]
+        # The bundle's hook reference is rewritten to the same key
+        # under which the hook was registered.
+        assert bundle.hook_names == ("my-plugin__audit",)
+        # Sanity: the hook IS in the catalog under that namespaced key.
+        assert "my-plugin__audit" in catalogs.hooks
+
+    def test_bundle_external_hook_name_passes_through(self, tmp_path: Path) -> None:
+        """A hook name that doesn't appear in the plugin's manifest is
+        left unchanged. apply_bundle_to_context will resolve it against
+        BUILTIN_HOOKS / filesystem hooks at runtime."""
+        plugin_dir = tmp_path / "my-plugin"
+        _write_manifest(
+            plugin_dir,
+            """\
+            name: my-plugin
+            version: 0.1.0
+            description: bundle referencing external hook
+            bundles:
+              - file: bundles/ops.md
+            """,
+        )
+        _write_md(
+            plugin_dir / "bundles" / "ops.md",
+            """\
+            ---
+            name: ops
+            description: Ops mode bundle
+            hooks:
+              - audit_log
+              - deny_writes
+            ---
+
+            body
+            """,
+        )
+        loader = PluginLoader(tmp_path)
+        catalogs = loader.fan_out(loader.discover())
+        bundle = catalogs.bundles["my-plugin__ops"]
+        # Plugin declares no hooks — both names pass through unchanged.
+        assert bundle.hook_names == ("audit_log", "deny_writes")
+
+    def test_bundle_mixed_own_and_external_hooks(self, tmp_path: Path) -> None:
+        """Mix: ``audit`` is plugin-own → rewritten; ``deny_writes`` is
+        external → passes through. Verifies the discrimination is
+        per-name, not all-or-nothing."""
+        plugin_dir = tmp_path / "my-plugin"
+        _write_manifest(
+            plugin_dir,
+            """\
+            name: my-plugin
+            version: 0.1.0
+            description: mixed hook refs
+            hooks:
+              - module: h
+                name: audit
+            bundles:
+              - file: bundles/ops.md
+            """,
+        )
+        _write_md(
+            plugin_dir / "bundles" / "ops.md",
+            """\
+            ---
+            name: ops
+            description: Ops mode
+            hooks:
+              - audit
+              - deny_writes
+            ---
+
+            body
+            """,
+        )
+        (plugin_dir / "h.py").write_text(
+            textwrap.dedent(
+                """\
+                from openharness.bundles import hook_spec
+
+
+                @hook_spec("PostToolUse")
+                async def audit(_ctx):
+                    return None
+                """
+            ),
+            encoding="utf-8",
+        )
+        loader = PluginLoader(tmp_path)
+        catalogs = loader.fan_out(loader.discover())
+        bundle = catalogs.bundles["my-plugin__ops"]
+        # ``audit`` rewritten; ``deny_writes`` (external) untouched.
+        assert bundle.hook_names == ("my-plugin__audit", "deny_writes")
+
+
+# --------------------------------------------------------------------------- #
 # PluginLoader.fan_out() — hooks                                              #
 # --------------------------------------------------------------------------- #
 

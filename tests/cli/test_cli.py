@@ -708,8 +708,6 @@ class TestSkillsBootstrap:
     def test_default_no_skill_dirs_skips_registration(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        from openharness.skills.store import FilesystemSkillStore
-
         _set_minimum_env(monkeypatch)
         _isolate_skills_dirs(monkeypatch, tmp_path)
         stub = _RecordingStubClient(_hello_world_events())
@@ -722,9 +720,10 @@ class TestSkillsBootstrap:
         assert result.exit_code == 0
 
         ctx = captured.context
-        # Default: filesystem store wired (not Empty) but empty dirs →
-        # discover() yields nothing.
-        assert isinstance(ctx.skill_store, FilesystemSkillStore)  # type: ignore[attr-defined]
+        # P9-T3 wrap: skill_store is LayeredStore (FilesystemSkillStore
+        # base + empty plugin catalog). Behaviorally identical to the
+        # bare FilesystemSkillStore when no plugins loaded.
+        # Empty dirs → discover() yields nothing.
         assert ctx.skill_store.discover() == {}  # type: ignore[attr-defined]
         # LoadSkill NOT registered when no skills found.
         names = [t.name for t in ctx.tool_registry.list_tools()]  # type: ignore[attr-defined]
@@ -819,7 +818,6 @@ class TestSkillsBootstrap:
     def test_no_skills_flag_uses_empty_store(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        from openharness.skills.store import EmptySkillStore
 
         _set_minimum_env(monkeypatch)
         project = _isolate_skills_dirs(monkeypatch, tmp_path)
@@ -840,9 +838,10 @@ class TestSkillsBootstrap:
         assert result.exit_code == 0
 
         ctx = captured.context
-        # ``--no-skills`` swaps in :class:`EmptySkillStore` regardless of
-        # filesystem state.
-        assert isinstance(ctx.skill_store, EmptySkillStore)  # type: ignore[attr-defined]
+        # P9-T3 wrap: ``--no-skills`` puts EmptySkillStore as the
+        # LayeredStore base; with no plugin skills loaded the wrapped
+        # store behaves identically (discover() == {}).
+        assert ctx.skill_store.discover() == {}  # type: ignore[attr-defined]
         names = [t.name for t in ctx.tool_registry.list_tools()]  # type: ignore[attr-defined]
         assert "LoadSkill" not in names
         assert "should-not-appear" not in ctx.system_prompt  # type: ignore[attr-defined]
