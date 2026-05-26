@@ -15,17 +15,14 @@ Per ``decisions/25-phase-10-boundary.md``:
   by manual filesystem edits in this phase; Phase 11 adds the
   ``extract_memories_from_turn`` secondary LLM pass.
 
-P10-T1 sub-units (all shipped in this commit area):
+Phase 10 tasks:
 
-- 1a: :class:`Memory` dataclass + :class:`MemoryType` /
-  :class:`MemoryScope` enums + :func:`compute_memory_signature`.
-- 1b: :func:`parse_memory` via ``read_frontmatter_dict``.
-- 1c: :func:`get_project_memory_dir` + :class:`UnknownMemoryError` /
-  :class:`MemoryParseError`.
-
-Subsequent tasks:
-
-- T2: :class:`FilesystemMemoryStore` (6th ``markdown_store`` consumer).
+- T1 (shipped): :class:`Memory` dataclass + :class:`MemoryType` /
+  :class:`MemoryScope` enums + :func:`compute_memory_signature` +
+  :func:`parse_memory` + :func:`get_project_memory_dir` +
+  :class:`MemoryParseError` / :class:`UnknownMemoryError`.
+- T2: :class:`MemoryStore` Protocol + :class:`FilesystemMemoryStore`
+  (6th ``markdown_store`` consumer) + :class:`EmptyMemoryStore`.
 - T3: relevance scoring + usage-tracking atomic rewrite.
 - T4: ``prompts/`` refactor + CLAUDE.md cascade + memory injection.
 - T5: ``oh memory list / show / path`` CLI.
@@ -37,6 +34,7 @@ Public API:
         Memory, MemoryType, MemoryScope,
         compute_memory_signature, parse_memory,
         get_project_memory_dir,
+        MemoryStore, FilesystemMemoryStore, EmptyMemoryStore,
         MemoryParseError, UnknownMemoryError,
     )
 """
@@ -52,11 +50,19 @@ from openharness.memory.model import (
     parse_memory,
 )
 from openharness.memory.paths import get_project_memory_dir
+from openharness.memory.store import (
+    EmptyMemoryStore,
+    FilesystemMemoryStore,
+    MemoryStore,
+)
 
 __all__ = [
+    "EmptyMemoryStore",
+    "FilesystemMemoryStore",
     "Memory",
     "MemoryParseError",
     "MemoryScope",
+    "MemoryStore",
     "MemoryType",
     "UnknownMemoryError",
     "compute_memory_signature",
