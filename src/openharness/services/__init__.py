@@ -47,6 +47,12 @@ from openharness.services.compact import (
     try_context_collapse,
     try_session_memory_compaction,
 )
+from openharness.services.extract import (
+    EXTRACTION_SYSTEM_PROMPT,
+    ExtractionResult,
+    extract_memories_from_turn,
+    has_memory_writes_since,
+)
 from openharness.services.session_memory import (
     get_session_memory_dir,
     read_session_memory,
@@ -55,12 +61,16 @@ from openharness.services.session_memory import (
 from openharness.services.summarize import summarize
 
 __all__ = [
+    "EXTRACTION_SYSTEM_PROMPT",
     "CompactResult",
+    "ExtractionResult",
     "auto_compact_if_needed",
     "estimate_message_tokens",
+    "extract_memories_from_turn",
     "full_compact",
     "get_context_window",
     "get_session_memory_dir",
+    "has_memory_writes_since",
     "read_session_memory",
     "summarize",
     "threshold_tokens",

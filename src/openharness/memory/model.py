@@ -71,22 +71,24 @@ class MemoryType(str, enum.Enum):
 
 
 class MemoryScope(str, enum.Enum):
-    """Memory scope. **Phase 10 supports only PRIVATE per D28.5.**
+    """Memory scope. **Phase 11 D29.10 adds TEAM** alongside extraction's
+    write path (since secret scanning belongs in the write layer).
 
-    Future scopes (deferred to Phase 11 alongside extraction +
-    ``check_team_memory_secrets``):
+    - ``private`` (Phase 10) — local-only memories. No scanning, no
+      sharing. Lives at ``<storage-dir>/`` root.
+    - ``team`` (Phase 11) — shared across team members. Lives under
+      ``<storage-dir>/team/`` subdirectory. Subject to regex-based
+      secret scanning at write time via
+      :func:`openharness.memory.team.check_team_memory_secrets` —
+      records with detected secrets are silently dropped + warned.
 
-    - ``team`` — shared across team members; lives under a separate
-      ``team/`` sub-directory; subject to regex-based secret scanning
-      at write time.
-
-    :func:`parse_memory` (1b) rejects any ``scope`` value other than
-    ``private`` with a warning log + skip — the field exists in the
-    schema so we don't need a frontmatter migration when team scope
-    arrives.
+    ``str + Enum`` mixin so YAML serialization is the string value
+    directly. :func:`parse_memory` accepts both values; downstream
+    code routes by ``scope is MemoryScope.TEAM``.
     """
 
     PRIVATE = "private"
+    TEAM = "team"
 
 
 @dataclass(frozen=True)

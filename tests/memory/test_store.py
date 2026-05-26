@@ -9,9 +9,9 @@ substrate's behavior:
 2. Valid memory in dir → discoverable via ``discover()`` and ``get()``.
 3. Malformed files mixed with valid → valid loaded, malformed skipped
    (skip-not-fail discipline from :func:`parse_memory`).
-4. ``scope: team`` files dropped at parser layer (D28.5 enforcement
-   re-verified at store level — defense in depth against accidental
-   future store-layer bypass).
+4. ``scope: team`` loaded since Phase 11 D29.10 enabled the enum value
+   (Phase 10 D28.5 rejected it). Team-routing-to-subdir is a WRITE
+   concern tested in TestAddOrUpdate.
 5. Same-name collision within the single project layer → later sorted
    wins + ``memory_override`` info log (substrate inherits the same
    "project layer overrides" semantics it uses for global+project).
@@ -26,20 +26,16 @@ behavior here — only the memory-domain integration.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path  # used at runtime in TestAddOrUpdate (P11-T4.4a)
 
 import pytest
 
-from openharness.memory.model import MemoryScope, MemoryType
+from openharness.memory.model import Memory, MemoryScope, MemoryType, parse_memory
 from openharness.memory.store import (
     EmptyMemoryStore,
     FilesystemMemoryStore,
     MemoryStore,
 )
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
 
 _VALID_FRONTMATTER_TEMPLATE = """\
 ---
@@ -145,25 +141,26 @@ class TestFilesystemMemoryStoreFaultTolerance:
         # Valid loaded; malformed silently dropped (warnings logged by parser).
         assert set(catalog.keys()) == {"good", "also-good"}
 
-    def test_scope_team_dropped_at_store_layer(self, tmp_path: Path) -> None:
-        # D28.5 defense in depth — parser rejects ``scope: team`` (P10-T1.1b
-        # test covers that), and the store's discover() must therefore not
-        # surface it. Pin the behavior at the store level too.
+    def test_scope_team_loaded_in_phase_11(self, tmp_path: Path) -> None:
+        # Phase 11 D29.10 enables team scope. Team memories at the
+        # project_dir root are surfaced same as private (separating
+        # team/ subdir routing is the WRITE-time concern handled by
+        # add_or_update). Tests for the team subdir live in
+        # TestAddOrUpdate below.
         d = tmp_path / "memdir"
-        # Valid sibling so we can confirm the store still produces a catalog.
         _write_memory(d, "good.md", name="good")
         (d / "team-scoped.md").write_text(
             _VALID_FRONTMATTER_TEMPLATE.format(
                 id_="01HTEAM00000",
                 name="team-mem",
-                description="should be dropped",
+                description="team-shared",
                 body="body",
             ).replace("scope: private", "scope: team")
         )
         store = FilesystemMemoryStore(project_dir=d)
         catalog = store.discover()
         assert "good" in catalog
-        assert "team-mem" not in catalog
+        assert "team-mem" in catalog
 
     def test_duplicate_name_later_sorted_wins(self, tmp_path: Path) -> None:
         # Substrate behavior: ``project`` layer treats same-name as
@@ -250,3 +247,136 @@ def test_get_missing_returns_none(store_cls: type, tmp_path: Path) -> None:
     contract :class:`MemoryStore` Protocol requires."""
     store = store_cls(project_dir=tmp_path) if store_cls is FilesystemMemoryStore else store_cls()
     assert store.get("nonexistent") is None
+
+
+# ---------------------------------------------------------------------------
+# P11-T4.4a — add_or_update (write path)
+# ---------------------------------------------------------------------------
+
+
+class TestAddOrUpdate:
+    """``FilesystemMemoryStore.add_or_update`` — the agent write path
+    introduced in Phase 11 alongside extraction's secondary pass."""
+
+    @staticmethod
+    def _make_memory(
+        *,
+        name: str = "test-mem",
+        body: str = "test body",
+        scope: MemoryScope = MemoryScope.PRIVATE,
+        id_: str = "01HABCDEFGHIJK",
+    ) -> Memory:
+        from datetime import datetime, timezone
+
+        from openharness.memory.model import compute_memory_signature
+
+        signature = compute_memory_signature(body, MemoryType.PROJECT, scope)
+        return Memory(
+            id=id_,
+            name=name,
+            description=f"description for {name}",
+            type=MemoryType.PROJECT,
+            scope=scope,
+            created_at=datetime(2026, 5, 26, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 5, 26, tzinfo=timezone.utc),
+            body=body,
+            signature=signature,
+            source_path=Path("/tmp/placeholder.md"),  # overridden by add_or_update
+        )
+
+    def test_new_memory_writes_to_slug_filename(self, tmp_path: Path) -> None:
+        store = FilesystemMemoryStore(project_dir=tmp_path)
+        memory = self._make_memory(name="stripe-sdk")
+        written = store.add_or_update(memory)
+        assert written.name == "stripe-sdk.md"
+        assert written.parent == tmp_path
+        # Re-parse round-trips
+        reparsed = parse_memory(written)
+        assert reparsed is not None
+        assert reparsed.name == "stripe-sdk"
+        assert reparsed.body.strip() == "test body"
+
+    def test_signature_dedup_overwrites_existing(self, tmp_path: Path) -> None:
+        # Same body+type+scope → same signature → overwrite, not new file
+        store = FilesystemMemoryStore(project_dir=tmp_path)
+        m1 = self._make_memory(name="stripe-sdk", body="content v1")
+        path1 = store.add_or_update(m1)
+
+        # Same body → same signature; updated metadata gets persisted
+        m2 = self._make_memory(name="stripe-sdk-renamed", body="content v1")
+        path2 = store.add_or_update(m2)
+
+        # SAME file written to (signature match) despite name change
+        assert path1 == path2
+        # Only one file in dir
+        files = list(tmp_path.glob("*.md"))
+        assert len(files) == 1
+        # New metadata took effect
+        reparsed = parse_memory(path2)
+        assert reparsed is not None
+        assert reparsed.name == "stripe-sdk-renamed"
+
+    def test_different_signature_writes_new_file(self, tmp_path: Path) -> None:
+        store = FilesystemMemoryStore(project_dir=tmp_path)
+        m1 = self._make_memory(name="alpha", body="content alpha", id_="01HALPHA0000")
+        m2 = self._make_memory(name="beta", body="content beta", id_="01HBETA00000")
+        path1 = store.add_or_update(m1)
+        path2 = store.add_or_update(m2)
+        assert path1 != path2
+        # Both files present
+        assert path1.exists()
+        assert path2.exists()
+
+    def test_filename_collision_uses_id_suffix(self, tmp_path: Path) -> None:
+        # Two different memories with the SAME ``name`` (different
+        # bodies → different signatures). The first claims ``<slug>.md``;
+        # the second falls back to ``<slug>-<id-suffix>.md``.
+        store = FilesystemMemoryStore(project_dir=tmp_path)
+        m1 = self._make_memory(name="dup", body="body a", id_="01HFIRST0001")
+        m2 = self._make_memory(name="dup", body="body b", id_="01HSECOND002")
+        path1 = store.add_or_update(m1)
+        path2 = store.add_or_update(m2)
+        assert path1.name == "dup.md"
+        # Second falls back to slug + id-suffix
+        assert path2.name.startswith("dup-")
+        assert path2.name.endswith(".md")
+        assert path1 != path2
+
+    def test_team_scope_writes_to_team_subdir(self, tmp_path: Path) -> None:
+        # D29.10: team memories under ``<project_dir>/team/``
+        store = FilesystemMemoryStore(project_dir=tmp_path)
+        team_mem = self._make_memory(name="team-shared", scope=MemoryScope.TEAM)
+        written = store.add_or_update(team_mem)
+        assert written.parent == tmp_path / "team"
+        assert written.name == "team-shared.md"
+
+    def test_private_and_team_dont_collide(self, tmp_path: Path) -> None:
+        # Same name, different scope → different storage subdirs →
+        # different paths, both retained
+        store = FilesystemMemoryStore(project_dir=tmp_path)
+        private = self._make_memory(
+            name="same-name", body="private body", scope=MemoryScope.PRIVATE
+        )
+        team = self._make_memory(name="same-name", body="team body", scope=MemoryScope.TEAM)
+        p_priv = store.add_or_update(private)
+        p_team = store.add_or_update(team)
+        assert p_priv != p_team
+        assert p_priv.parent == tmp_path
+        assert p_team.parent == tmp_path / "team"
+
+    def test_discover_cache_invalidated_after_write(self, tmp_path: Path) -> None:
+        # Before Phase 11: discover() was frozen for the store's
+        # lifetime. add_or_update must invalidate the cache so the
+        # newly-written memory shows up on next discover().
+        store = FilesystemMemoryStore(project_dir=tmp_path)
+        assert store.discover() == {}  # caches the empty result
+        store.add_or_update(self._make_memory(name="fresh"))
+        # Re-discover surfaces the write
+        catalog = store.discover()
+        assert "fresh" in catalog
+
+    def test_no_orphan_tmp_files_on_success(self, tmp_path: Path) -> None:
+        store = FilesystemMemoryStore(project_dir=tmp_path)
+        store.add_or_update(self._make_memory(name="x"))
+        files = sorted(p.name for p in tmp_path.iterdir())
+        assert files == ["x.md"]

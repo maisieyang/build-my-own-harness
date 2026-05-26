@@ -24,13 +24,16 @@ engine / prompt-injection wiring.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+import contextlib
+import os
+import tempfile
+from pathlib import Path
+from typing import Any, Protocol
+
+import yaml
 
 from openharness.markdown_store import EmptyMarkdownStore, FilesystemMarkdownStore
-from openharness.memory.model import Memory, parse_memory
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from openharness.memory.model import Memory, MemoryScope, parse_memory
 
 
 class MemoryStore(Protocol):
@@ -114,3 +117,155 @@ class FilesystemMemoryStore(FilesystemMarkdownStore[Memory]):
             parser=parse_memory,
             log_event_prefix="memory",
         )
+        self._memory_project_dir = project_dir
+
+    def add_or_update(self, memory: Memory) -> Path:
+        """Write ``memory`` to disk via signature dedup — P11-T4.4a.
+
+        If an existing memory in the store has the same ``signature``,
+        overwrite that file (content + metadata round-trip; same name
+        if possible, else rename). Otherwise write to a new file with
+        a slug-based name and collision suffix.
+
+        Atomic write via ``tempfile + os.replace`` (same pattern as
+        :func:`mark_memory_used`).
+
+        Returns the path written to. Invalidates the discover() cache
+        so the next discovery picks up the new file.
+
+        Team-scope memories land under ``<project_dir>/team/``
+        (P11-T4.4b D29.10); private memories under ``<project_dir>/``
+        root.
+        """
+        target_dir = self._target_dir_for_scope(memory.scope)
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        # Signature dedup: scan existing memories for same signature
+        existing_path = self._find_by_signature(memory.signature, target_dir)
+        if existing_path is not None:
+            target_path = existing_path
+        else:
+            target_path = self._next_available_path(memory, target_dir)
+
+        content = _render_memory_markdown(memory)
+        _atomic_write(target_path, content)
+
+        # Invalidate cache so subsequent discover() picks up the change
+        self._cache = None
+        return target_path
+
+    def _target_dir_for_scope(self, scope: MemoryScope) -> Path:
+        """Per D29.10: team memories under ``<project_dir>/team/``;
+        private memories at root."""
+        if scope is MemoryScope.TEAM:
+            return self._memory_project_dir / "team"
+        return self._memory_project_dir
+
+    def _find_by_signature(self, signature: str, target_dir: Path) -> Path | None:
+        """Scan ``target_dir`` for a memory file with matching signature.
+
+        Does NOT use the cached discover() result because cache may be
+        stale relative to recent writes; we read fresh from disk.
+        Returns the first matching path or None.
+        """
+        if not target_dir.is_dir():
+            return None
+        for path in sorted(target_dir.glob("*.md")):
+            existing = parse_memory(path)
+            if existing is None:
+                continue
+            if existing.signature == signature:
+                return path
+        return None
+
+    def _next_available_path(self, memory: Memory, target_dir: Path) -> Path:
+        """Compute slug-based filename. Collision (different signature
+        already at ``<slug>.md``) → append ``-<id-suffix>`` for
+        uniqueness."""
+        # Slug = memory.name (already NAME_PATTERN-safe, so it's a
+        # valid filesystem name on POSIX + Windows).
+        slug = memory.name
+        candidate = target_dir / f"{slug}.md"
+        if not candidate.exists():
+            return candidate
+        # Collision with a different-signature memory — append id suffix
+        suffix = memory.id[:8] if len(memory.id) >= 8 else memory.id
+        return target_dir / f"{slug}-{suffix}.md"
+
+
+# ---------------------------------------------------------------------------
+# Markdown rendering helpers — P11-T4.4a
+# ---------------------------------------------------------------------------
+
+
+def _render_memory_markdown(memory: Memory) -> str:
+    """Serialize :class:`Memory` to a markdown file with YAML frontmatter.
+
+    Round-trip-stable with :func:`parse_memory`: writing then reading
+    yields a :class:`Memory` with identical field values (modulo
+    timestamp ISO-string formatting which is canonical).
+    """
+    frontmatter = _build_frontmatter_dict(memory)
+    yaml_text = yaml.safe_dump(
+        frontmatter,
+        sort_keys=False,
+        default_flow_style=False,
+        allow_unicode=True,
+    )
+    body = memory.body.rstrip("\n") + "\n"
+    return f"---\n{yaml_text}---\n\n{body}"
+
+
+def _build_frontmatter_dict(memory: Memory) -> dict[str, Any]:
+    """Build the YAML-ready dict for a Memory's frontmatter.
+
+    Lists serialize as YAML lists; None values serialize as ``null``;
+    timestamps serialize as ISO 8601 strings (rather than YAML's native
+    timestamp scalar — keeps parse round-trip predictable).
+    """
+    return {
+        "id": memory.id,
+        "name": memory.name,
+        "description": memory.description,
+        "type": memory.type.value,
+        "scope": memory.scope.value,
+        "created_at": memory.created_at.isoformat(),
+        "updated_at": memory.updated_at.isoformat(),
+        "signature": memory.signature,
+        "importance": memory.importance,
+        "tags": list(memory.tags),
+        "use_count": memory.use_count,
+        "last_used_at": (
+            memory.last_used_at.isoformat() if memory.last_used_at is not None else None
+        ),
+        "ttl_days": memory.ttl_days,
+        "disabled": memory.disabled,
+        "supersedes": list(memory.supersedes),
+    }
+
+
+def _atomic_write(target: Path, content: str) -> None:
+    """Write ``content`` to ``target`` via same-dir tempfile + os.replace.
+
+    Same primitive shape as :func:`mark_memory_used` and
+    :func:`update_session_memory_file` — concurrent reads see either
+    old or new file, never a half-written one. Orphan tmp cleanup
+    on failure.
+    """
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=target.parent,
+            delete=False,
+            suffix=".tmp",
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+            tmp.write(content)
+        os.replace(tmp_path, target)
+        tmp_path = None
+    finally:
+        if tmp_path is not None and tmp_path.exists():
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()

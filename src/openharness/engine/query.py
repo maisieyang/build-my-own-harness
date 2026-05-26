@@ -90,6 +90,49 @@ logger = get_logger("engine")
 _REACTIVE_TRUNCATE_MAX = 3
 
 
+async def _maybe_extract_memories(
+    context: QueryContext,
+    final_messages: list[ConversationMessage],
+) -> None:
+    """P11-T4.4f: run extraction secondary pass if enabled + store available.
+
+    Awaited (not asyncio.create_task) so failures are contained within
+    the run_query lifetime. Extraction itself never raises — returns
+    an :class:`ExtractionResult` with ``error`` set on failure. We log
+    the result and move on.
+
+    Skipped silently when:
+    - ``context.memory_store`` is None (caller didn't wire memory)
+    - ``context.extract_enabled`` is False (caller opted out)
+    """
+    if context.memory_store is None or not context.extract_enabled:
+        return
+    # Lazy import to avoid pulling services into engine module load
+    # graph unless extraction is actually used
+    from openharness.services.extract import extract_memories_from_turn
+
+    result = await extract_memories_from_turn(
+        cwd=context.cwd,
+        api_client=context.api_client,
+        model=context.model,
+        messages=final_messages,
+        memory_store=context.memory_store,
+        enabled=context.extract_enabled,
+        max_records=context.extract_max_records,
+        timeout_seconds=context.extract_timeout_s,
+    )
+    if result.skipped:
+        logger.info("extract_skipped", reason=result.reason)
+    elif result.error is not None:
+        logger.warning("extract_failed", error=result.error)
+    else:
+        logger.info(
+            "extract_complete",
+            written_count=len(result.written),
+            names=[m.name for m in result.written],
+        )
+
+
 def _sanitize_tool_input(tool_input: dict[str, Any], cwd: Path) -> dict[str, Any]:
     """Apply field-specific sanitization to ``tool_input`` before logging.
 
@@ -295,6 +338,12 @@ async def run_query(
                     final_messages = append_assistant_message(
                         messages, list(complete_event.message.content)
                     )
+                    # P11-T4.4f: extraction secondary pass. Awaited
+                    # (blocking) — adds ~2-3s latency per turn but
+                    # contains failures. T7 retro may switch to
+                    # asyncio.create_task fire-and-forget if the
+                    # latency is significant in real usage.
+                    await _maybe_extract_memories(context, final_messages)
                     yield ConversationCompleteEvent(messages=final_messages)
                     return  # end_turn / max_tokens / stop_sequence -> exit
 

@@ -23,7 +23,7 @@ Per the P2-T1 Three-Axis discussion (D7.1 / D7.2 / D7.5):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from openharness.execution.host import _HOST_EXECUTION
 from openharness.hooks import HookRegistry
@@ -105,3 +105,17 @@ class QueryContext:
     # skip the L4 LLM call entirely. ``None`` (default) skips L3 — L0
     # / L2 / L4 still run.
     session_memory_path: Path | None = None
+    # P11-T4.4f (decisions/26 D29.5): extraction secondary pass.
+    # When ``memory_store`` is set AND ``extract_enabled=True``, the
+    # engine awaits ``extract_memories_from_turn`` at the END of each
+    # run_query invocation (when stop_reason != tool_use). Extraction
+    # is contained — failures log a warning but don't propagate to
+    # the caller. ``memory_store=None`` (default) skips extraction
+    # entirely.
+    extract_enabled: bool = True
+    extract_max_records: int = 3
+    extract_timeout_s: float = 30.0
+    memory_store: Any = None  # FilesystemMemoryStore | None — Any avoids
+    # the circular import (services/extract.py uses QueryContext
+    # indirectly via the engine, and FilesystemMemoryStore lives
+    # under memory/). Runtime type-checked in the engine.

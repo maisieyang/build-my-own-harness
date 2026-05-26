@@ -80,14 +80,18 @@ class TestMemoryTypeEnum:
 
 
 class TestMemoryScopeEnum:
-    def test_only_private_in_phase_10(self) -> None:
-        # D28.5: Phase 10 ships only PRIVATE. Test guards against
-        # accidentally adding TEAM before its boundary doc updates.
-        assert list(MemoryScope) == [MemoryScope.PRIVATE]
+    def test_private_and_team(self) -> None:
+        # Phase 10 D28.5 shipped only PRIVATE; Phase 11 D29.10 adds
+        # TEAM alongside extraction's write path + secret scanning.
+        # This test pins both values — accidentally dropping TEAM
+        # would silently break extraction's team-scope routing.
+        assert set(MemoryScope) == {MemoryScope.PRIVATE, MemoryScope.TEAM}
         assert MemoryScope.PRIVATE.value == "private"
+        assert MemoryScope.TEAM.value == "team"
 
     def test_str_mixin(self) -> None:
         assert MemoryScope.PRIVATE == "private"
+        assert MemoryScope.TEAM == "team"
 
 
 class TestMemoryDataclass:
@@ -428,11 +432,15 @@ class TestParseMemoryErrors:
         path.write_text(_VALID_FRONTMATTER.replace("type: project", "type: bogus"))
         assert parse_memory(path) is None
 
-    def test_scope_team_rejected_in_phase_10(self, tmp_path: Path) -> None:
-        # D28.5: ``team`` scope deferred to Phase 11. Phase 10 must reject.
+    def test_scope_team_accepted_in_phase_11(self, tmp_path: Path) -> None:
+        # Phase 11 D29.10 enables team scope (Phase 10 D28.5 rejected it).
+        # parse_memory now accepts ``scope: team`` — secret scanning
+        # is the writer's responsibility, not the parser's.
         path = tmp_path / "x.md"
         path.write_text(_VALID_FRONTMATTER.replace("scope: private", "scope: team"))
-        assert parse_memory(path) is None
+        m = parse_memory(path)
+        assert m is not None
+        assert m.scope is MemoryScope.TEAM
 
     def test_invalid_scope_enum(self, tmp_path: Path) -> None:
         path = tmp_path / "x.md"
