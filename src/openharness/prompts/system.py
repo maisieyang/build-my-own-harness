@@ -3,15 +3,19 @@
 
 Per the P2-T5 Three-Axis discussion (D11.1 - D11.6) and ``decisions/06`` D6.5:
 this module exposes one public function with a stable signature that later
-phases extend without renaming. Phase 3 will inject personalization rules;
-Phase 4 will inject memory excerpts; both arrive as additional sections in
-the same Markdown structure.
+phases extend without renaming. Phase 3 injected personalization; Phase 5c
+added the Skills catalog; **Phase 10 (P10-T4.4d) adds two new keyword
+arguments — ``claude_md_content`` and ``memory_manifest`` — for the
+CLAUDE.md cascade and durable-memory injection**. All extensions land as
+additional optional kwargs that default to ``None``, preserving
+byte-identical output for callers that don't opt in.
 
-P2-T5 sub-units:
+P2-T5 original sub-units (now living here after the P10-T4.4a refactor
+from ``prompts.py`` module → ``prompts/`` package):
 
 - 5a: :class:`EnvironmentInfo` + :func:`detect_environment`.
-- 5b (this commit): :func:`build_system_prompt` -- assembles base
-  instructions, tool catalog, and environment block.
+- 5b: :func:`build_system_prompt` -- assembles base instructions, tool
+  catalog, optional skill catalog, and environment block.
 """
 
 from __future__ import annotations
