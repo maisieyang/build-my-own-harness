@@ -113,6 +113,10 @@ materializes.
 
 **D27.3 — Namespace conflict: plugin-name prefix.**
 
+> **Updated by D27.7**: the actual separator is `__`, not `:`. The
+> `:` examples below preserve the original design intent — see D27.7
+> for why the build resolved the colon to a double underscore.
+
 When two plugins both declare a command called `/deploy`:
 
 - Plugin `acme-tools` declares `/deploy` → exposed as `/acme-tools:deploy`
@@ -197,6 +201,78 @@ Implementation notes:
 - `oh plugins enable <name>` / `disable <name>` granular toggle —
   for Phase 9 it's all-or-nothing via `--enable-plugins` flag
 
+**D27.7 — Namespace separator is `__`, not `:` (supersedes D27.3 example notation).**
+
+> Added 2026-05-26 during P9-T3 review. The boundary doc originally
+> displayed `<plugin>:<component>` in D27.3 examples. Build-time
+> discovery forced this resolution; recording it here keeps the
+> contract honest.
+
+**The constraint**. The 5 underlying subsystems' name regexes all
+match `^[A-Za-z][A-Za-z0-9_-]*$`:
+
+- `mcp/config.py` — MCP server name pattern
+- `markdown_store/constants.py` `NAME_PATTERN` — shared by commands /
+  skills / bundles
+- `bundles/hook_plugins.py` — hook name pattern
+
+`:` is not in the allowed character set. D27.3's `my-plugin:deploy`
+notation would have required either changing those 5 regexes
+(violating the zero-diff invariant Phase 9 was designed to test) or
+adding a translation layer.
+
+**Why translation was also rejected**. A `<plugin>:<component>` ↔
+`<plugin>__<component>` translation would have to live in *every*
+LLM-facing renderer:
+
+- `build_system_prompt`'s skill catalog rendering
+- tool catalog rendering for the LLM
+- `LoadSkillTool` input parsing (the LLM emits the displayed form)
+- `oh plugins list` / `show` rendering
+- the slash-command parser in `commands/expand.py`
+
+Each of those renderers becoming plugin-aware propagates plugin
+semantics into engine + skills + commands code paths — directly
+violating the same zero-diff invariant the regex-widening option
+violates. The translation layer pushes the problem deeper instead of
+solving it.
+
+**Chosen contract**. `__` (double underscore) is the actual separator
+end-to-end:
+
+| Layer | Form |
+|---|---|
+| `manifest.yaml` declaration | Original unprefixed (`name: deploy`) |
+| Storage (command_store / skill_store / bundle_store) | `my-plugin__deploy` |
+| Plugin hook catalog key | `my-plugin__audit_log` |
+| MCP server name in pool | `my-plugin__GitHub` |
+| LLM-facing system prompt catalog | `my-plugin__deploy` |
+| User CLI invocation | `oh ask "/my-plugin__deploy"` |
+| `oh plugins show` / `list` display | `my-plugin__deploy` (no cosmetic translation) |
+
+`__` was chosen over `-` or `_` because:
+
+- `-` is already a valid character inside both plugin names
+  (kebab-case per D27.1) and component names, so `my-plugin-deploy`
+  is ambiguous about where the boundary sits.
+- Single `_` collides with snake_case component names (`audit_log` →
+  `my-plugin_audit_log` is ambiguous).
+- `__` is unambiguous AND satisfies all 5 regexes without
+  modification (any string of `[A-Za-z0-9_-]` matches).
+
+**Aesthetic cost is accepted**. `__` reads like a Python internal
+marker, which is awkward for a public-facing namespace. We absorb
+that cost because the alternative — translation layer — costs us
+the cross-cutting invariant, which is Phase 9's whole point. PLAYBOOK
+and README document `__` as the user-facing form; D27.3's `:`
+notation is preserved as design intent we couldn't deliver, not as
+the actual contract.
+
+**Conflict detection rule (unchanged from D27.3)**. Bootstrap still
+hard-fails if two plugins claim the same `name` — that rule operates
+on the plugin name itself (kebab-case, before any separator), not on
+the resulting namespaced component keys.
+
 ---
 
 ## Cross-cutting invariant
@@ -254,6 +330,7 @@ abstraction failing, not a Phase 9 implementation detail.
 | **D27.4** | Opt-in via `Settings.enable_plugins` | Same shape as `enable_plugin_hooks` (P5e); arbitrary-code-execution warrants explicit opt-in |
 | **D27.5** | Inline complete MCP server config in manifest | User installs one plugin → gets full MCP server stack; env-var interpolation for secrets; trust whitelist works on namespaced name |
 | **D27.6** | CLI: list / show / install / remove | install accepts local path OR git URL; remove with confirmation prompt; update/enable/disable defer |
+| **D27.7** | Namespace separator is `__` end-to-end (storage + LLM + user) — supersedes D27.3 example `:` notation | 5 subsystem regexes reject `:`; a translation layer would have propagated plugin-awareness into LLM-facing renderers, breaking the cross-cutting zero-diff invariant Phase 9 was specifically designed to test |
 
 ---
 
