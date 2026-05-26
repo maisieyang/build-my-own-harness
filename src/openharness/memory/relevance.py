@@ -25,10 +25,23 @@ modified-time descending as tiebreaker.
 
 Tokenization: ``re.findall(r"\\w+", text.lower())``. Python's
 ``\\w`` is Unicode-aware, so Han characters (``支付``, ``退款``)
-count as word tokens alongside ASCII. **No stopwords in Phase 10**
-— technical queries are stopword-poor, and natural-language queries
-are robust to a few noise tokens because meta-hit weight (2.0)
-dominates body-hit weight (1.0).
+count as word tokens alongside ASCII.
+
+P11-T6-6b (D29.9): minimum stopword set of ~22 ASCII function
+words is subtracted from the QUERY (not memory tokens). Reasons:
+
+- Phase 10 T6 surfaced a false positive ("what is the weather
+  today" matched a Stripe-refund memory via shared ``the``).
+- Memory bodies are written by the author and often deliberately
+  short — stripping function words from THEIR tokens would lose
+  signal (e.g. a memory body "use the AWS CLI" should still match
+  the "AWS" query token). So stopwords only apply on the query side.
+- Han characters / non-ASCII tokens are never in the stopword set;
+  ``这个`` / ``是`` etc. survive.
+
+Surface threshold also tightens: ``meta_hits >= 1 OR body_hits >= 2``
+(D29.9). A single body hit alone — the precise failure mode that
+surfaced the Stripe regression — no longer qualifies.
 """
 
 from __future__ import annotations
@@ -52,6 +65,37 @@ _TOKEN_PATTERN = re.compile(r"\w+", re.UNICODE)
 _RECENCY_BOOST_14_DAYS = 0.3
 _RECENCY_BOOST_30_DAYS = 0.1
 _USE_COUNT_CAP = 5
+
+# P11-T6-6b (D29.9): minimum English stopword set subtracted from
+# the QUERY tokens before scoring. Verbatim from boundary doc — do
+# not silently grow this list without a regression case justifying
+# the addition (each new stopword is a small false-negative risk).
+_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "is",
+        "are",
+        "was",
+        "were",
+        "of",
+        "to",
+        "for",
+        "with",
+        "on",
+        "in",
+        "at",
+        "by",
+        "and",
+        "or",
+        "but",
+        "this",
+        "that",
+        "these",
+        "those",
+    }
+)
 
 
 def _tokenize(text: str) -> set[str]:
@@ -95,15 +139,20 @@ def select_relevant_memories(
 ) -> list[Memory]:
     """Return up to ``max_results`` memories most relevant to ``query``.
 
-    Three exclusion gates (in order):
+    Four exclusion gates (in order):
 
-    1. ``query`` tokenizes to an empty set → return ``[]`` (no signal
-       to match against).
+    1. ``query`` tokenizes to an empty set after stopword removal →
+       return ``[]`` (no signal to match against). Phase 11 D29.9
+       adds the stopword subtraction; Phase 10 only checked raw
+       tokens.
     2. ``memory.disabled is True`` → exclude regardless of score
        (soft-deleted memories must not surface).
     3. ``meta_hits == 0 and body_hits == 0`` → exclude (D28.7
        load-bearing rule; without this, "no match" silently
        degenerates into "most recent N").
+    4. ``meta_hits == 0 and body_hits < 2`` → exclude (D29.9
+       tightened threshold). A single body-only hit is the noisy
+       pattern that surfaced Phase 10 T6's "the" false positive.
 
     ``now`` defaults to ``datetime.now(timezone.utc)``; tests inject a
     fixed value to make recency-boost behavior deterministic.
@@ -116,7 +165,10 @@ def select_relevant_memories(
     if now is None:
         now = datetime.now(timezone.utc)
 
-    query_tokens = _tokenize(query)
+    # P11-T6-6b (D29.9): subtract stopwords from QUERY tokens only.
+    # Memory tokens stay intact so deliberately-short bodies like
+    # "use the AWS CLI" still match an "AWS" query.
+    query_tokens = _tokenize(query) - _STOPWORDS
     if not query_tokens:
         return []
 
@@ -130,6 +182,10 @@ def select_relevant_memories(
         body_hits = len(query_tokens & body_tokens)
         # D28.7 load-bearing: zero-hits exclusion
         if meta_hits == 0 and body_hits == 0:
+            continue
+        # P11-T6-6b D29.9: body-only single-hit no longer surfaces
+        # (raises the bar for incidental body-token matches).
+        if meta_hits == 0 and body_hits < 2:
             continue
         score = (
             meta_hits * 2.0

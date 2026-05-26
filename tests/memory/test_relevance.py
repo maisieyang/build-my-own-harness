@@ -99,9 +99,23 @@ class TestSelectRelevantMemoriesMatching:
         result = select_relevant_memories("stripe", [m], now=_NOW)
         assert result == [m]
 
-    def test_body_hit_alone_sufficient(self) -> None:
+    def test_single_body_hit_no_longer_surfaces(self) -> None:
+        # P11-T6-6b D29.9: tightened threshold — a single body-only
+        # hit is no longer enough. This was the Phase 10 behavior
+        # that allowed "the" + Stripe body to false-positive.
         m = _build_memory(name="random", description="random", body="The Stripe API requires v8.")
         result = select_relevant_memories("stripe", [m], now=_NOW)
+        assert result == []
+
+    def test_two_body_hits_surfaces(self) -> None:
+        # P11-T6-6b D29.9: body_hits>=2 IS sufficient.
+        m = _build_memory(
+            name="random",
+            description="random",
+            body="Stripe payment webhook handles stripe events",
+        )
+        # query "stripe payment" hits body twice (stripe + payment)
+        result = select_relevant_memories("stripe payment", [m], now=_NOW)
         assert result == [m]
 
     def test_query_case_insensitive(self) -> None:
@@ -204,3 +218,61 @@ class TestNowDefault:
         m = _build_memory(name="stripe", updated_at=datetime.now(_UTC))
         result = select_relevant_memories("stripe", [m])
         assert result == [m]
+
+
+class TestStopwordsAndThreshold:
+    """P11-T6-6b (D29.9) — stopwords + tightened surface threshold.
+
+    Closes Phase 10 D28.7 sub-decision. Verifies that:
+    - Function words like ``the`` / ``is`` are stripped from queries
+      before matching, so unrelated memories sharing only function
+      words don't surface.
+    - All-stopword queries return [] rather than matching everything.
+    - Han characters are NOT in the stopword set (Unicode tokens
+      survive intact).
+    """
+
+    def test_phase10_weather_stripe_regression_no_longer_false_positive(self) -> None:
+        # Phase 10 T6 surfaced "what is the weather today" matching a
+        # stripe-refund memory via the shared word "the". D29.9 strips
+        # "what is the today" from the query → only "weather" remains
+        # → no overlap with the stripe memory → not selected.
+        stripe = _build_memory(
+            name="stripe-refund",
+            description="how the stripe refund flow works",
+            body="The customer hits /refund, the worker fans out, the webhook fires.",
+        )
+        result = select_relevant_memories("what is the weather today", [stripe], now=_NOW)
+        assert result == []
+
+    def test_all_stopword_query_returns_empty(self) -> None:
+        # "the is of and" tokenizes to {the, is, of, and} all of which
+        # are stopwords → 0 non-stopword tokens → [] regardless of memories.
+        m = _build_memory(name="stripe", body="anything")
+        result = select_relevant_memories("the is of and", [m], now=_NOW)
+        assert result == []
+
+    def test_single_stopword_query_returns_empty(self) -> None:
+        m = _build_memory(name="stripe", body="anything")
+        result = select_relevant_memories("the", [m], now=_NOW)
+        assert result == []
+
+    def test_meta_hit_survives_stopword_subtraction(self) -> None:
+        # Query "the stripe api" → stopwords strip "the" → remaining
+        # {stripe, api}. Meta hit on "stripe" still triggers selection.
+        m = _build_memory(name="stripe-sdk", description="stripe SDK helper")
+        result = select_relevant_memories("the stripe api", [m], now=_NOW)
+        assert result == [m]
+
+    def test_han_characters_are_not_stopwords(self) -> None:
+        # Unicode-aware tokenization + ASCII-only stopword set →
+        # Han queries are untouched by stopword subtraction.
+        m = _build_memory(name="payment-bug", description="退款 race condition", body="支付 流程")
+        result = select_relevant_memories("退款 流程", [m], now=_NOW)
+        assert result == [m]
+
+    def test_existing_meta_hit_tests_unaffected_by_threshold(self) -> None:
+        # Sanity: a clean meta_hit=1 still surfaces (the new threshold
+        # is meta>=1 OR body>=2; meta>=1 satisfies the OR arm).
+        m = _build_memory(name="stripe")
+        assert select_relevant_memories("stripe", [m], now=_NOW) == [m]
