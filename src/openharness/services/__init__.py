@@ -37,6 +37,16 @@ Public API (so far):
 
 from __future__ import annotations
 
+from openharness.services.session_memory import (
+    get_session_memory_dir,
+    read_session_memory,
+    update_session_memory_file,
+)
 from openharness.services.summarize import summarize
 
-__all__ = ["summarize"]
+__all__ = [
+    "get_session_memory_dir",
+    "read_session_memory",
+    "summarize",
+    "update_session_memory_file",
+]
