@@ -17,16 +17,17 @@ seam (compaction can rewrite the list without worrying about aliased references)
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from openharness.protocols import (
     ConversationMessage,
     TextBlock,
     ToolUseBlock,
 )
+from openharness.protocols.content import ToolResultBlock
 
 if TYPE_CHECKING:
-    from openharness.protocols import ContentBlock, ToolResultBlock
+    from openharness.protocols import ContentBlock
 
 
 def append_user_text(
@@ -113,3 +114,108 @@ def drop_oldest_tool_pair(
         ):
             return messages[:i] + messages[i + 2 :]
     return list(messages)
+
+
+# ---------------------------------------------------------------------------
+# P12-T1 (D30.6): turn_metadata producer for session_memory + snapshot writers
+# ---------------------------------------------------------------------------
+
+
+_FILE_TOOL_NAMES = frozenset({"Read", "Write", "Edit"})
+_MAX_VERIFIED_WORK_PER_TURN = 10
+_MAX_RECENT_FILES = 10
+_VERIFIED_WORK_SNIPPET_CHARS = 60
+
+
+def collect_turn_metadata(
+    messages: list[ConversationMessage],
+    prior_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the ``tool_metadata`` dict consumed by Phase 11's
+    session_memory checkpoint AND Phase 12's snapshot writer.
+
+    Per D30.6: deterministic, no LLM call. Single producer feeds
+    two consumers via the engine's per-turn-end finally block.
+
+    Schema (locked):
+
+    - ``recent_files``: list[str] — paths from ``Read``/``Write``/
+      ``Edit`` ``ToolUseBlock`` input fields (``path`` or ``file_path``).
+      Deduped within turn. When ``prior_metadata`` is supplied,
+      prior turn's recent_files are extended (new entries appended
+      after old), then deduped + capped at ``_MAX_RECENT_FILES`` MOST
+      RECENT entries — so a long conversation accumulates the last
+      10 touched files across turns.
+    - ``verified_work``: list[str] — summaries of successful
+      tool_results from THIS TURN only (``"{tool_name}: {content[:60]}"``).
+      Errors excluded. Capped at ``_MAX_VERIFIED_WORK_PER_TURN``.
+      Per-turn (not accumulating) because verified work is meant
+      as "what just happened" context, not a session-long audit log.
+    - ``task_focus_state``: ``{"goal": None, "next_step": None}`` —
+      placeholder dict; Phase 13 evaluates whether to populate via
+      LLM. The session_memory render already handles None values
+      with placeholder strings, so Phase 12 ships the schema field
+      stably with None values rather than omitting it.
+
+    ``prior_metadata`` is optional — passed at resume time so the
+    rebuilt context's first turn extends the previous session's
+    ``recent_files`` rather than starting from scratch. When None,
+    treated as an empty starting dict.
+
+    Pure function: input messages list is never mutated; new dict
+    returned each call.
+    """
+    # --- recent_files: scan tool_use blocks for file tool paths ---
+    recent_files: list[str] = []
+    seen_files: set[str] = set()
+
+    # Seed from prior_metadata when resuming
+    if prior_metadata is not None:
+        prior_files = prior_metadata.get("recent_files", [])
+        if isinstance(prior_files, list):
+            for p in prior_files:
+                if isinstance(p, str) and p not in seen_files:
+                    seen_files.add(p)
+                    recent_files.append(p)
+
+    # Build a lookup: tool_use_id → tool_name so we can correlate
+    # tool_results back to the tool that produced them.
+    tool_use_lookup: dict[str, ToolUseBlock] = {}
+    for msg in messages:
+        for block in msg.content:
+            if isinstance(block, ToolUseBlock):
+                tool_use_lookup[block.id] = block
+                if block.name in _FILE_TOOL_NAMES:
+                    path = block.input.get("path") or block.input.get("file_path")
+                    if isinstance(path, str) and path not in seen_files:
+                        seen_files.add(path)
+                        recent_files.append(path)
+
+    # Cap at last N (preserve newest by dropping from the front)
+    if len(recent_files) > _MAX_RECENT_FILES:
+        recent_files = recent_files[-_MAX_RECENT_FILES:]
+
+    # --- verified_work: summarize successful tool_results ---
+    verified_work: list[str] = []
+    for msg in messages:
+        for block in msg.content:
+            if not isinstance(block, ToolResultBlock):
+                continue
+            if block.is_error:
+                continue
+            tool_use = tool_use_lookup.get(block.tool_use_id)
+            tool_name = tool_use.name if tool_use is not None else "unknown"
+            content_str = block.content if isinstance(block.content, str) else str(block.content)
+            snippet = content_str[:_VERIFIED_WORK_SNIPPET_CHARS]
+            # Collapse newlines so the one-liner stays one line
+            snippet = snippet.replace("\n", " ").replace("\r", " ")
+            verified_work.append(f"{tool_name}: {snippet}")
+
+    if len(verified_work) > _MAX_VERIFIED_WORK_PER_TURN:
+        verified_work = verified_work[-_MAX_VERIFIED_WORK_PER_TURN:]
+
+    return {
+        "recent_files": recent_files,
+        "verified_work": verified_work,
+        "task_focus_state": {"goal": None, "next_step": None},
+    }

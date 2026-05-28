@@ -36,6 +36,7 @@ from openharness.engine.errors import LoopLimitExceeded
 from openharness.engine.messages import (
     append_assistant_message,
     append_tool_results,
+    collect_turn_metadata,
     drop_oldest_tool_pair,
     extract_tool_uses,
 )
@@ -131,6 +132,36 @@ async def _maybe_extract_memories(
             written_count=len(result.written),
             names=[m.name for m in result.written],
         )
+
+
+def _maybe_write_turn_end_metadata(
+    context: QueryContext,
+    final_messages: list[ConversationMessage],
+) -> None:
+    """P12-T1 (D30.6 + D30.9): per-turn-end writers for session_memory
+    + (Phase 12 T3) snapshot.
+
+    Computes ``tool_metadata`` ONCE via :func:`collect_turn_metadata`
+    and feeds whichever consumer is wired (session_memory_path set →
+    session_memory.update_session_memory_file; T3 will add the
+    snapshot writer here using the SAME ``tool_metadata`` dict).
+
+    All failures caught + WARN-logged. Turn still returns success
+    because checkpoint/snapshot are best-effort persistence — they
+    must not block ``ConversationCompleteEvent`` emission.
+    """
+    if context.session_memory_path is None:
+        return  # session_memory subsystem disabled — skip
+
+    # Lazy import to avoid pulling services into engine module load
+    # graph unless turn-end writing is actually used.
+    from openharness.services.session_memory import update_session_memory_file
+
+    tool_metadata = collect_turn_metadata(final_messages)
+    try:
+        update_session_memory_file(context.cwd, tool_metadata, final_messages)
+    except OSError as exc:
+        logger.warning("session_memory_write_failed", error=str(exc))
 
 
 def _sanitize_tool_input(tool_input: dict[str, Any], cwd: Path) -> dict[str, Any]:
@@ -374,6 +405,13 @@ async def run_query(
                     # asyncio.create_task fire-and-forget if the
                     # latency is significant in real usage.
                     await _maybe_extract_memories(context, final_messages)
+                    # P12-T1 (D30.6 + D30.9): turn-end writers. Single
+                    # ``collect_turn_metadata`` producer feeds two
+                    # consumers (session_memory checkpoint + Phase 12
+                    # snapshot writer added in T3). Errors caught + logged
+                    # — turn still emits ``ConversationCompleteEvent``
+                    # so failure isolation matches the extract contract.
+                    _maybe_write_turn_end_metadata(context, final_messages)
                     yield ConversationCompleteEvent(messages=final_messages)
                     return  # end_turn / max_tokens / stop_sequence -> exit
 
