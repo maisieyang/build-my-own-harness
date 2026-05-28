@@ -119,3 +119,13 @@ class QueryContext:
     # the circular import (services/extract.py uses QueryContext
     # indirectly via the engine, and FilesystemMemoryStore lives
     # under memory/). Runtime type-checked in the engine.
+    # P12-T3 (decisions/27 D30.8): per-turn JSON snapshot writer.
+    # When True, the engine calls ``services.snapshot.write_session_snapshot``
+    # at the end of each user turn (alongside the session_memory
+    # writer; both share the same ``tool_metadata`` producer).
+    # **Default False** here so unit tests constructing QueryContext
+    # directly don't accidentally write snapshots to ~/.openharness/.
+    # The CLI bootstrap opts in via ``settings.snapshot.enabled``
+    # (default True in production).
+    snapshot_enabled: bool = False
+    snapshot_max_age_warn_days: int = 7

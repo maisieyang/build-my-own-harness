@@ -138,30 +138,49 @@ def _maybe_write_turn_end_metadata(
     context: QueryContext,
     final_messages: list[ConversationMessage],
 ) -> None:
-    """P12-T1 (D30.6 + D30.9): per-turn-end writers for session_memory
-    + (Phase 12 T3) snapshot.
+    """P12-T1 + P12-T3 (D30.6 + D30.9): per-turn-end writers for
+    session_memory checkpoint + Phase 12 snapshot.
 
-    Computes ``tool_metadata`` ONCE via :func:`collect_turn_metadata`
-    and feeds whichever consumer is wired (session_memory_path set →
-    session_memory.update_session_memory_file; T3 will add the
-    snapshot writer here using the SAME ``tool_metadata`` dict).
+    Single ``collect_turn_metadata`` call feeds BOTH consumers:
+
+    - session_memory writer (T1) when ``session_memory_path`` is set
+    - snapshot writer (T3) when ``snapshot_enabled`` is True
+
+    Both fire independently — disabling one doesn't disable the other.
+    Skip ``collect_turn_metadata`` entirely when neither is wired
+    (zero overhead for the no-snapshot, no-session_memory case).
 
     All failures caught + WARN-logged. Turn still returns success
-    because checkpoint/snapshot are best-effort persistence — they
-    must not block ``ConversationCompleteEvent`` emission.
+    because both writes are best-effort persistence — they must not
+    block ``ConversationCompleteEvent`` emission.
     """
-    if context.session_memory_path is None:
-        return  # session_memory subsystem disabled — skip
-
-    # Lazy import to avoid pulling services into engine module load
-    # graph unless turn-end writing is actually used.
-    from openharness.services.session_memory import update_session_memory_file
+    if context.session_memory_path is None and not context.snapshot_enabled:
+        return  # no consumer wired — skip the producer too
 
     tool_metadata = collect_turn_metadata(final_messages)
-    try:
-        update_session_memory_file(context.cwd, tool_metadata, final_messages)
-    except OSError as exc:
-        logger.warning("session_memory_write_failed", error=str(exc))
+
+    if context.session_memory_path is not None:
+        # Lazy import keeps services out of the engine module load
+        # graph unless a consumer is actually wired.
+        from openharness.services.session_memory import update_session_memory_file
+
+        try:
+            update_session_memory_file(context.cwd, tool_metadata, final_messages)
+        except OSError as exc:
+            logger.warning("session_memory_write_failed", error=str(exc))
+
+    if context.snapshot_enabled:
+        from openharness.services.snapshot import write_session_snapshot
+
+        try:
+            write_session_snapshot(
+                cwd=context.cwd,
+                tool_metadata=tool_metadata,
+                messages=final_messages,
+                context=context,
+            )
+        except OSError as exc:
+            logger.warning("snapshot_write_failed", error=str(exc))
 
 
 def _sanitize_tool_input(tool_input: dict[str, Any], cwd: Path) -> dict[str, Any]:

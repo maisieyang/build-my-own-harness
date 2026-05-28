@@ -690,6 +690,14 @@ async def _run_ask(
             extract_enabled=extract_enabled,
             extract_max_records=settings.extraction.max_records_per_turn,
             extract_timeout_s=settings.extraction.timeout_s,
+            # P12-T3 (D30.8): per-turn snapshot writer. Engine fires
+            # ``write_session_snapshot`` at user-turn end alongside
+            # the session_memory writer (single tool_metadata producer
+            # feeds both per D30.6). ``--no-resume`` is the user-side
+            # READ opt-out; writing stays on by default so a snapshot
+            # always exists when the user later decides to ``--resume``.
+            snapshot_enabled=settings.snapshot.enabled,
+            snapshot_max_age_warn_days=settings.snapshot.max_age_warn_days,
         )
 
         initial_messages = [
@@ -1107,6 +1115,9 @@ async def _run_chat(
                 extract_enabled=extract_enabled,
                 extract_max_records=settings.extraction.max_records_per_turn,
                 extract_timeout_s=settings.extraction.timeout_s,
+                # P12-T3 (D30.8): snapshot writer mirrored from ask.
+                snapshot_enabled=settings.snapshot.enabled,
+                snapshot_max_age_warn_days=settings.snapshot.max_age_warn_days,
             )
 
             history.append(ConversationMessage(role="user", content=[TextBlock(text=user_input)]))

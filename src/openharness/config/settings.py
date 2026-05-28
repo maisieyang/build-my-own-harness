@@ -195,6 +195,42 @@ class ExtractionSettings(BaseModel):
     )
 
 
+class SnapshotSettings(BaseModel):
+    """Tunables for the Phase 12 session-snapshot writer (D30.2 / D30.8).
+
+    Snapshot writes are per-turn and ~5ms (JSON serialize + atomic
+    file replace). ``enabled`` is env-only (no CLI flag) because the
+    write is invisible cost — the user-visible knob lives on the READ
+    side (``--no-resume``).
+
+    Env-var overrides via the existing ``__`` delimiter:
+
+    - ``OPENHARNESS_SNAPSHOT__ENABLED=false`` opts out of writing
+    - ``OPENHARNESS_SNAPSHOT__MAX_AGE_WARN_DAYS=30`` tunes the
+      staleness warning threshold at resume time
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description=(
+            "Write per-turn JSON snapshot to "
+            "``~/.openharness/snapshots/<basename>-<sha1>/current.json``. "
+            "When false, no snapshot is written and ``--resume`` has "
+            "nothing to load (the user-side read opt-out is "
+            "``--no-resume``, not this setting)."
+        ),
+    )
+    max_age_warn_days: int = Field(
+        default=7,
+        ge=0,
+        description=(
+            "Resume warns when loading a snapshot older than this. "
+            "0 disables the age warning (other staleness signals — "
+            "git HEAD drift, cwd mismatch, version mismatch — still fire)."
+        ),
+    )
+
+
 class Settings(BaseSettings):
     """OpenHarness runtime configuration.
 
@@ -515,6 +551,16 @@ class Settings(BaseSettings):
             "Nested extraction tunables (D29.5 + D29.8). Env vars: "
             "``OPENHARNESS_EXTRACTION__ENABLED`` / "
             "``OPENHARNESS_EXTRACTION__MODEL`` etc. See :class:`ExtractionSettings`."
+        ),
+    )
+    snapshot: SnapshotSettings = Field(
+        default_factory=SnapshotSettings,
+        description=(
+            "Nested snapshot tunables (D30.2 + D30.8). Env vars: "
+            "``OPENHARNESS_SNAPSHOT__ENABLED`` / "
+            "``OPENHARNESS_SNAPSHOT__MAX_AGE_WARN_DAYS``. "
+            "See :class:`SnapshotSettings`. The user-visible read opt-"
+            "out is the ``--no-resume`` CLI flag, not this setting."
         ),
     )
 
