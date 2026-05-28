@@ -754,6 +754,8 @@ async def _run_ask(
             # always exists when the user later decides to ``--resume``.
             snapshot_enabled=settings.snapshot.enabled,
             snapshot_max_age_warn_days=settings.snapshot.max_age_warn_days,
+            snapshot_history_max_count=settings.snapshot.history.max_count,
+            snapshot_history_max_age_days=settings.snapshot.history.max_age_days,
         )
 
         # P12-T5 (D30.4): --resume loads the cwd's snapshot and
@@ -782,6 +784,8 @@ async def _run_ask(
                     session_memory_path=context.session_memory_path,
                     snapshot_enabled=context.snapshot_enabled,
                     snapshot_max_age_warn_days=context.snapshot_max_age_warn_days,
+                    snapshot_history_max_count=context.snapshot_history_max_count,
+                    snapshot_history_max_age_days=context.snapshot_history_max_age_days,
                     compact_enabled=compact_enabled,
                     compact_threshold_ratio=compact_threshold_ratio,
                     compact_full_max_tokens=settings.compact.full_compact_max_tokens,
@@ -1247,6 +1251,8 @@ async def _run_chat(
                 # P12-T3 (D30.8): snapshot writer mirrored from ask.
                 snapshot_enabled=settings.snapshot.enabled,
                 snapshot_max_age_warn_days=settings.snapshot.max_age_warn_days,
+                snapshot_history_max_count=settings.snapshot.history.max_count,
+                snapshot_history_max_age_days=settings.snapshot.history.max_age_days,
             )
 
             history.append(ConversationMessage(role="user", content=[TextBlock(text=user_input)]))

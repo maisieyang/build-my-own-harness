@@ -178,6 +178,8 @@ def _maybe_write_turn_end_metadata(
                 tool_metadata=tool_metadata,
                 messages=final_messages,
                 context=context,
+                history_max_count=context.snapshot_history_max_count,
+                history_max_age_days=context.snapshot_history_max_age_days,
             )
         except OSError as exc:
             logger.warning("snapshot_write_failed", error=str(exc))

@@ -319,6 +319,8 @@ def write_session_snapshot(
     tool_metadata: dict[str, Any],
     messages: list[ConversationMessage],
     context: QueryContext,
+    history_max_count: int | None = None,
+    history_max_age_days: int | None = None,
 ) -> Path:
     """Atomically write the JSON snapshot for ``cwd``. Returns the
     path written (``<dir>/current.json``).
@@ -328,6 +330,15 @@ def write_session_snapshot(
     :func:`openharness.services.session_memory.update_session_memory_file`,
     same atomicity guarantee (concurrent ``load_snapshot`` reads either
     the previous version or the new one, never partial).
+
+    P13-T1 (D31.3): when a pre-existing ``current.json`` is being
+    overwritten, it first gets rotated into ``history/<key>.json``
+    via :func:`_rotate_current_to_history` BEFORE the new content
+    lands. ``history_max_count`` + ``history_max_age_days`` arrive
+    from ``settings.snapshot.history.*``; when None, rotation
+    still happens but uses the default caps from
+    :class:`SnapshotHistorySettings`. Pass 0 to disable that arm
+    specifically.
 
     Per D30.9 the engine call site catches ``OSError`` from this
     function — failures don't fail the turn but DO emit a warning log
@@ -346,6 +357,23 @@ def write_session_snapshot(
     )
     content = json.dumps(payload, indent=2, ensure_ascii=False)
 
+    # P13-T1 (D31.3): rotate pre-existing current.json into history/
+    # BEFORE overwriting. Read first → write new → move old.
+    # Reader sees old-or-new (never missing) per atomicity contract.
+    rotation_source: dict[str, Any] | None = None
+    if snapshot_path.exists():
+        try:
+            rotation_source = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            # Existing snapshot unreadable/malformed — don't block the
+            # new write, but log so the corruption surfaces.
+            _logger.warning(
+                "snapshot_rotation_read_failed",
+                snapshot=str(snapshot_path),
+                error=str(exc),
+            )
+            rotation_source = None
+
     tmp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -363,4 +391,229 @@ def write_session_snapshot(
         if tmp_path is not None and tmp_path.exists():
             with contextlib.suppress(OSError):
                 tmp_path.unlink()
+
+    # P13-T1 (D31.3 + D31.5): rotation step. Failures here are
+    # WARN-logged but don't fail the snapshot write (the new
+    # current.json is already live).
+    if rotation_source is not None:
+        max_count = (
+            history_max_count if history_max_count is not None else _DEFAULT_HISTORY_MAX_COUNT
+        )
+        max_age_days = (
+            history_max_age_days
+            if history_max_age_days is not None
+            else _DEFAULT_HISTORY_MAX_AGE_DAYS
+        )
+        try:
+            _rotate_current_to_history(
+                storage_dir=storage_dir,
+                rotation_source=rotation_source,
+                max_count=max_count,
+                max_age_days=max_age_days,
+            )
+        except OSError as exc:
+            _logger.warning(
+                "snapshot_rotation_failed",
+                snapshot=str(snapshot_path),
+                error=str(exc),
+            )
+
     return snapshot_path
+
+
+# ---------------------------------------------------------------------------
+# Phase 13 (D31.2 + D31.3 + D31.4 + D31.5): rotation
+# ---------------------------------------------------------------------------
+
+
+_DEFAULT_HISTORY_MAX_COUNT = 100
+_DEFAULT_HISTORY_MAX_AGE_DAYS = 90
+_HISTORY_DIR_NAME = "history"
+_HISTORY_COLLISION_SUFFIX_MAX = 99
+
+
+def _compute_history_name(snapshot: dict[str, Any]) -> str:
+    """Build the history/ filename for ``snapshot`` per D31.4.
+
+    Format: ``<git_head>-<YYYYMMDDhhmmss>.json``. When ``git_head``
+    is null/missing, the literal ``"nogit"`` substitutes. When
+    ``created_at`` can't be parsed, the current wall-clock is used.
+
+    Collision suffix (``-<n>``) is appended by caller — this
+    function returns the BASE name; collision resolution is done
+    against the destination directory.
+    """
+    git_head = snapshot.get("git_head")
+    if not isinstance(git_head, str) or not git_head:
+        git_head = "nogit"
+
+    created_at = snapshot.get("created_at")
+    iso_short: str
+    if isinstance(created_at, str):
+        try:
+            dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            iso_short = dt.strftime("%Y%m%d%H%M%S")
+        except ValueError:
+            iso_short = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    else:
+        iso_short = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+
+    return f"{git_head}-{iso_short}.json"
+
+
+def _resolve_history_path(history_dir: Path, base_name: str) -> Path:
+    """Return a non-existent path in ``history_dir`` for ``base_name``.
+
+    If ``history_dir/base_name`` exists, append ``-1``, ``-2``, etc.
+    up to ``_HISTORY_COLLISION_SUFFIX_MAX`` per D31.4. Raises ``OSError``
+    if all suffixes exhausted (extremely rare).
+    """
+    candidate = history_dir / base_name
+    if not candidate.exists():
+        return candidate
+    stem = candidate.stem
+    suffix = candidate.suffix
+    for n in range(1, _HISTORY_COLLISION_SUFFIX_MAX + 1):
+        alt = history_dir / f"{stem}-{n}{suffix}"
+        if not alt.exists():
+            return alt
+    raise OSError(
+        f"history/ name collision exhausted: {base_name!r} + "
+        f"{_HISTORY_COLLISION_SUFFIX_MAX} numeric suffixes all taken"
+    )
+
+
+def _rotate_current_to_history(
+    *,
+    storage_dir: Path,
+    rotation_source: dict[str, Any],
+    max_count: int,
+    max_age_days: int,
+) -> Path | None:
+    """Move ``rotation_source`` content into ``storage_dir/history/``.
+
+    The new current.json must already be in place (caller's
+    responsibility). This function ONLY moves the previously-buffered
+    old content to history/ then runs GC.
+
+    Atomicity (D31.5): write the new history entry by re-serializing
+    the buffered ``rotation_source`` dict atomically (tempfile +
+    os.replace). We don't hardlink the live current.json because by
+    the time this function runs, current.json holds the NEW content.
+    The old content is in memory (``rotation_source`` arg), so the
+    atomic-rewrite path is the natural fit — same pattern as the
+    write_session_snapshot atomic write above.
+
+    Returns the history/ path written (or None on no-op when
+    max_count=0 → no history kept).
+    """
+    if max_count == 0:
+        # max_count=0 means "keep no history" — still GC anything
+        # already there but don't add a new entry.
+        history_dir = storage_dir / _HISTORY_DIR_NAME
+        if history_dir.exists():
+            _gc_history(history_dir, max_count=0, max_age_days=max_age_days)
+        return None
+
+    history_dir = storage_dir / _HISTORY_DIR_NAME
+    history_dir.mkdir(parents=True, exist_ok=True)
+
+    base_name = _compute_history_name(rotation_source)
+    history_path = _resolve_history_path(history_dir, base_name)
+
+    # Re-serialize from the buffered dict and atomically write into
+    # history/. Same tempfile + os.replace pattern as the main write.
+    content = json.dumps(rotation_source, indent=2, ensure_ascii=False)
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=history_dir,
+            delete=False,
+            suffix=".tmp",
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+            tmp.write(content)
+        os.replace(tmp_path, history_path)
+        tmp_path = None
+    finally:
+        if tmp_path is not None and tmp_path.exists():
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
+
+    # GC entries exceeding either threshold.
+    _gc_history(history_dir, max_count=max_count, max_age_days=max_age_days)
+
+    return history_path
+
+
+def _gc_history(
+    history_dir: Path,
+    *,
+    max_count: int,
+    max_age_days: int,
+) -> list[Path]:
+    """Drop history/ entries exceeding ``max_count`` or ``max_age_days``.
+
+    Returns the list of paths dropped (for ``oh snapshot gc``
+    reporting). Drops oldest-first. Either arm at 0 skips that
+    check (max_count=0 keeps no entries; max_age_days=0 disables
+    the age arm).
+
+    Failures unlinking individual entries are WARN-logged but
+    don't abort the GC pass — best-effort cleanup.
+    """
+    if not history_dir.exists():
+        return []
+
+    entries: list[tuple[float, Path]] = []
+    for path in history_dir.iterdir():
+        if path.suffix != ".json":
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        entries.append((mtime, path))
+
+    # Sort newest-first so we drop from the END
+    entries.sort(key=lambda e: e[0], reverse=True)
+
+    dropped: list[Path] = []
+
+    # Count-based: drop everything past max_count (already in
+    # newest-first order, so [max_count:] is the oldest).
+    if max_count >= 0:
+        to_drop_by_count = entries[max_count:] if max_count > 0 else entries[:]
+        for _mtime, path in to_drop_by_count:
+            try:
+                path.unlink()
+                dropped.append(path)
+            except OSError as exc:
+                _logger.warning(
+                    "snapshot_gc_failed",
+                    path=str(path),
+                    error=str(exc),
+                )
+        # Remove dropped entries from the working list
+        kept = entries[:max_count] if max_count > 0 else []
+    else:
+        kept = entries
+
+    # Age-based: drop entries older than max_age_days.
+    if max_age_days > 0:
+        cutoff = datetime.now(timezone.utc).timestamp() - max_age_days * 86400
+        for mtime, path in kept:
+            if mtime < cutoff:
+                try:
+                    path.unlink()
+                    dropped.append(path)
+                except OSError as exc:
+                    _logger.warning(
+                        "snapshot_gc_failed",
+                        path=str(path),
+                        error=str(exc),
+                    )
+
+    return dropped

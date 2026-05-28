@@ -195,6 +195,47 @@ class ExtractionSettings(BaseModel):
     )
 
 
+class SnapshotHistorySettings(BaseModel):
+    """Tunables for the Phase 13 history/ rotation (D31.2).
+
+    Eager rotation runs after every per-turn snapshot write; this
+    nested model holds the count + age thresholds. Both arms
+    enforced together — whichever hits first drops oldest entries
+    from history/.
+
+    Env-var overrides via double-underscore:
+
+    - ``OPENHARNESS_SNAPSHOT__HISTORY__MAX_COUNT=200`` raises the
+      count cap from default 100
+    - ``OPENHARNESS_SNAPSHOT__HISTORY__MAX_AGE_DAYS=30`` shortens
+      the age cap from default 90
+    - Either value at 0 disables that arm specifically (count=0
+      keeps no history; age=0 keeps no age limit). max_count=0 means
+      "rotation never preserves history" — current.json still rotates
+      but immediately gets gc'd.
+    """
+
+    max_count: int = Field(
+        default=100,
+        ge=0,
+        description=(
+            "Maximum number of entries to keep in history/. Oldest "
+            "dropped first when over. 0 = keep no history entries "
+            "(history/ stays empty). Matches git reflog default count."
+        ),
+    )
+    max_age_days: int = Field(
+        default=90,
+        ge=0,
+        description=(
+            "Maximum age in days for entries in history/. Older "
+            "dropped on next rotation. 0 = disable age-based GC "
+            "(only ``max_count`` enforced). Matches git reflog "
+            "default age."
+        ),
+    )
+
+
 class SnapshotSettings(BaseModel):
     """Tunables for the Phase 12 session-snapshot writer (D30.2 / D30.8).
 
@@ -208,6 +249,8 @@ class SnapshotSettings(BaseModel):
     - ``OPENHARNESS_SNAPSHOT__ENABLED=false`` opts out of writing
     - ``OPENHARNESS_SNAPSHOT__MAX_AGE_WARN_DAYS=30`` tunes the
       staleness warning threshold at resume time
+    - ``OPENHARNESS_SNAPSHOT__HISTORY__MAX_COUNT=200`` (Phase 13)
+    - ``OPENHARNESS_SNAPSHOT__LLM_FOCUS_STATE=true`` (Phase 13)
     """
 
     enabled: bool = Field(
@@ -227,6 +270,15 @@ class SnapshotSettings(BaseModel):
             "Resume warns when loading a snapshot older than this. "
             "0 disables the age warning (other staleness signals — "
             "git HEAD drift, cwd mismatch, version mismatch — still fire)."
+        ),
+    )
+    history: SnapshotHistorySettings = Field(
+        default_factory=SnapshotHistorySettings,
+        description=(
+            "Nested history/ rotation tunables (Phase 13 D31.2). "
+            "Env vars: ``OPENHARNESS_SNAPSHOT__HISTORY__MAX_COUNT`` + "
+            "``OPENHARNESS_SNAPSHOT__HISTORY__MAX_AGE_DAYS``. See "
+            ":class:`SnapshotHistorySettings`."
         ),
     )
 

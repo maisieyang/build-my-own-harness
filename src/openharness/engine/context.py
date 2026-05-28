@@ -130,6 +130,13 @@ class QueryContext:
     # (default True in production).
     snapshot_enabled: bool = False
     snapshot_max_age_warn_days: int = 7
+    # P13-T1 (D31.2): history/ rotation knobs passed through to
+    # ``write_session_snapshot``. Defaults match
+    # ``SnapshotHistorySettings`` defaults so QueryContext-direct
+    # callers (unit tests) get the same behavior as CLI-bootstrapped
+    # production (100 entries / 90 days).
+    snapshot_history_max_count: int = 100
+    snapshot_history_max_age_days: int = 90
 
     @classmethod
     def from_snapshot(
@@ -147,6 +154,8 @@ class QueryContext:
         session_memory_path: Path | None = None,
         snapshot_enabled: bool = False,
         snapshot_max_age_warn_days: int = 7,
+        snapshot_history_max_count: int = 100,
+        snapshot_history_max_age_days: int = 90,
         compact_enabled: bool = True,
         compact_threshold_ratio: float = 0.83,
         compact_full_max_tokens: int = 20_000,
@@ -226,5 +235,7 @@ class QueryContext:
             memory_store=memory_store,
             snapshot_enabled=snapshot_enabled,
             snapshot_max_age_warn_days=snapshot_max_age_warn_days,
+            snapshot_history_max_count=snapshot_history_max_count,
+            snapshot_history_max_age_days=snapshot_history_max_age_days,
         )
         return context, messages
