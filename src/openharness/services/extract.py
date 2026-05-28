@@ -15,8 +15,11 @@ The closed loop:
 2. Next turn's :func:`select_relevant_memories` discovers them
 3. Picked memories → injected into system prompt + ``mark_memory_used``
    increments ``use_count`` atomically
-4. Phase 13 (future): ``find_stale_memory_candidates`` GCs the ones
-   that never get picked
+4. Phase 14+ (future): ``find_stale_memory_candidates`` GCs the ones
+   that never get picked (Phase 13 chose snapshot rotation over memory
+   GC; ``auto-dream subprocess`` + ``oh memory add`` are now Phase 14+
+   candidates per ``tasks/phase-13-plan.md`` §"Risks specifically NOT
+   mitigated")
 
 Why a separate LLM pass (vs a tool in the main loop): cleaner failure
 isolation (extraction errors don't poison the turn), focused prompt

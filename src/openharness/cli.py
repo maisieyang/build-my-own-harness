@@ -2245,6 +2245,329 @@ def memory_path() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# P13-T2 (D31.6): oh snapshot list / show / gc                                #
+# --------------------------------------------------------------------------- #
+#
+# Mirrors the ``oh memory list / show / path`` pattern (Phase 10 T5):
+# typer sub-app with 3 read-mostly subcommands for user-side
+# introspection. ``list`` is discoverability, ``show`` is inspection,
+# ``gc`` is force-cleanup outside the per-turn eager rotation path.
+
+snapshot_app = typer.Typer(
+    name="snapshot",
+    help="Inspect + manage Phase 12 snapshots for the current cwd.",
+)
+app.add_typer(snapshot_app, name="snapshot")
+
+
+def _snapshot_list_entries(cwd: Path) -> list[tuple[str, Path]]:
+    """Return ``[(id, path), ...]`` for ``current.json`` + history/ entries.
+
+    Sorted: ``current`` always first; history/ newest-first by mtime.
+    Returns empty list when no snapshot dir exists.
+    """
+    from openharness.services.snapshot import get_snapshot_dir
+
+    snapshot_dir = get_snapshot_dir(cwd)
+    if not snapshot_dir.exists():
+        return []
+
+    entries: list[tuple[str, Path]] = []
+    current_path = snapshot_dir / "current.json"
+    if current_path.exists():
+        entries.append(("current", current_path))
+
+    history_dir = snapshot_dir / "history"
+    if history_dir.exists():
+        history_paths: list[tuple[float, Path]] = []
+        for path in history_dir.iterdir():
+            if path.suffix != ".json":
+                continue  # pragma: no cover — defensive: non-.json file in history/
+            try:
+                history_paths.append((path.stat().st_mtime, path))
+            except OSError:  # pragma: no cover — defensive: file vanished mid-scan
+                continue
+        history_paths.sort(key=lambda e: e[0], reverse=True)
+        for _mtime, path in history_paths:
+            # ID = filename without .json suffix
+            entries.append((path.stem, path))
+
+    return entries
+
+
+def _format_age(created_iso: str) -> str:
+    """Human-readable relative age from an ISO timestamp string."""
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
+
+    try:
+        created = _dt.fromisoformat(created_iso.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return "?"
+    now = _dt.now(_tz.utc)
+    delta = now - created
+    seconds = int(delta.total_seconds())
+    if seconds < 60:
+        return f"{seconds}s ago"
+    if seconds < 3600:
+        return f"{seconds // 60}m ago"
+    if seconds < 86400:
+        return f"{seconds // 3600}h ago"
+    return f"{seconds // 86400}d ago"
+
+
+@snapshot_app.command("list", help="List snapshots (current + history/) for cwd.")
+def snapshot_list(
+    format: str = typer.Option(
+        "text",
+        "--format",
+        "-f",
+        help="Output format: text (default) or json.",
+    ),
+) -> None:
+    """Tabular listing — ``current`` first, then history/ newest-first.
+
+    Columns: ID / CREATED / MESSAGES / GIT_HEAD / AGE.
+    Empty case prints "(no snapshots — storage at <path>)".
+    """
+    import json as _json
+
+    from openharness.services.snapshot import get_snapshot_dir
+
+    cwd = Path.cwd()
+    entries = _snapshot_list_entries(cwd)
+
+    if not entries:
+        if format == "json":
+            typer.echo("[]")
+            return
+        snapshot_dir = get_snapshot_dir(cwd)
+        typer.echo(f"(no snapshots — storage at {snapshot_dir})")
+        return
+
+    # Parse each entry's JSON to extract display fields
+    parsed: list[dict[str, Any]] = []
+    for id_, path in entries:
+        try:
+            data = _json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, _json.JSONDecodeError):
+            continue
+        parsed.append(
+            {
+                "id": id_,
+                "created_at": data.get("created_at", "?"),
+                "message_count": len(data.get("messages", [])),
+                "git_head": data.get("git_head") or "(no git)",
+                "path": str(path),
+            }
+        )
+
+    if format == "json":
+        typer.echo(_json.dumps(parsed, indent=2))
+        return
+
+    # Text format: aligned columns
+    id_width = max(len(p["id"]) for p in parsed) + 2
+    id_width = max(id_width, 12)  # min "ID" header width
+    typer.echo(f"{'ID':<{id_width}}{'CREATED':<22}{'MESSAGES':<10}{'GIT_HEAD':<11}{'AGE':<10}")
+    for p in parsed:
+        created = p["created_at"]
+        if len(created) > 19:
+            # ISO datetime — render the date/time part only
+            created = created[:19].replace("T", " ")
+        typer.echo(
+            f"{p['id']:<{id_width}}"
+            f"{created:<22}"
+            f"{p['message_count']:<10}"
+            f"{p['git_head']:<11}"
+            f"{_format_age(p['created_at']):<10}"
+        )
+
+
+def _resolve_snapshot_id(cwd: Path, snapshot_id: str) -> Path:
+    """Look up a snapshot by ``current`` literal or git_head prefix.
+
+    Raises ``typer.Exit(1)`` on not-found or ambiguous prefix
+    (with stderr message listing matches).
+    """
+    entries = _snapshot_list_entries(cwd)
+
+    if snapshot_id == "current":
+        for id_, path in entries:
+            if id_ == "current":
+                return path
+        typer.echo(f"No current snapshot for cwd={cwd}", err=True)
+        raise typer.Exit(code=1)
+
+    # Prefix match against history entry IDs (and current.json's git_head if requested)
+    matches: list[tuple[str, Path]] = []
+    for id_, path in entries:
+        if id_ == "current":
+            continue
+        # ID format: <git_head>-<YYYYMMDDhhmmss> (or "<git_head>-<YYYYMMDDhhmmss>-<n>")
+        # Match against the leading git_head portion
+        git_head_part = id_.split("-")[0]
+        if git_head_part.startswith(snapshot_id) or id_.startswith(snapshot_id):
+            matches.append((id_, path))
+
+    if not matches:
+        typer.echo(
+            f"No snapshot for cwd={cwd} matching id prefix {snapshot_id!r}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if len(matches) > 1:
+        match_ids = ", ".join(id_ for id_, _ in matches)
+        typer.echo(
+            f"Ambiguous snapshot id {snapshot_id!r} — matches: {match_ids}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    return matches[0][1]
+
+
+@snapshot_app.command("show", help="Render a specific snapshot for inspection.")
+def snapshot_show(
+    snapshot_id: str = typer.Argument(
+        ..., help="Snapshot ID: ``current`` literal or git_head prefix."
+    ),
+    format: str = typer.Option(
+        "text",
+        "--format",
+        "-f",
+        help="Output format: text (default) or json (raw on-disk file).",
+    ),
+) -> None:
+    """Print the snapshot's metadata + message one-liners.
+
+    ``--format json`` prints the raw on-disk JSON for tooling /
+    machine consumption. Text format uses Phase 11's message
+    one-liner shape (80 char cap, newlines → spaces).
+    """
+    import json as _json
+
+    cwd = Path.cwd()
+    path = _resolve_snapshot_id(cwd, snapshot_id)
+
+    raw = path.read_text(encoding="utf-8")
+    if format == "json":
+        typer.echo(raw)
+        return
+
+    try:
+        data = _json.loads(raw)
+    except _json.JSONDecodeError as exc:
+        typer.echo(f"Snapshot file unparseable: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    # Render header
+    typer.echo(f"id:            {snapshot_id}")
+    typer.echo(f"path:          {path}")
+    typer.echo(f"created_at:    {data.get('created_at', '?')}")
+    typer.echo(f"git_head:      {data.get('git_head') or '(no git)'}")
+    typer.echo(f"model:         {data.get('model', '?')}")
+    typer.echo(f"message_count: {len(data.get('messages', []))}")
+    system_prompt = data.get("system_prompt") or ""
+    if len(system_prompt) > 240:
+        system_prompt = system_prompt[:240] + "..."
+    typer.echo(f"system_prompt: {system_prompt}")
+    typer.echo("")
+    typer.echo("messages:")
+    for i, msg in enumerate(data.get("messages", []), start=1):
+        role = msg.get("role", "?")
+        content = msg.get("content") or []
+        oneliner = ""
+        if content:
+            block = content[0]
+            block_type = block.get("type", "?")
+            if block_type == "text":
+                oneliner = block.get("text", "")
+            elif block_type == "tool_use":
+                oneliner = f"[tool] {block.get('name', '?')}"
+            elif block_type == "tool_result":
+                oneliner = f"[result] {str(block.get('content', ''))[:60]}"
+            else:
+                oneliner = f"[{block_type}]"
+        # Collapse newlines + cap at 80
+        oneliner = oneliner.replace("\n", " ").replace("\r", " ")[:80]
+        typer.echo(f"  {i:3d}. [{role}] {oneliner}")
+
+
+@snapshot_app.command("gc", help="Force-rotate history/ entries exceeding count/age thresholds.")
+def snapshot_gc(
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Report what WOULD be dropped without actually unlinking.",
+    ),
+) -> None:
+    """Manual force-cleanup outside the per-turn eager rotation path.
+
+    Reads ``settings.snapshot.history.*`` thresholds. ``--dry-run``
+    lists what would be dropped without doing it; exit 0 either way.
+    """
+    from openharness.services.snapshot import (
+        _gc_history,
+        get_snapshot_dir,
+    )
+
+    settings = _load_settings()
+    cwd = Path.cwd()
+    snapshot_dir = get_snapshot_dir(cwd)
+    history_dir = snapshot_dir / "history"
+
+    if not history_dir.exists() or not any(history_dir.iterdir()):
+        typer.echo("(no snapshots to gc)")
+        return
+
+    max_count = settings.snapshot.history.max_count
+    max_age_days = settings.snapshot.history.max_age_days
+
+    if dry_run:
+        # Replicate _gc_history's dropping logic in a side-effect-free way
+        from datetime import datetime as _dt
+        from datetime import timezone as _tz
+
+        entries: list[tuple[float, Path]] = []
+        for p in history_dir.iterdir():
+            if p.suffix != ".json":
+                continue  # pragma: no cover — defensive
+            try:
+                entries.append((p.stat().st_mtime, p))
+            except OSError:  # pragma: no cover — defensive
+                continue
+        entries.sort(key=lambda e: e[0], reverse=True)
+
+        would_drop: list[Path] = []
+        # Count arm
+        if max_count >= 0:
+            tail = entries[max_count:] if max_count > 0 else entries[:]
+            would_drop.extend(p for _m, p in tail)
+            kept = entries[:max_count] if max_count > 0 else []
+        else:
+            kept = entries
+        # Age arm
+        if max_age_days > 0:
+            cutoff = _dt.now(_tz.utc).timestamp() - max_age_days * 86400
+            for mtime, p in kept:
+                if mtime < cutoff:
+                    would_drop.append(p)
+
+        if not would_drop:
+            typer.echo(f"(nothing to drop — {len(entries)} entries within thresholds)")
+            return
+        typer.echo(f"(dry-run) Would drop {len(would_drop)} snapshot(s):")
+        for p in would_drop:
+            typer.echo(f"  {p}")
+        return
+
+    dropped = _gc_history(history_dir, max_count=max_count, max_age_days=max_age_days)
+    typer.echo(f"Dropped {len(dropped)} snapshot(s) from history/")
+
+
+# --------------------------------------------------------------------------- #
 # Entry point                                                                 #
 # --------------------------------------------------------------------------- #
 
