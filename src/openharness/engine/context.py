@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from openharness.api import SupportsStreamingMessages
     from openharness.execution import ExecutionEnvironment
     from openharness.permissions import PermissionChecker
+    from openharness.protocols.messages import ConversationMessage
     from openharness.skills.store import SkillStore
     from openharness.tools import ToolRegistry
 
@@ -129,3 +130,101 @@ class QueryContext:
     # (default True in production).
     snapshot_enabled: bool = False
     snapshot_max_age_warn_days: int = 7
+
+    @classmethod
+    def from_snapshot(
+        cls,
+        snapshot: dict[str, Any],
+        *,
+        api_client: SupportsStreamingMessages,
+        tool_registry: ToolRegistry,
+        permission_checker: PermissionChecker,
+        cwd: Path,
+        hook_registry: HookRegistry | None = None,
+        execution_env: ExecutionEnvironment | None = None,
+        skill_store: SkillStore | None = None,
+        memory_store: Any = None,
+        session_memory_path: Path | None = None,
+        snapshot_enabled: bool = False,
+        snapshot_max_age_warn_days: int = 7,
+        compact_enabled: bool = True,
+        compact_threshold_ratio: float = 0.83,
+        compact_full_max_tokens: int = 20_000,
+        compact_full_timeout_s: float = 25.0,
+        extract_enabled: bool = True,
+        extract_max_records: int = 3,
+        extract_timeout_s: float = 30.0,
+        max_turns: int = 20,
+        max_agent_depth: int = 3,
+    ) -> tuple[QueryContext, list[ConversationMessage]]:
+        """P12-T4 (D30.7): rebuild a QueryContext from a snapshot dict.
+
+        The split: AGENT-STATE (what the LLM saw) comes from
+        ``snapshot``; RUNTIME-STATE (what the harness provides this
+        invocation) is passed by the caller. The caller's job is to
+        build a fresh registry / hooks / execution_env tree as if
+        starting a new ``oh ask`` — then pass it in. We don't try to
+        re-validate snapshot fields against the current registries
+        (a tool removed since the snapshot is fine — the LLM may
+        still reference it; engine's standard "tool not found"
+        recovery handles).
+
+        Loaded from snapshot:
+        - ``model``, ``max_tokens``, ``permission_mode``,
+          ``system_prompt``, ``messages``
+
+        Caller-required runtime kwargs (no defaults — must reconstruct
+        each invocation):
+        - ``api_client`` / ``tool_registry`` / ``permission_checker``
+          / ``cwd``
+
+        Caller-optional runtime kwargs (sane defaults for tests):
+        - everything else
+
+        Returns ``(context, messages)``: ``messages`` is the parsed
+        history ready to be passed as ``initial_messages`` to
+        ``run_query`` (typically with one new user message appended
+        for the resume's "next question").
+
+        Raises:
+            KeyError: required snapshot field missing.
+            pydantic.ValidationError: snapshot's message blocks fail
+                ``ConversationMessage.model_validate`` (indicates a
+                snapshot from a different content-block schema).
+        """
+        from openharness.permissions import PermissionMode as _PM
+        from openharness.protocols.messages import ConversationMessage as _CM
+
+        model = snapshot["model"]
+        max_tokens = snapshot["max_tokens"]
+        permission_mode = _PM(snapshot["permission_mode"])
+        system_prompt = snapshot["system_prompt"]
+        messages = [_CM.model_validate(m) for m in snapshot["messages"]]
+
+        context = cls(
+            api_client=api_client,
+            tool_registry=tool_registry,
+            permission_checker=permission_checker,
+            system_prompt=system_prompt,
+            cwd=cwd,
+            model=model,
+            max_tokens=max_tokens,
+            max_turns=max_turns,
+            permission_mode=permission_mode,
+            max_agent_depth=max_agent_depth,
+            hook_registry=hook_registry if hook_registry is not None else HookRegistry(),
+            skill_store=skill_store if skill_store is not None else EmptySkillStore(),
+            execution_env=execution_env if execution_env is not None else _HOST_EXECUTION,
+            compact_enabled=compact_enabled,
+            compact_threshold_ratio=compact_threshold_ratio,
+            compact_full_max_tokens=compact_full_max_tokens,
+            compact_full_timeout_s=compact_full_timeout_s,
+            session_memory_path=session_memory_path,
+            extract_enabled=extract_enabled,
+            extract_max_records=extract_max_records,
+            extract_timeout_s=extract_timeout_s,
+            memory_store=memory_store,
+            snapshot_enabled=snapshot_enabled,
+            snapshot_max_age_warn_days=snapshot_max_age_warn_days,
+        )
+        return context, messages
