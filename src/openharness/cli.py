@@ -42,7 +42,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import typer
 
@@ -157,6 +157,60 @@ def _load_settings() -> Settings:
     """
     user_env = Path.home() / ".openharness" / ".env"
     return Settings(_env_file=(str(user_env), ".env"))
+
+
+def _load_resume_snapshot(
+    cwd: Path,
+    *,
+    resume_id: str | None,
+) -> dict[str, Any] | None:
+    """P12-T5 (D30.4 + D30.5): load a snapshot for ``--resume``.
+
+    Surfaces the staleness contract to the CLI layer:
+
+    - ``SnapshotNotFound`` → return None (caller warns "no snapshot —
+      starting fresh"; resume falls through to fresh-session path)
+    - ``SnapshotCwdMismatch`` / ``SnapshotVersionMismatch`` /
+      ``SnapshotMalformed`` → raise typer.Exit(1) with stderr
+      explaining (silent corruption / breakage; user MUST know)
+    - git HEAD drift → warn-logged inside ``load_snapshot``; no
+      additional CLI surface (the WARNING already shows in stderr
+      under the default log level)
+
+    Returns the snapshot dict on success, None on
+    ``SnapshotNotFound`` (caller handles "start fresh").
+    """
+    from openharness.services.snapshot import (
+        SnapshotCwdMismatch,
+        SnapshotMalformed,
+        SnapshotNotFound,
+        SnapshotVersionMismatch,
+        load_snapshot,
+    )
+
+    try:
+        return load_snapshot(cwd, snapshot_id=resume_id)
+    except SnapshotNotFound:
+        if resume_id is not None:
+            typer.echo(
+                f"No snapshot matching id={resume_id!r} for cwd={cwd}",
+                err=True,
+            )
+            raise typer.Exit(code=1) from None
+        typer.echo(
+            f"No snapshot for cwd={cwd} — starting fresh.",
+            err=True,
+        )
+        return None
+    except SnapshotCwdMismatch as exc:
+        typer.echo(f"Snapshot cwd mismatch: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except SnapshotVersionMismatch as exc:
+        typer.echo(f"Snapshot version mismatch: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except SnapshotMalformed as exc:
+        typer.echo(f"Snapshot malformed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
 
 
 def _build_client(settings: Settings) -> OpenAICompatibleApiClient:
@@ -307,6 +361,8 @@ async def _run_ask(
     compact_threshold_override: float | None = None,
     no_auto_compact: bool = False,
     no_extract: bool = False,
+    resume: bool = False,
+    resume_id: str | None = None,
 ) -> None:
     """Build the QueryContext, run the loop, render the events.
 
@@ -700,9 +756,54 @@ async def _run_ask(
             snapshot_max_age_warn_days=settings.snapshot.max_age_warn_days,
         )
 
-        initial_messages = [
-            ConversationMessage(role="user", content=[TextBlock(text=prompt)]),
-        ]
+        # P12-T5 (D30.4): --resume loads the cwd's snapshot and
+        # rebuilds the context's agent-state (model / max_tokens /
+        # permission_mode / system_prompt / messages). Runtime state
+        # (registries / hooks / execution_env / memory_store) stays
+        # what we just built above — D30.7's split.
+        #
+        # On snapshot-not-found, _load_resume_snapshot returns None
+        # (no-arg --resume warns + starts fresh) or exits 1 (explicit
+        # --resume-id mismatch). Other staleness errors exit 1.
+        initial_messages: list[ConversationMessage]
+        if resume:
+            snapshot = _load_resume_snapshot(env.cwd, resume_id=resume_id)
+            if snapshot is not None:
+                context, prior_messages = QueryContext.from_snapshot(
+                    snapshot,
+                    api_client=client,
+                    tool_registry=effective_registry,
+                    permission_checker=context.permission_checker,
+                    cwd=env.cwd,
+                    hook_registry=effective_hook_registry,
+                    execution_env=execution_env,
+                    skill_store=skill_store,
+                    memory_store=memory_store,
+                    session_memory_path=context.session_memory_path,
+                    snapshot_enabled=context.snapshot_enabled,
+                    snapshot_max_age_warn_days=context.snapshot_max_age_warn_days,
+                    compact_enabled=compact_enabled,
+                    compact_threshold_ratio=compact_threshold_ratio,
+                    compact_full_max_tokens=settings.compact.full_compact_max_tokens,
+                    compact_full_timeout_s=settings.compact.full_compact_timeout_s,
+                    extract_enabled=extract_enabled,
+                    extract_max_records=settings.extraction.max_records_per_turn,
+                    extract_timeout_s=settings.extraction.timeout_s,
+                    max_turns=context.max_turns,
+                    max_agent_depth=settings.max_agent_depth,
+                )
+                initial_messages = [
+                    *prior_messages,
+                    ConversationMessage(role="user", content=[TextBlock(text=prompt)]),
+                ]
+            else:
+                initial_messages = [
+                    ConversationMessage(role="user", content=[TextBlock(text=prompt)]),
+                ]
+        else:
+            initial_messages = [
+                ConversationMessage(role="user", content=[TextBlock(text=prompt)]),
+            ]
         events = run_query(initial_messages, context)
         await render_stream(events)
 
@@ -751,6 +852,8 @@ async def _run_chat(
     compact_threshold_override: float | None = None,
     no_auto_compact: bool = False,
     no_extract: bool = False,
+    resume: bool = False,
+    resume_id: str | None = None,
 ) -> None:
     """Multi-turn REPL driver — P6+-T2.
 
@@ -946,7 +1049,33 @@ async def _run_chat(
 
         typer.echo("oh chat — multi-turn REPL. /help for commands, /exit to quit.")
 
+        # P12-T5 (D30.4): --resume loads the latest snapshot for cwd
+        # as the starting history; banner prints message count + git_head
+        # for situational awareness. The QueryContext rebuilt per-turn
+        # in the loop below (with per-turn memory injection) consumes
+        # this history naturally. If --resume but no snapshot → warn +
+        # start with empty history.
         history: list[ConversationMessage] = []
+        if resume:
+            snapshot = _load_resume_snapshot(env.cwd, resume_id=resume_id)
+            if snapshot is not None:
+                from openharness.protocols.messages import ConversationMessage as _CM
+
+                history = [_CM.model_validate(m) for m in snapshot["messages"]]
+                from datetime import datetime as _dt
+
+                created_at = snapshot.get("created_at", "?")
+                git_head = snapshot.get("git_head") or "(no git)"
+                # Format created_at into a human-readable short form
+                try:
+                    pretty_when = _dt.fromisoformat(created_at.replace("Z", "+00:00")).strftime(
+                        "%Y-%m-%d %H:%M"
+                    )
+                except (ValueError, AttributeError):
+                    pretty_when = created_at
+                typer.echo(
+                    f"(resumed: {len(history)} messages from {pretty_when}; git_head={git_head})"
+                )
 
         while True:
             try:
@@ -1373,6 +1502,29 @@ def ask(
             "Overrides OPENHARNESS_EXTRACTION__ENABLED."
         ),
     ),
+    resume: bool = typer.Option(
+        False,
+        "--resume",
+        help=(
+            "Load the latest snapshot for the current cwd as the "
+            "conversation's starting history; the prompt argument "
+            "becomes the next user turn (Phase 12 D30.4). When the "
+            "snapshot exists, ``--model`` / ``--max-tokens`` / etc. "
+            "from the snapshot OVERRIDE CLI flags so the agent's "
+            "reasoning chain stays consistent with what it saw. "
+            "When no snapshot exists for cwd, warns + starts fresh."
+        ),
+    ),
+    resume_id: str | None = typer.Option(
+        None,
+        "--resume-id",
+        help=(
+            "Resume the snapshot whose ``git_head`` starts with this "
+            "prefix (Phase 12; Phase 13 will enable history/ rotation). "
+            "Implies ``--resume``. Phase 12 has only one snapshot per "
+            "cwd (``current.json``) so a non-matching prefix exits 1."
+        ),
+    ),
 ) -> None:
     """Stream a single LLM response (with tool dispatch) to stdout."""
     if auto and dry_run:
@@ -1417,6 +1569,10 @@ def ask(
                 compact_threshold_override=compact_threshold,
                 no_auto_compact=no_auto_compact,
                 no_extract=no_extract,
+                # P12-T5: --resume / --resume-id. --resume-id implies
+                # --resume so the user doesn't have to type both.
+                resume=resume or resume_id is not None,
+                resume_id=resume_id,
             )
         )
     except ValidationError as exc:
@@ -1535,6 +1691,23 @@ def chat(
         "--no-extract",
         help="Disable per-turn memory extraction (Phase 11 D29.5).",
     ),
+    resume: bool = typer.Option(
+        False,
+        "--resume",
+        help=(
+            "Load the latest snapshot for the current cwd as starting "
+            "history; prints banner with message count + git_head "
+            "(Phase 12 D30.4). No snapshot for cwd → warns + starts fresh."
+        ),
+    ),
+    resume_id: str | None = typer.Option(
+        None,
+        "--resume-id",
+        help=(
+            "Resume the snapshot whose ``git_head`` matches this prefix "
+            "(Phase 12). Implies ``--resume``. Non-matching prefix exits 1."
+        ),
+    ),
 ) -> None:
     """Multi-turn REPL — same flag surface as ``ask`` minus the prompt arg."""
     if auto and dry_run:
@@ -1573,6 +1746,9 @@ def chat(
                 compact_threshold_override=compact_threshold,
                 no_auto_compact=no_auto_compact,
                 no_extract=no_extract,
+                # P12-T5: --resume / --resume-id (latter implies former).
+                resume=resume or resume_id is not None,
+                resume_id=resume_id,
             )
         )
     except ValidationError as exc:
