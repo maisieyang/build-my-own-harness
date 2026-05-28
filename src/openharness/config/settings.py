@@ -281,6 +281,29 @@ class SnapshotSettings(BaseModel):
             ":class:`SnapshotHistorySettings`."
         ),
     )
+    llm_focus_state: bool = Field(
+        default=False,
+        description=(
+            "Opt-in (Phase 13 D31.7): at turn end, fire a secondary "
+            "LLM call asking for the current goal + next_step in JSON "
+            "and store the result in ``tool_metadata.task_focus_state`` "
+            "(replacing the Phase 12 ``None`` placeholder). Adds "
+            "~1-2s per turn when enabled. Failure-isolated: any "
+            "exception / timeout / parse failure falls back to None "
+            "placeholder. CLI: ``--llm-focus-state`` / "
+            "``--no-llm-focus-state`` on ask + chat."
+        ),
+    )
+    focus_state_model: str | None = Field(
+        default=None,
+        description=(
+            "Override the model used for the focus-state secondary "
+            "LLM call (Phase 13 D31.7). ``None`` (default) uses the "
+            "main conversation's model. Set to a cheaper variant "
+            "(e.g. ``qwen-turbo``) to reduce per-turn cost when "
+            "focus-state is enabled."
+        ),
+    )
 
 
 class Settings(BaseSettings):

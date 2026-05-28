@@ -137,6 +137,15 @@ class QueryContext:
     # production (100 entries / 90 days).
     snapshot_history_max_count: int = 100
     snapshot_history_max_age_days: int = 90
+    # P13-T3 (D31.7): opt-in LLM-authored task_focus_state. When
+    # True, the engine awaits ``infer_focus_state`` at turn end
+    # (after extract, before snapshot write) and stores the result
+    # in ``tool_metadata.task_focus_state``. Default False preserves
+    # Phase 12 zero-cost behavior (placeholder dict).
+    # ``llm_focus_state_model`` overrides the model — None means
+    # use the same as the main conversation.
+    llm_focus_state_enabled: bool = False
+    llm_focus_state_model: str | None = None
 
     @classmethod
     def from_snapshot(
@@ -156,6 +165,8 @@ class QueryContext:
         snapshot_max_age_warn_days: int = 7,
         snapshot_history_max_count: int = 100,
         snapshot_history_max_age_days: int = 90,
+        llm_focus_state_enabled: bool = False,
+        llm_focus_state_model: str | None = None,
         compact_enabled: bool = True,
         compact_threshold_ratio: float = 0.83,
         compact_full_max_tokens: int = 20_000,
@@ -237,5 +248,7 @@ class QueryContext:
             snapshot_max_age_warn_days=snapshot_max_age_warn_days,
             snapshot_history_max_count=snapshot_history_max_count,
             snapshot_history_max_age_days=snapshot_history_max_age_days,
+            llm_focus_state_enabled=llm_focus_state_enabled,
+            llm_focus_state_model=llm_focus_state_model,
         )
         return context, messages

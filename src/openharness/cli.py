@@ -363,6 +363,7 @@ async def _run_ask(
     no_extract: bool = False,
     resume: bool = False,
     resume_id: str | None = None,
+    llm_focus_state_override: bool | None = None,
 ) -> None:
     """Build the QueryContext, run the loop, render the events.
 
@@ -756,6 +757,12 @@ async def _run_ask(
             snapshot_max_age_warn_days=settings.snapshot.max_age_warn_days,
             snapshot_history_max_count=settings.snapshot.history.max_count,
             snapshot_history_max_age_days=settings.snapshot.history.max_age_days,
+            llm_focus_state_enabled=(
+                llm_focus_state_override
+                if llm_focus_state_override is not None
+                else settings.snapshot.llm_focus_state
+            ),
+            llm_focus_state_model=settings.snapshot.focus_state_model,
         )
 
         # P12-T5 (D30.4): --resume loads the cwd's snapshot and
@@ -786,6 +793,8 @@ async def _run_ask(
                     snapshot_max_age_warn_days=context.snapshot_max_age_warn_days,
                     snapshot_history_max_count=context.snapshot_history_max_count,
                     snapshot_history_max_age_days=context.snapshot_history_max_age_days,
+                    llm_focus_state_enabled=context.llm_focus_state_enabled,
+                    llm_focus_state_model=context.llm_focus_state_model,
                     compact_enabled=compact_enabled,
                     compact_threshold_ratio=compact_threshold_ratio,
                     compact_full_max_tokens=settings.compact.full_compact_max_tokens,
@@ -858,6 +867,7 @@ async def _run_chat(
     no_extract: bool = False,
     resume: bool = False,
     resume_id: str | None = None,
+    llm_focus_state_override: bool | None = None,
 ) -> None:
     """Multi-turn REPL driver — P6+-T2.
 
@@ -1253,6 +1263,12 @@ async def _run_chat(
                 snapshot_max_age_warn_days=settings.snapshot.max_age_warn_days,
                 snapshot_history_max_count=settings.snapshot.history.max_count,
                 snapshot_history_max_age_days=settings.snapshot.history.max_age_days,
+                llm_focus_state_enabled=(
+                    llm_focus_state_override
+                    if llm_focus_state_override is not None
+                    else settings.snapshot.llm_focus_state
+                ),
+                llm_focus_state_model=settings.snapshot.focus_state_model,
             )
 
             history.append(ConversationMessage(role="user", content=[TextBlock(text=user_input)]))
@@ -1531,6 +1547,19 @@ def ask(
             "cwd (``current.json``) so a non-matching prefix exits 1."
         ),
     ),
+    llm_focus_state: bool | None = typer.Option(
+        None,
+        "--llm-focus-state/--no-llm-focus-state",
+        help=(
+            "Opt in to LLM-authored ``tool_metadata.task_focus_state`` "
+            "(Phase 13 D31.7). Fires a secondary LLM call at turn "
+            "end asking for the current goal + next_step in JSON, "
+            "stores the result in snapshot + session_memory. Adds "
+            "~1-2s per turn. Default OFF preserves Phase 12 zero-"
+            "cost behavior. Override: "
+            "OPENHARNESS_SNAPSHOT__LLM_FOCUS_STATE env var."
+        ),
+    ),
 ) -> None:
     """Stream a single LLM response (with tool dispatch) to stdout."""
     if auto and dry_run:
@@ -1579,6 +1608,7 @@ def ask(
                 # --resume so the user doesn't have to type both.
                 resume=resume or resume_id is not None,
                 resume_id=resume_id,
+                llm_focus_state_override=llm_focus_state,
             )
         )
     except ValidationError as exc:
@@ -1714,6 +1744,11 @@ def chat(
             "(Phase 12). Implies ``--resume``. Non-matching prefix exits 1."
         ),
     ),
+    llm_focus_state: bool | None = typer.Option(
+        None,
+        "--llm-focus-state/--no-llm-focus-state",
+        help="Opt in to LLM-authored task_focus_state (Phase 13 D31.7). Default OFF.",
+    ),
 ) -> None:
     """Multi-turn REPL — same flag surface as ``ask`` minus the prompt arg."""
     if auto and dry_run:
@@ -1755,6 +1790,7 @@ def chat(
                 # P12-T5: --resume / --resume-id (latter implies former).
                 resume=resume or resume_id is not None,
                 resume_id=resume_id,
+                llm_focus_state_override=llm_focus_state,
             )
         )
     except ValidationError as exc:

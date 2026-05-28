@@ -53,6 +53,11 @@ from openharness.services.extract import (
     extract_memories_from_turn,
     has_memory_writes_since,
 )
+from openharness.services.focus_state import (
+    FOCUS_STATE_SYSTEM_PROMPT,
+    FocusState,
+    infer_focus_state,
+)
 from openharness.services.session_memory import (
     get_session_memory_dir,
     read_session_memory,
@@ -74,10 +79,12 @@ from openharness.services.summarize import summarize
 
 __all__ = [
     "EXTRACTION_SYSTEM_PROMPT",
+    "FOCUS_STATE_SYSTEM_PROMPT",
     "SNAPSHOT_SCHEMA",
     "SNAPSHOT_VERSION",
     "CompactResult",
     "ExtractionResult",
+    "FocusState",
     "SnapshotCwdMismatch",
     "SnapshotError",
     "SnapshotMalformed",
@@ -91,6 +98,7 @@ __all__ = [
     "get_session_memory_dir",
     "get_snapshot_dir",
     "has_memory_writes_since",
+    "infer_focus_state",
     "load_snapshot",
     "read_session_memory",
     "summarize",

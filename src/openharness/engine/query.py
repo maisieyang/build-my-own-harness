@@ -134,34 +134,42 @@ async def _maybe_extract_memories(
         )
 
 
-def _maybe_write_turn_end_metadata(
+async def _maybe_write_turn_end_metadata(
     context: QueryContext,
     final_messages: list[ConversationMessage],
 ) -> None:
-    """P12-T1 + P12-T3 (D30.6 + D30.9): per-turn-end writers for
-    session_memory checkpoint + Phase 12 snapshot.
+    """P12-T1 + P12-T3 + P13-T3: per-turn-end writers for
+    session_memory checkpoint + Phase 12 snapshot, plus optional
+    LLM-authored ``task_focus_state``.
 
-    Single ``collect_turn_metadata`` call feeds BOTH consumers:
+    Single ``collect_turn_metadata`` call feeds BOTH consumers
+    (session_memory + snapshot). When ``llm_focus_state_enabled``
+    (Phase 13 D31.7) the engine awaits a secondary LLM call
+    BEFORE both writers fire, then injects the inferred focus
+    state into ``tool_metadata.task_focus_state`` (replacing the
+    None placeholder).
 
-    - session_memory writer (T1) when ``session_memory_path`` is set
-    - snapshot writer (T3) when ``snapshot_enabled`` is True
-
-    Both fire independently — disabling one doesn't disable the other.
-    Skip ``collect_turn_metadata`` entirely when neither is wired
-    (zero overhead for the no-snapshot, no-session_memory case).
-
-    All failures caught + WARN-logged. Turn still returns success
-    because both writes are best-effort persistence — they must not
-    block ``ConversationCompleteEvent`` emission.
+    All failures caught + WARN-logged. Turn still returns success.
     """
     if context.session_memory_path is None and not context.snapshot_enabled:
         return  # no consumer wired — skip the producer too
 
     tool_metadata = collect_turn_metadata(final_messages)
 
+    # P13-T3 (D31.7): optional LLM-authored focus state.
+    if context.llm_focus_state_enabled:
+        from openharness.services.focus_state import infer_focus_state
+
+        focus_model = context.llm_focus_state_model or context.model
+        focus_state = await infer_focus_state(
+            messages=final_messages,
+            api_client=context.api_client,
+            model=focus_model,
+        )
+        # Overwrite the None placeholder with the inferred values.
+        tool_metadata["task_focus_state"] = focus_state.to_dict()
+
     if context.session_memory_path is not None:
-        # Lazy import keeps services out of the engine module load
-        # graph unless a consumer is actually wired.
         from openharness.services.session_memory import update_session_memory_file
 
         try:
@@ -432,7 +440,7 @@ async def run_query(
                     # snapshot writer added in T3). Errors caught + logged
                     # — turn still emits ``ConversationCompleteEvent``
                     # so failure isolation matches the extract contract.
-                    _maybe_write_turn_end_metadata(context, final_messages)
+                    await _maybe_write_turn_end_metadata(context, final_messages)
                     yield ConversationCompleteEvent(messages=final_messages)
                     return  # end_turn / max_tokens / stop_sequence -> exit
 
