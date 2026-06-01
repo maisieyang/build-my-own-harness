@@ -7,7 +7,7 @@
 ![Type checked: mypy](https://img.shields.io/badge/type%20checked-mypy%20strict-1f5082)
 
 > **A production-grade Python harness for LLM agents — and a documented case study in framework design.**
-> Built solo (single developer + Claude Code) over 23 days across 17 phases.
+> **v0.1.0 shipped in 23 days, single developer + Claude Code.** Continues to evolve in versioned releases; each phase preserves boundary doc → plan → retro in this repo.
 
 OpenHarness is a Claude-Code-style agent harness: you give it a prompt,
 it talks to an LLM, the LLM picks tools, the harness runs them safely,
@@ -34,18 +34,16 @@ and what the next phase predicted before being built**.
 
 ---
 
-## At a glance
+## At a glance (v0.1.0 baseline)
 
 | | |
 |---|---|
+| Released | 2026-05-20 — first public release / case-study writeup |
 | Built in | **23 days** (single developer + Claude Code as collaborator) |
-| Phases shipped | **17** (each via boundary-doc → plan → execute → retro) |
-| Subsystems | **18** under `src/openharness/` |
-| Decision records | **24** in [`decisions/`](./decisions) (per-trade-off rationale) |
-| Retros + essays | **31** in [`learnings/`](./learnings) (18 per-phase + framing essays) |
-| Tests | **1274 passing on CI** at **95.33% coverage** (Python 3.11), mypy strict, ruff clean |
-| Lines of code | ~10,800 production / ~21,600 tests |
-| Commits | 195 |
+| Phase loop | boundary-doc → plan → execute → retro, preserved per phase |
+| Trail | [`decisions/`](./decisions) (per-trade-off rationale) · [`tasks/`](./tasks) (capability plans) · [`learnings/`](./learnings) (per-phase retros + framing essays) |
+| Quality bars | mypy strict · ruff clean · ≥95% coverage gate (Python 3.10/3.11) |
+| Per-release stats | See [CHANGELOG.md](./CHANGELOG.md) for test counts / coverage / LoC per version |
 
 ---
 
@@ -151,7 +149,7 @@ draws from.
 
 ### The methodology
 
-Each of the 17 phases ran the same four-step loop:
+Each phase runs the same four-step loop:
 
 1. **Boundary doc** ([`decisions/NN-phase-X-boundary.md`](./decisions))
     — what's in scope, what's out, what invariant must hold across
@@ -175,8 +173,8 @@ of the specific harness being built.
 
 ### Start here: the meta-retro
 
-**[`learnings/phase-7.md`](./learnings/phase-7.md)** is the project-
-level retrospective covering all 17 phases. Read it for:
+**[`learnings/phase-7.md`](./learnings/phase-7.md)** is the v0.1.0
+project-level retrospective. Read it for:
 
 - §1 — quantitative summary (~5x faster than original plan; reasoning
   why)
@@ -358,7 +356,7 @@ retrospectives, see [`learnings/`](./learnings).
 │   ├── publishing.md         # PyPI runbook
 │   └── ideas/, learning/     # Essays + living learning resources
 ├── examples/                 # Sample commands / skills / bundles / hooks (Phase 7 T4)
-├── src/openharness/          # 18 subsystems
+├── src/openharness/          # subsystems
 │   ├── api/                  # OpenAI-compatible client + retry + translation
 │   ├── bundles/              # Phase 5d ModeBundle + 5e/5f plugin hooks
 │   ├── cli.py                # Typer command surface (oh ask / oh chat / ...)
@@ -442,9 +440,10 @@ Full decision index: [`decisions/`](./decisions) (24 docs).
 
 ## SPEC v1 status
 
-✅ **Shipped** in 17 phases over 23 days. See
+✅ **Shipped** as v0.1.0 on 2026-05-20, in 23 days. See
 [`learnings/phase-7.md`](./learnings/phase-7.md) §10 self-evaluation
-against the original SPEC.
+against the original SPEC, and [CHANGELOG.md](./CHANGELOG.md) for
+post-v1 releases.
 
 **Optional follow-ups** (acknowledged in meta-retro §5 and
 [`decisions/23-phase-7-final-boundary.md`](./decisions/23-phase-7-final-boundary.md) §6,

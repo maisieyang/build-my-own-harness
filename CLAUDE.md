@@ -1,8 +1,9 @@
 # CLAUDE.md — How this project was built with Claude Code
 
 > This file documents the human-AI collaboration model used to build
-> OpenHarness in **23 days across 17 phases**. It serves a dual
-> purpose:
+> OpenHarness v0.1.0 in **23 days across 17 phases**, and to drive
+> the post-v1 releases that followed on the same loop. It serves a
+> dual purpose:
 >
 > 1. **Public case study** — a reproducible methodology for anyone
 >    curious about deliberate AI-assisted development. The pattern is
@@ -36,7 +37,7 @@ production-grade Python LLM harness as a deliberate learning project.
 
 ## The four-step phase loop
 
-Each of the 17 phases ran the same loop:
+Each phase runs the same loop:
 
 | Step | Where it lives | Granularity | Who decides |
 |---|---|---|---|
@@ -134,8 +135,9 @@ in the same turn. No "I'll commit it" without showing the diff first.
 The point of the trail is **not** that future readers will re-read it
 linearly. The point is that **at every moment during the project,
 the human always knows where to add a new thought** without thinking
-about where it goes. That low friction is what enables 17 phases in
-23 days.
+about where it goes. That low friction is what enabled v0.1.0's
+17-phase ship in 23 days and keeps subsequent releases on the same
+cadence.
 
 ---
 
