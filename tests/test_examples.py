@@ -114,3 +114,15 @@ class TestSpecificExamples:
 
         doc = inspect.getdoc(spec.hook) or ""
         assert "turn" in doc.lower()
+
+    def test_cost_tracker_plugin_loads_via_discovery(self) -> None:
+        from openharness.bundles import discover_filesystem_hook_plugins
+
+        catalog = discover_filesystem_hook_plugins(global_dir=_EXAMPLES_DIR / "hooks")
+        assert "track_cost" in catalog
+        spec = catalog["track_cost"]
+        assert spec.event == "PostApiCall"
+        import inspect
+
+        doc = inspect.getdoc(spec.hook) or ""
+        assert "cost" in doc.lower()
