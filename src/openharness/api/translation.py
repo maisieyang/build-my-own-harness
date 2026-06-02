@@ -382,9 +382,8 @@ class _StreamAssembler:
                 f"(provider finish_reason={finish_reason!r}; parser says "
                 f"{exc.msg!r}). Most common cause: --max-tokens cap fired "
                 f"before the model finished emitting the tool's arguments. "
-                f"Raise --max-tokens (default 1024 is small for tool calls "
-                f"that emit file content) or rephrase the request so the "
-                f"model uses smaller chunks."
+                f"Raise --max-tokens or rephrase the request so the model "
+                f"emits smaller chunks per tool call."
             )
         else:
             message = (

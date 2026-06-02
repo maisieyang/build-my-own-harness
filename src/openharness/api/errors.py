@@ -101,8 +101,7 @@ class MalformedToolCallFailure(RequestFailure):
 
     - ``finish_reason == "length"`` — the per-call ``max_tokens`` cap
       truncated streaming mid-string. Fix is to raise ``--max-tokens``
-      (default 1024 is too small for tool calls that write file content)
-      or rephrase so the model emits smaller chunks.
+      or rephrase so the model emits smaller chunks per tool call.
     - other ``finish_reason`` with malformed JSON — the model itself
       emitted broken syntax. Rare; usually transient. Retry or rephrase.
 

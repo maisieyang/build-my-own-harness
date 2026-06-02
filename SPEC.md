@@ -61,7 +61,7 @@ phases add subcommands.
 ```bash
 oh ask "<prompt>"                              # Stream a single LLM response (default: qwen-plus via DashScope)
 oh ask --model qwen-plus "<prompt>"            # Override default model (any model the configured Provider supports)
-oh ask --max-tokens 256 "<prompt>"             # Cap generation length (default 1024, min 1)
+oh ask --max-tokens 256 "<prompt>"             # Cap generation length (default 8192, min 1)
 oh --version
 oh --help
 ```

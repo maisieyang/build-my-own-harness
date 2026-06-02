@@ -135,10 +135,13 @@ from openharness.tools import LoadSkillTool, create_default_tool_registry
 if TYPE_CHECKING:
     from openharness.config.settings import MemorySettings
 
-# Phase 1 default. Lifted into a CLI flag (``--max-tokens``) so users can
-# tune for short prompts or longer essays without editing code; kept
-# generous enough that "hi" demos do not get truncated mid-sentence.
-DEFAULT_MAX_TOKENS = 1024
+# Default per-call output cap. Phase 1 originally shipped 1024 (no tools),
+# but with tool-use ship (Phase 2) and especially Agent / Write tool calls
+# that emit file content as the ``arguments`` JSON, 1024 routinely truncates
+# mid-string. Bumped to 8192 to align with Claude Code / modern harness
+# defaults — covers most file-creating tool calls in one shot. Users with
+# tight budgets opt down via ``--max-tokens``.
+DEFAULT_MAX_TOKENS = 8192
 
 
 app = typer.Typer(
@@ -1353,7 +1356,7 @@ def ask(
         DEFAULT_MAX_TOKENS,
         "--max-tokens",
         min=1,
-        help="Maximum tokens to generate (default 1024).",
+        help=f"Maximum tokens to generate per call (default {DEFAULT_MAX_TOKENS}).",
     ),
     auto: bool = typer.Option(
         False,

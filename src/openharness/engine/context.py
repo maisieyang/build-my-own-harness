@@ -56,7 +56,7 @@ class QueryContext:
     system_prompt: str
     cwd: Path
     model: str
-    max_tokens: int = 1024
+    max_tokens: int = 8192
     max_turns: int = 20
     permission_mode: PermissionMode = field(default=PermissionMode.DEFAULT)
     # P6-T1 (D16.5): sub-agent recursion tracking. Top-level ``oh ask``
