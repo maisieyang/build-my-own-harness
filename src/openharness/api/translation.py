@@ -369,13 +369,22 @@ class _StreamAssembler:
         if len(state.arguments) > 80:
             excerpt += "…"
         finish_reason = self._stop_reason
-        if finish_reason == "length":
+        # "Unterminated string" is the json module's stable, specific message
+        # for a cut-off-mid-string-literal — the telltale of a max_tokens cap
+        # firing while the model was emitting a long content payload. Some
+        # providers (observed: DashScope/qwen) report finish_reason='tool_calls'
+        # rather than 'length' in this case, so we also key off the parse
+        # error's own diagnosis.
+        truncated_mid_string = finish_reason == "length" or "Unterminated string" in (exc.msg or "")
+        if truncated_mid_string:
             message = (
-                f"Tool call '{tool_name}' was truncated mid-JSON by the "
-                f"max_tokens cap (provider finish_reason='length'). "
+                f"Tool call '{tool_name}' was truncated mid-JSON "
+                f"(provider finish_reason={finish_reason!r}; parser says "
+                f"{exc.msg!r}). Most common cause: --max-tokens cap fired "
+                f"before the model finished emitting the tool's arguments. "
                 f"Raise --max-tokens (default 1024 is small for tool calls "
                 f"that emit file content) or rephrase the request so the "
-                f"model uses smaller chunks. Underlying parse error: {exc.msg}"
+                f"model uses smaller chunks."
             )
         else:
             message = (

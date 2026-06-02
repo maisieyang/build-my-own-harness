@@ -426,9 +426,53 @@ class TestStreamAssemblerToolUse:
         assert err.arguments_excerpt is not None
         assert err.arguments_excerpt.startswith('{"file_path"')
         msg = str(err)
-        assert "max_tokens" in msg
+        assert "truncated mid-JSON" in msg
         assert "'Write'" in msg
         assert "--max-tokens" in msg
+
+    def test_truncated_arguments_with_provider_misreporting_finish_reason(
+        self,
+    ) -> None:
+        """Some providers (observed: DashScope/qwen) report
+        finish_reason='tool_calls' even when the cap truncated the stream
+        mid-string. The heuristic on parser msg 'Unterminated string' must
+        still route to the --max-tokens hint, not the model-bug hint.
+        """
+        a = _StreamAssembler()
+        a.consume(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_w2",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "Write",
+                                        "arguments": '{"file_path": "/tmp/a.md", "content": "...',
+                                    },
+                                },
+                            ],
+                        },
+                        "finish_reason": None,
+                    },
+                ],
+            },
+        )
+        a.consume({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]})
+
+        with pytest.raises(MalformedToolCallFailure) as excinfo:
+            a.finalize()
+        err = excinfo.value
+        assert err.finish_reason == "tool_calls"
+        msg = str(err)
+        # heuristic kicks in — same --max-tokens hint as the 'length' case
+        assert "truncated mid-JSON" in msg
+        assert "--max-tokens" in msg
+        # NOT the "transient model bug" branch
+        assert "malformed syntax" not in msg
 
     def test_malformed_json_with_stop_finish_reason_raises(self) -> None:
         """Model emits invalid JSON despite finish_reason='stop' (rare model
