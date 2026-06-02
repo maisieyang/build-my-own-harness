@@ -91,13 +91,14 @@ def build_system_prompt(
     skill_store: SkillStore | None = None,
     claude_md_content: str | None = None,
     memory_manifest: MemoryManifest | None = None,
+    web_enabled: bool | None = None,
 ) -> str:
     """Assemble the system prompt from base + tools + skills + env + memory.
 
     Per ``decisions/06`` D6.5: this function's signature is the load-bearing
     contract; later phases extend the body by appending more sections, not
     by changing the call surface. P5c-T3 added ``skill_store`` keyword-
-    only. **P10-T4.4d (D28.6)** adds two more:
+    only. **P10-T4.4d (D28.6)** adds two more, **P14-T4 (D29.6)** adds one:
 
     - ``claude_md_content``: pre-rendered output of
       :func:`openharness.prompts.claudemd.load_claude_md_prompt`. When
@@ -107,8 +108,16 @@ def build_system_prompt(
       MEMORY.md entrypoint + relevance-scored bodies. Each contributes
       its own section (``## Memory`` and ``## Relevant Memories``); both
       are independently skipped if absent.
+    - ``web_enabled`` (Phase 14): three-state web-access disposition.
+      ``None`` (default) is the byte-identity branch — no new section
+      added, Phase 13 callers unchanged. ``True`` appends the
+      ``## Web Access`` positive-guidance section (LLM has WebSearch +
+      WebFetch). ``False`` appends the ``## No Internet Access``
+      anti-substitution section (D29.6 — prevents Grep / Read
+      substitution when external info is requested but web tools
+      are not registered).
 
-    Section order (D28.6):
+    Section order (D28.6 + D29.6):
 
     1. base instructions
     2. ``## Tools``
@@ -117,10 +126,12 @@ def build_system_prompt(
     5. ``## Project Instructions`` (if claude_md_content present)
     6. ``## Memory`` (if memory_manifest.entrypoint_content present)
     7. ``## Relevant Memories`` (if memory_manifest.relevant non-empty)
+    8. ``## Web Access`` or ``## No Internet Access``
+       (if ``web_enabled`` is not None)
 
     All sections joined by blank lines (``\\n\\n``). Same Markdown-``##``
     convention as P2-T5 (D11.3). The byte-identical invariant
-    (P10-T4.4a) holds: when ALL three optional kwargs default to None,
+    (P10-T4.4a) holds: when ALL four optional kwargs default to None,
     the output is byte-exact to today's prompt — existing 233+ caller
     tests pass unchanged.
 
@@ -148,7 +159,70 @@ def build_system_prompt(
         relevant = format_relevant_memories_section(memory_manifest.relevant)
         if relevant is not None:
             sections.append(relevant)
+    # P14-T4 (D29.6): the web-access disposition section. Three-state
+    # kwarg — ``None`` (default, additive-kwarg byte-identity
+    # contract: Phase 13 callers see no new section), ``True`` (web
+    # tools registered — positive guidance), ``False`` (web tools NOT
+    # registered — the anti-substitution paragraph that prevents the
+    # LLM from Grep'ing local files as a research substitute).
+    if web_enabled is True:
+        sections.append(_format_web_enabled_section())
+    elif web_enabled is False:
+        sections.append(_format_web_disabled_section())
     return "\n\n".join(sections)
+
+
+def _format_web_enabled_section() -> str:
+    """Positive-guidance paragraph for sessions with ``--enable-web``.
+
+    Tells the LLM the canonical search-then-fetch workflow and
+    discourages URL hallucination from stale training data.
+    """
+    return (
+        "## Web Access\n"
+        "\n"
+        "You have ``WebSearch`` and ``WebFetch`` available. Typical "
+        "research flow:\n"
+        "\n"
+        "1. ``WebSearch`` to discover candidate URLs for a topic.\n"
+        "2. Pick 1-3 promising hits.\n"
+        "3. ``WebFetch`` each picked URL for full content.\n"
+        "4. Synthesize from what you fetched, citing the URL alongside "
+        "each claim derived from it.\n"
+        "\n"
+        "Prefer ``WebSearch`` over guessing URLs from training data — "
+        "your URL memory is stale and unreliable for any post-cutoff "
+        "content."
+    )
+
+
+def _format_web_disabled_section() -> str:
+    """Anti-substitution paragraph for sessions WITHOUT ``--enable-web``.
+
+    THE bug fix (D29.6). Without this paragraph, an LLM asked for
+    external research will Grep / Read local files (the closest
+    available tools) and confabulate findings. With this paragraph,
+    the LLM is told explicitly that local files are not the web and
+    it should decline rather than substitute.
+    """
+    return (
+        "## No Internet Access\n"
+        "\n"
+        "You do NOT have internet access in this session. The tools "
+        "listed above are your only tools. Specifically:\n"
+        "\n"
+        "- Do NOT substitute Grep or Read on local files when asked "
+        "for external information (news, latest research, current "
+        "events, recent developments, anything that requires "
+        "up-to-date or out-of-repo knowledge). Local files contain "
+        "only what the user has placed there — they are NOT the web.\n"
+        "- If asked for current or external information, state plainly "
+        "that you have no internet access and recommend the user "
+        "re-run with ``--enable-web`` to enable web search.\n"
+        "- For questions about your training knowledge (concepts, "
+        "history, general principles), answer from training data and "
+        "note your cutoff if relevant."
+    )
 
 
 def _format_tools_section(tools: list[ToolSpec]) -> str:

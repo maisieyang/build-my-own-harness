@@ -131,6 +131,8 @@ from openharness.protocols import (
 from openharness.services.session_memory import get_session_memory_dir
 from openharness.skills.store import EmptySkillStore, FilesystemSkillStore, SkillStore
 from openharness.tools import LoadSkillTool, create_default_tool_registry
+from openharness.tools.web_fetch import WebFetch
+from openharness.tools.web_search import TavilySearchProvider, WebSearch
 
 if TYPE_CHECKING:
     from openharness.config.settings import MemorySettings
@@ -239,6 +241,50 @@ def _build_client(settings: Settings) -> OpenAICompatibleApiClient:
         base_url=settings.base_url,
     )
     return OpenAICompatibleApiClient(sdk=sdk)
+
+
+def _maybe_register_web_tools(
+    registry: Any,
+    *,
+    enable_web: bool,
+    settings: Settings,
+) -> None:
+    """Conditionally register :class:`WebSearch` + :class:`WebFetch`.
+
+    Phase 14 (D29.3): when ``--enable-web`` is OFF (or unset and
+    ``OPENHARNESS_WEB__ENABLED`` is False), this is a no-op and the
+    tool catalog stays byte-identical to v0.2.0. When ON, both tools
+    join the registry and the LLM sees them alongside the existing
+    six (Read / Write / Edit / Bash / Grep / Agent).
+
+    If ``--enable-web`` is set but no provider API key is configured,
+    raises ``typer.Exit`` with a clear remediation message — silent
+    fallback would lead to confusing "no search results" errors at
+    every search attempt.
+    """
+    if not enable_web:
+        return
+    if settings.web.api_key is None:
+        typer.echo(
+            "--enable-web requires OPENHARNESS_WEB__API_KEY to be set. "
+            "Sign up at https://tavily.com (free tier, 1000/month) and "
+            "export the key, then re-run.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    api_key_value = settings.web.api_key.get_secret_value()
+    web_search_provider = TavilySearchProvider(
+        api_key=api_key_value,
+        timeout_seconds=settings.web.fetch_timeout_seconds,
+    )
+    registry.register(WebSearch(provider=web_search_provider))
+    registry.register(
+        WebFetch(
+            timeout_seconds=settings.web.fetch_timeout_seconds,
+            max_bytes=settings.web.fetch_max_bytes,
+            user_agent=f"OpenHarness/{__version__} (+webfetch)",
+        )
+    )
 
 
 def _load_plugin_catalogs(
@@ -373,6 +419,7 @@ async def _run_ask(
     enable_plugin_hooks_override: bool | None = None,
     enable_plugins_override: bool | None = None,
     enable_memory_override: bool | None = None,
+    enable_web_override: bool | None = None,
     compact_threshold_override: float | None = None,
     no_auto_compact: bool = False,
     no_extract: bool = False,
@@ -436,6 +483,15 @@ async def _run_ask(
     enable_memory = (
         enable_memory_override if enable_memory_override is not None else settings.enable_memory
     )
+    # P14-T4 (D29.3): web-tools opt-in. CLI flag overrides
+    # settings.web.enabled. When OFF, WebSearch / WebFetch are not
+    # registered into the tool catalog and the default system prompt
+    # picks up the D29.6 anti-substitution paragraph (so the LLM is
+    # told explicitly NOT to Grep local files as a research
+    # substitute). Default OFF — provider API key + monthly quota are
+    # external dependencies, surprise-burn is the failure mode we
+    # avoid.
+    enable_web = enable_web_override if enable_web_override is not None else settings.web.enabled
     # P11-T5: compact + extraction CLI flags fold into nested Settings.
     # ``--no-auto-compact`` flips ``compact.enabled=False`` regardless
     # of env. ``--compact-threshold 0.5`` overrides
@@ -588,6 +644,12 @@ async def _run_ask(
         for adapter in pool.adapters:
             registry.register(adapter)
 
+        # P14-T4 (D29.3): conditional registration of web tools. Only
+        # touches the registry when --enable-web is on; when off, the
+        # tool catalog stays byte-identical to v0.2.0 (invariant
+        # T14-* in decisions/29).
+        _maybe_register_web_tools(registry, enable_web=enable_web, settings=settings)
+
         # P5c-T3: Skills bootstrap. Convention-driven storage (no Settings
         # field per decisions/12 L2):global = ~/.openharness/skills/,
         # project = cwd/.openharness/skills/, project overrides global on
@@ -699,6 +761,7 @@ async def _run_ask(
                 skill_store=skill_store,
                 claude_md_content=claude_md_content,
                 memory_manifest=memory_manifest,
+                web_enabled=enable_web,
             )
 
         # P7b-T2 (D18.2): conditionally enter SandboxExecution.
@@ -877,6 +940,7 @@ async def _run_chat(
     enable_plugin_hooks_override: bool | None = None,
     enable_plugins_override: bool | None = None,
     enable_memory_override: bool | None = None,
+    enable_web_override: bool | None = None,
     compact_threshold_override: float | None = None,
     no_auto_compact: bool = False,
     no_extract: bool = False,
@@ -940,6 +1004,8 @@ async def _run_chat(
     enable_memory = (
         enable_memory_override if enable_memory_override is not None else settings.enable_memory
     )
+    # P14-T4 (D29.3): web-tools opt-in. Same shape as ``_run_ask``.
+    enable_web = enable_web_override if enable_web_override is not None else settings.web.enabled
     # P11-T5: compact + extraction wiring — same shape as ``_run_ask``.
     compact_enabled = settings.compact.enabled and not no_auto_compact
     compact_threshold_ratio = (
@@ -982,6 +1048,11 @@ async def _run_chat(
     async with pool, contextlib.AsyncExitStack() as stack:
         for adapter in pool.adapters:
             registry.register(adapter)
+
+        # P14-T4 (D29.3): conditional web-tools registration. See
+        # ``_maybe_register_web_tools`` docstring for the off-path
+        # byte-identity guarantee.
+        _maybe_register_web_tools(registry, enable_web=enable_web, settings=settings)
 
         env = detect_environment()
         base_skill_store: SkillStore
@@ -1074,6 +1145,7 @@ async def _run_chat(
             env,
             skill_store=skill_store,
             claude_md_content=claude_md_content,
+            web_enabled=enable_web,
         )
 
         typer.echo("oh chat — multi-turn REPL. /help for commands, /exit to quit.")
@@ -1220,6 +1292,7 @@ async def _run_chat(
                         env,
                         skill_store=skill_store,
                         claude_md_content=claude_md_content,
+                        web_enabled=enable_web,
                     )
             bundle_resolved = True
 
@@ -1242,6 +1315,7 @@ async def _run_chat(
                     skill_store=skill_store,
                     claude_md_content=claude_md_content,
                     memory_manifest=memory_manifest,
+                    web_enabled=enable_web,
                 )
 
             context = QueryContext(
@@ -1514,6 +1588,20 @@ def ask(
             "OPENHARNESS_ENABLE_MEMORY."
         ),
     ),
+    enable_web: bool | None = typer.Option(
+        None,
+        "--enable-web/--no-enable-web",
+        help=(
+            "Enable web tools — WebSearch + WebFetch (Phase 14 D29.3). "
+            "Default OFF: tools are not registered and the system "
+            "prompt picks up the anti-substitution paragraph "
+            "(prevents the LLM from Grep'ing local files when asked "
+            "for external info). When ON: tools register, the system "
+            "prompt switches to positive guidance, and "
+            "OPENHARNESS_WEB__API_KEY must be set (Tavily free tier "
+            "at https://tavily.com). Overrides OPENHARNESS_WEB__ENABLED."
+        ),
+    ),
     compact_threshold: float | None = typer.Option(
         None,
         "--compact-threshold",
@@ -1622,6 +1710,7 @@ def ask(
                 enable_plugin_hooks_override=enable_plugin_hooks,
                 enable_plugins_override=enable_plugins,
                 enable_memory_override=enable_memory,
+                enable_web_override=enable_web,
                 compact_threshold_override=compact_threshold,
                 no_auto_compact=no_auto_compact,
                 no_extract=no_extract,
@@ -1731,6 +1820,17 @@ def chat(
             "Overrides OPENHARNESS_ENABLE_MEMORY."
         ),
     ),
+    enable_web: bool | None = typer.Option(
+        None,
+        "--enable-web/--no-enable-web",
+        help=(
+            "Enable WebSearch + WebFetch tools (Phase 14). Default "
+            "OFF; system prompt picks up anti-substitution paragraph "
+            "to prevent Grep-on-local-files hallucination. ON "
+            "requires OPENHARNESS_WEB__API_KEY (Tavily free tier). "
+            "Overrides OPENHARNESS_WEB__ENABLED."
+        ),
+    ),
     compact_threshold: float | None = typer.Option(
         None,
         "--compact-threshold",
@@ -1805,6 +1905,7 @@ def chat(
                 enable_plugin_hooks_override=enable_plugin_hooks,
                 enable_plugins_override=enable_plugins,
                 enable_memory_override=enable_memory,
+                enable_web_override=enable_web,
                 compact_threshold_override=compact_threshold,
                 no_auto_compact=no_auto_compact,
                 no_extract=no_extract,

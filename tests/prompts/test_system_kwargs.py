@@ -72,6 +72,65 @@ def _memory(name: str, body: str = "body") -> Memory:
     )
 
 
+class TestWebEnabled:
+    """Phase 14 D29.6: the ``web_enabled`` three-state kwarg.
+
+    - ``None`` (default) — byte-identity branch; no new section.
+    - ``True`` — appends ``## Web Access`` positive-guidance paragraph.
+    - ``False`` — appends ``## No Internet Access`` anti-substitution
+      paragraph (THE bug fix; prevents Grep/Read substitution).
+    """
+
+    def test_none_no_section(self, tools: list[ToolSpec], env: EnvironmentInfo) -> None:
+        prompt = build_system_prompt(tools, env, web_enabled=None)
+        assert "## Web Access" not in prompt
+        assert "## No Internet Access" not in prompt
+
+    def test_omitted_no_section(self, tools: list[ToolSpec], env: EnvironmentInfo) -> None:
+        # Omitting the kwarg defaults to None; same as test_none.
+        prompt = build_system_prompt(tools, env)
+        assert "## Web Access" not in prompt
+        assert "## No Internet Access" not in prompt
+
+    def test_true_adds_positive_guidance(self, tools: list[ToolSpec], env: EnvironmentInfo) -> None:
+        prompt = build_system_prompt(tools, env, web_enabled=True)
+        assert "## Web Access" in prompt
+        assert "## No Internet Access" not in prompt
+        # Positive guidance must mention both tools so the LLM
+        # knows the canonical chain.
+        assert "WebSearch" in prompt
+        assert "WebFetch" in prompt
+        # Must NOT include the anti-substitution language since web
+        # IS available.
+        assert "Do NOT substitute Grep" not in prompt
+
+    def test_false_adds_anti_substitution(
+        self, tools: list[ToolSpec], env: EnvironmentInfo
+    ) -> None:
+        prompt = build_system_prompt(tools, env, web_enabled=False)
+        assert "## No Internet Access" in prompt
+        assert "## Web Access" not in prompt
+        # THE bug fix: explicit instruction not to Grep local files
+        # as a research substitute.
+        assert "Do NOT substitute Grep" in prompt
+        assert "no internet access" in prompt
+        # Surface the remediation flag so the LLM tells the user how
+        # to fix.
+        assert "--enable-web" in prompt
+
+    def test_section_comes_at_the_end(self, tools: list[ToolSpec], env: EnvironmentInfo) -> None:
+        """D29.6 + plan section-order: web section is the LAST one,
+        after Environment / Project Instructions / Memory."""
+        prompt = build_system_prompt(tools, env, web_enabled=False)
+        env_idx = prompt.index("## Environment")
+        web_idx = prompt.index("## No Internet Access")
+        assert env_idx < web_idx
+        # Nothing after the web section.
+        assert prompt.endswith("note your cutoff if relevant.") or prompt.rstrip().endswith(
+            "note your cutoff if relevant."
+        )
+
+
 class TestClaudeMdContent:
     def test_omitted_no_section(self, tools: list[ToolSpec], env: EnvironmentInfo) -> None:
         prompt = build_system_prompt(tools, env)
