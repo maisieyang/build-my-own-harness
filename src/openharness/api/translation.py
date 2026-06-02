@@ -30,6 +30,7 @@ import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
+from openharness.api.errors import MalformedToolCallFailure
 from openharness.protocols.content import (
     ImageBlock,
     TextBlock,
@@ -329,7 +330,13 @@ class _StreamAssembler:
 
         for index in sorted(self._tool_calls.keys()):
             state = self._tool_calls[index]
-            args = json.loads(state.arguments) if state.arguments else {}
+            if state.arguments:
+                try:
+                    args = json.loads(state.arguments)
+                except json.JSONDecodeError as exc:
+                    raise self._malformed_tool_call_error(state, exc) from exc
+            else:
+                args = {}
             content.append(
                 ToolUseBlock(id=state.id, name=state.name, input=args),
             )
@@ -347,6 +354,41 @@ class _StreamAssembler:
             message=message,
             usage=usage,
             stop_reason=stop_reason,
+        )
+
+    def _malformed_tool_call_error(
+        self,
+        state: _ToolCallState,
+        exc: json.JSONDecodeError,
+    ) -> MalformedToolCallFailure:
+        """Build a useful error for an unparseable tool_call ``arguments`` blob."""
+        tool_name = state.name or "<unknown>"
+        # Excerpt — first 80 chars is enough to identify the call without
+        # spilling potentially-huge content payloads into the error message.
+        excerpt = state.arguments[:80]
+        if len(state.arguments) > 80:
+            excerpt += "…"
+        finish_reason = self._stop_reason
+        if finish_reason == "length":
+            message = (
+                f"Tool call '{tool_name}' was truncated mid-JSON by the "
+                f"max_tokens cap (provider finish_reason='length'). "
+                f"Raise --max-tokens (default 1024 is small for tool calls "
+                f"that emit file content) or rephrase the request so the "
+                f"model uses smaller chunks. Underlying parse error: {exc.msg}"
+            )
+        else:
+            message = (
+                f"Tool call '{tool_name}' arguments were not valid JSON "
+                f"(provider finish_reason={finish_reason!r}). The model "
+                f"emitted malformed syntax — usually transient. Retry or "
+                f"rephrase. Underlying parse error: {exc.msg}"
+            )
+        return MalformedToolCallFailure(
+            message,
+            tool_name=tool_name,
+            finish_reason=finish_reason,
+            arguments_excerpt=excerpt,
         )
 
 

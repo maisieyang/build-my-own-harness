@@ -58,6 +58,7 @@ from openharness._stream_render import render_stream
 from openharness.api import (
     AuthenticationFailure,
     OpenAICompatibleApiClient,
+    OpenHarnessApiError,
     RateLimitFailure,
     RequestFailure,
 )
@@ -1289,6 +1290,12 @@ async def _run_chat(
             except LoopError as exc:
                 typer.echo(f"Loop error: {exc}", err=True)
                 # Don't break — let user issue /clear or retry.
+                continue
+            except OpenHarnessApiError as exc:
+                typer.echo(f"API error: {exc}", err=True)
+                # REPL must survive provider-side failures (auth blip,
+                # rate-limit, truncated tool_call). User can /clear,
+                # adjust flags (e.g. --max-tokens), or retry.
                 continue
 
             if captured is not None:

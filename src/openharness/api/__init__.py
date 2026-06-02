@@ -30,6 +30,7 @@ from __future__ import annotations
 from openharness.api.client import OpenAICompatibleApiClient, SupportsStreamingMessages
 from openharness.api.errors import (
     AuthenticationFailure,
+    MalformedToolCallFailure,
     OpenHarnessApiError,
     PromptTooLongFailure,
     RateLimitFailure,
@@ -40,6 +41,7 @@ from openharness.api.retry import DEFAULT_POLICY, RetryPolicy
 __all__ = [
     "DEFAULT_POLICY",
     "AuthenticationFailure",
+    "MalformedToolCallFailure",
     "OpenAICompatibleApiClient",
     "OpenHarnessApiError",
     "PromptTooLongFailure",

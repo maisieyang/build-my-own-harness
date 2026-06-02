@@ -92,3 +92,34 @@ class PromptTooLongFailure(RequestFailure):
     Engine code that wants to react specifically writes
     ``except PromptTooLongFailure`` first.
     """
+
+
+class MalformedToolCallFailure(RequestFailure):
+    """Model emitted unparseable JSON in a tool_call ``arguments`` string.
+
+    Two common causes surface as this error:
+
+    - ``finish_reason == "length"`` — the per-call ``max_tokens`` cap
+      truncated streaming mid-string. Fix is to raise ``--max-tokens``
+      (default 1024 is too small for tool calls that write file content)
+      or rephrase so the model emits smaller chunks.
+    - other ``finish_reason`` with malformed JSON — the model itself
+      emitted broken syntax. Rare; usually transient. Retry or rephrase.
+
+    Raised by :meth:`_StreamAssembler.finalize` in
+    ``api/translation.py`` so engine + CLI layers catch a single typed
+    error instead of a raw :class:`json.JSONDecodeError`.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        tool_name: str | None = None,
+        finish_reason: str | None = None,
+        arguments_excerpt: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.tool_name = tool_name
+        self.finish_reason = finish_reason
+        self.arguments_excerpt = arguments_excerpt

@@ -18,6 +18,9 @@ SDK layer, not here.
 
 from __future__ import annotations
 
+import pytest
+
+from openharness.api.errors import MalformedToolCallFailure
 from openharness.api.translation import _StreamAssembler, to_openai_request
 from openharness.protocols.content import (
     ImageBlock,
@@ -384,6 +387,87 @@ class TestStreamAssemblerToolUse:
         assert tool_use.id == "call_1"
         assert tool_use.name == "get_weather"
         assert tool_use.input == {"loc": "SF"}  # JSON-parsed from "{\"loc\": \"SF\"}"
+
+    def test_truncated_arguments_with_length_finish_reason_raises(self) -> None:
+        """max_tokens cap truncates a Write tool call mid-content string —
+        finalize() must surface MalformedToolCallFailure with a hint about
+        raising --max-tokens, NOT a raw JSONDecodeError.
+        """
+        a = _StreamAssembler()
+        a.consume(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_write_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "Write",
+                                        "arguments": '{"file_path": "/tmp/a.md", "content": "long article ',
+                                    },
+                                },
+                            ],
+                        },
+                        "finish_reason": None,
+                    },
+                ],
+            },
+        )
+        a.consume({"choices": [{"delta": {}, "finish_reason": "length"}]})
+
+        with pytest.raises(MalformedToolCallFailure) as excinfo:
+            a.finalize()
+        err = excinfo.value
+        assert err.tool_name == "Write"
+        assert err.finish_reason == "length"
+        assert err.arguments_excerpt is not None
+        assert err.arguments_excerpt.startswith('{"file_path"')
+        msg = str(err)
+        assert "max_tokens" in msg
+        assert "'Write'" in msg
+        assert "--max-tokens" in msg
+
+    def test_malformed_json_with_stop_finish_reason_raises(self) -> None:
+        """Model emits invalid JSON despite finish_reason='stop' (rare model
+        bug case) — finalize() still surfaces MalformedToolCallFailure but
+        with the 'malformed syntax' framing, not the max_tokens framing.
+        """
+        a = _StreamAssembler()
+        a.consume(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_x",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_weather",
+                                        "arguments": "{loc: not-json}",
+                                    },
+                                },
+                            ],
+                        },
+                        "finish_reason": None,
+                    },
+                ],
+            },
+        )
+        a.consume({"choices": [{"delta": {}, "finish_reason": "stop"}]})
+
+        with pytest.raises(MalformedToolCallFailure) as excinfo:
+            a.finalize()
+        err = excinfo.value
+        assert err.tool_name == "get_weather"
+        assert err.finish_reason == "stop"
+        msg = str(err)
+        assert "malformed syntax" in msg
+        assert "max_tokens" not in msg  # different code path, not the cap framing
 
 
 class TestStreamAssemblerMixedContent:
