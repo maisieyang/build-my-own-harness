@@ -78,6 +78,13 @@ dependencies = [
     # quality jump for our use case. httpx is already in the dep tree
     # via openai SDK so no separate HTTP dep is needed.
     "markdownify>=0.11,<1.0",
+    # P14-T3 — explicit dep on BeautifulSoup4 (already pulled
+    # transitively by markdownify). WebFetch uses bs4's public API
+    # directly for the chrome-stripping pre-pass (script / style /
+    # nav / aside / header / footer get decompose()'d so their inner
+    # text vanishes — markdownify's ``strip=[...]`` only drops the
+    # wrapping tag, keeping inner text the LLM does not want to see).
+    "beautifulsoup4>=4.12,<5.0",
 ]
 
 [project.scripts]
