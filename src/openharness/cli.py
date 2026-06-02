@@ -44,6 +44,17 @@ import contextlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+# Side-effect import: when ``readline`` is imported, Python's built-in
+# ``input()`` switches to libreadline (or libedit on macOS), enabling
+# backspace, arrow-key cursor motion, history (Up/Down), and Ctrl+R
+# search inside the ``oh chat`` REPL prompt. Without this import, the
+# raw-TTY ``input()`` echoes characters but ignores erase and arrow
+# keys, leaving users unable to edit a line before pressing Enter.
+# Guarded import — readline ships with stdlib on Linux/macOS but is
+# absent on Windows; on that platform we degrade silently to raw TTY.
+with contextlib.suppress(ImportError):
+    import readline  # noqa: F401
+
 import typer
 
 if TYPE_CHECKING:
