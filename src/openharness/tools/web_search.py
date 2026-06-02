@@ -39,9 +39,15 @@ Key design choices:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
+from pydantic import BaseModel, Field
+
+from openharness.tools.base import BaseTool, ToolResult
+
+if TYPE_CHECKING:
+    from openharness.tools.base import ToolExecutionContext
 
 _TAVILY_ENDPOINT = "https://api.tavily.com/search"
 _DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -196,9 +202,160 @@ class TavilySearchProvider:
         ]
 
 
+# ============================================================================
+# WebSearch tool (P14-T2) — BaseTool subclass dispatched through Provider
+# ============================================================================
+
+
+_MIN_NUM_RESULTS = 1
+_MAX_NUM_RESULTS = 10
+_DEFAULT_NUM_RESULTS = 5
+
+
+class WebSearchInput(BaseModel):
+    """Input schema for :class:`WebSearch`.
+
+    The LLM picks ``num_results`` based on how broadly it wants to
+    scan; ``query`` is the natural-language search string. Tavily
+    (and most engines) does not require quoting / boolean syntax —
+    natural language ranks fine.
+    """
+
+    query: str = Field(
+        min_length=1,
+        description=(
+            "Natural-language search query. Be specific (e.g. "
+            "'LangChain v0.3 streaming API changes'); generic queries "
+            "('AI news') burn context with low-signal hits."
+        ),
+    )
+    num_results: int = Field(
+        default=_DEFAULT_NUM_RESULTS,
+        ge=_MIN_NUM_RESULTS,
+        le=_MAX_NUM_RESULTS,
+        description=(
+            "How many search hits to return (1-10, default 5). Pick "
+            "small (3) when you only need the top hit; pick larger "
+            "(8-10) when surveying a topic."
+        ),
+    )
+
+
+class WebSearch(BaseTool[WebSearchInput]):
+    """Search the web for information.
+
+    Dispatched through a :class:`WebSearchProvider` (D29.2). The
+    provider abstraction means swapping Tavily for Brave / Serper /
+    etc. is a single-file change; this tool does not know which
+    provider is in use.
+
+    Construction is injection-only: the CLI startup wires a concrete
+    :class:`TavilySearchProvider` (with API key unwrapped from
+    :class:`SecretStr`) and hands it here. Tests inject ``_StubProvider``
+    to assert tool-layer behavior without network.
+
+    Errors from the provider are caught and surfaced as
+    :class:`ToolResult` with ``is_error=True`` and a category-specific
+    message (D29.7). The engine never sees the underlying exception —
+    the LLM does, and decides whether to retry / rephrase / give up.
+    """
+
+    name = "WebSearch"
+    description = (
+        "Search the web for information. Returns up to num_results "
+        "URLs with title + snippet. Use to discover URLs you don't "
+        "already know; then call WebFetch to read specific pages in "
+        "detail. Prefer this over trying to recall facts that require "
+        "current information (news, recent releases, evolving topics)."
+    )
+    input_model = WebSearchInput
+    # Read-only: WebSearch dispatches a GET-like network request and
+    # mutates nothing locally. Matches Read / Grep / LoadSkillTool —
+    # AuthZ Tier 3 lax path applies.
+    is_read_only = True
+
+    def __init__(self, provider: WebSearchProvider) -> None:
+        self._provider = provider
+
+    async def execute(
+        self,
+        input: WebSearchInput,
+        context: ToolExecutionContext,  # noqa: ARG002 — BaseTool contract; web tool ignores cwd
+    ) -> ToolResult:
+        try:
+            results = await self._provider.search(
+                query=input.query,
+                num_results=input.num_results,
+            )
+        except WebSearchAuthError as exc:
+            return ToolResult(
+                output=(
+                    f"WebSearch is not authenticated: {exc}\n"
+                    "Hint: set OPENHARNESS_WEB__API_KEY to a valid "
+                    "provider API key."
+                ),
+                is_error=True,
+            )
+        except WebSearchQuotaError as exc:
+            return ToolResult(
+                output=(
+                    f"WebSearch provider quota exhausted: {exc}\n"
+                    "Hint: retry later or upgrade the provider plan."
+                ),
+                is_error=True,
+            )
+        except WebSearchNetworkError as exc:
+            return ToolResult(
+                output=(
+                    f"WebSearch network failure: {exc}\nHint: retryable — the LLM may try again."
+                ),
+                is_error=True,
+            )
+        except WebSearchRequestError as exc:
+            return ToolResult(
+                output=f"WebSearch provider error: {exc}",
+                is_error=True,
+            )
+
+        if not results:
+            return ToolResult(
+                output=f'No search results for "{input.query}".',
+                metadata={"query": input.query, "result_count": 0},
+            )
+
+        return ToolResult(
+            output=_format_results_as_markdown(input.query, results),
+            metadata={"query": input.query, "result_count": len(results)},
+        )
+
+
+def _format_results_as_markdown(query: str, results: list[WebSearchResult]) -> str:
+    """Render search hits as numbered markdown the LLM reads cleanly.
+
+    Per-hit shape:
+
+    .. code-block:: markdown
+
+        1. **Title here** (https://example.com/path)
+           One-line snippet here.
+    """
+    lines: list[str] = [f'Search results for "{query}":', ""]
+    for i, hit in enumerate(results, start=1):
+        title = hit.title or "(no title)"
+        url = hit.url or "(no url)"
+        snippet = hit.snippet.strip() or "(no snippet)"
+        lines.append(f"{i}. **{title}** ({url})")
+        lines.append(f"   {snippet}")
+        lines.append("")
+    # Drop the trailing blank line for a tight end.
+    return "\n".join(lines).rstrip()
+
+
 __all__ = [
     "TavilySearchProvider",
+    "WebSearch",
     "WebSearchAuthError",
+    "WebSearchInput",
     "WebSearchNetworkError",
     "WebSearchProvider",
     "WebSearchProviderError",

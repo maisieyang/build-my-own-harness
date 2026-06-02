@@ -15,15 +15,19 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 
 from openharness.config.settings import WebSettings
+from openharness.tools.base import ToolExecutionContext
 from openharness.tools.web_search import (
     TavilySearchProvider,
+    WebSearch,
     WebSearchAuthError,
+    WebSearchInput,
     WebSearchNetworkError,
     WebSearchProvider,
     WebSearchProviderError,
@@ -270,6 +274,151 @@ class TestWebSettings:
             WebSettings(fetch_timeout_seconds=0.0)
         with pytest.raises(ValueError):
             WebSettings(fetch_timeout_seconds=-1.0)
+
+
+# ============================================================================
+# Public exception hierarchy
+# ============================================================================
+
+
+# ============================================================================
+# WebSearch tool (P14-T2)
+# ============================================================================
+
+
+def _ctx() -> ToolExecutionContext:
+    """Bare ToolExecutionContext for tool unit tests; web tools don't read it."""
+    return ToolExecutionContext(cwd=Path("/tmp"))
+
+
+def _failing_provider(exc: Exception) -> _StubProvider:
+    """Wrap a stub provider that raises on every search() call."""
+
+    class _Failer:
+        async def search(self, query: str, num_results: int) -> list[WebSearchResult]:
+            raise exc
+
+    return _Failer()  # type: ignore[return-value]
+
+
+class TestWebSearchInput:
+    def test_query_required_non_empty(self) -> None:
+        with pytest.raises(ValueError):
+            WebSearchInput(query="")  # type: ignore[call-arg]
+
+    def test_num_results_default_five(self) -> None:
+        i = WebSearchInput(query="hi")
+        assert i.num_results == 5
+
+    @pytest.mark.parametrize("n", [0, -1, 11, 100])
+    def test_num_results_out_of_range_rejected(self, n: int) -> None:
+        with pytest.raises(ValueError):
+            WebSearchInput(query="hi", num_results=n)
+
+    @pytest.mark.parametrize("n", [1, 3, 5, 10])
+    def test_num_results_in_range_accepted(self, n: int) -> None:
+        i = WebSearchInput(query="hi", num_results=n)
+        assert i.num_results == n
+
+
+class TestWebSearchToolHappyPath:
+    async def test_canned_results_formatted_as_markdown(self) -> None:
+        canned = [
+            WebSearchResult(
+                url="https://example.com/a",
+                title="Title A",
+                snippet="Snippet A line.",
+            ),
+            WebSearchResult(
+                url="https://example.com/b",
+                title="Title B",
+                snippet="Snippet B line.",
+            ),
+        ]
+        tool = WebSearch(provider=_StubProvider(canned=canned))
+        result = await tool.execute(
+            WebSearchInput(query="openharness", num_results=2),
+            _ctx(),
+        )
+        assert result.is_error is False
+        assert result.metadata["query"] == "openharness"
+        assert result.metadata["result_count"] == 2
+        assert 'Search results for "openharness":' in result.output
+        assert "1. **Title A** (https://example.com/a)" in result.output
+        assert "   Snippet A line." in result.output
+        assert "2. **Title B** (https://example.com/b)" in result.output
+
+    async def test_no_results_returns_friendly_message(self) -> None:
+        tool = WebSearch(provider=_StubProvider(canned=[]))
+        result = await tool.execute(
+            WebSearchInput(query="nothing matches", num_results=5),
+            _ctx(),
+        )
+        assert result.is_error is False
+        assert result.metadata["result_count"] == 0
+        assert 'No search results for "nothing matches".' in result.output
+
+    async def test_provider_receives_query_and_num_results(self) -> None:
+        provider = _StubProvider(canned=[])
+        tool = WebSearch(provider=provider)
+        await tool.execute(WebSearchInput(query="abc", num_results=3), _ctx())
+        assert provider.calls == [("abc", 3)]
+
+
+class TestWebSearchToolErrorPaths:
+    async def test_auth_error_surfaces_as_tool_error_with_hint(self) -> None:
+        tool = WebSearch(provider=_failing_provider(WebSearchAuthError("bad key")))
+        result = await tool.execute(WebSearchInput(query="q"), _ctx())
+        assert result.is_error is True
+        assert "WebSearch is not authenticated" in result.output
+        assert "OPENHARNESS_WEB__API_KEY" in result.output
+
+    async def test_quota_error_surfaces_with_hint(self) -> None:
+        tool = WebSearch(provider=_failing_provider(WebSearchQuotaError("over quota")))
+        result = await tool.execute(WebSearchInput(query="q"), _ctx())
+        assert result.is_error is True
+        assert "quota exhausted" in result.output
+        assert "retry later" in result.output
+
+    async def test_network_error_surfaces_with_retry_hint(self) -> None:
+        tool = WebSearch(provider=_failing_provider(WebSearchNetworkError("DNS fail")))
+        result = await tool.execute(WebSearchInput(query="q"), _ctx())
+        assert result.is_error is True
+        assert "network failure" in result.output
+        assert "retryable" in result.output
+
+    async def test_request_error_surfaces_provider_message(self) -> None:
+        tool = WebSearch(provider=_failing_provider(WebSearchRequestError("HTTP 500: boom")))
+        result = await tool.execute(WebSearchInput(query="q"), _ctx())
+        assert result.is_error is True
+        assert "HTTP 500: boom" in result.output
+
+
+class TestWebSearchToolClassMetadata:
+    def test_static_metadata_matches_d29_1(self) -> None:
+        assert WebSearch.name == "WebSearch"
+        assert WebSearch.is_read_only is True
+        assert WebSearch.input_model is WebSearchInput
+        # Description must mention the workflow pattern so the LLM
+        # knows to chain WebSearch → WebFetch (D29.1 rationale).
+        assert "WebFetch" in WebSearch.description
+
+
+class TestFormatResultsAsMarkdown:
+    """Direct tests of the formatter — guards the markdown shape so the
+    LLM-facing output does not regress silently."""
+
+    async def test_hit_with_missing_title_uses_placeholder(self) -> None:
+        canned = [WebSearchResult(url="https://example.com/x", title="", snippet="...")]
+        tool = WebSearch(provider=_StubProvider(canned=canned))
+        result = await tool.execute(WebSearchInput(query="q"), _ctx())
+        assert "(no title)" in result.output
+
+    async def test_hit_with_missing_snippet_uses_placeholder(self) -> None:
+        canned = [WebSearchResult(url="https://example.com/x", title="T", snippet="")]
+        tool = WebSearch(provider=_StubProvider(canned=canned))
+        result = await tool.execute(WebSearchInput(query="q"), _ctx())
+        assert "(no snippet)" in result.output
 
 
 # ============================================================================
