@@ -85,6 +85,17 @@ dependencies = [
     # text vanishes — markdownify's ``strip=[...]`` only drops the
     # wrapping tag, keeping inner text the LLM does not want to see).
     "beautifulsoup4>=4.12,<5.0",
+    # Phase 14.5 dogfood fix — macOS-only GNU readline binding. The
+    # stdlib ``readline`` module on macOS is backed by ``libedit``,
+    # which has buggy cursor math when an input line mixes CJK
+    # (wide) and ASCII (narrow) characters: backspace lands at the
+    # wrong byte offset and the user cannot delete portions of a
+    # mixed-script ``oh chat`` prompt. ``gnureadline`` is a thin
+    # binding around the real GNU readline that takes precedence
+    # over libedit when imported first. Linux already ships GNU
+    # readline natively; Windows has no readline at all (the cli.py
+    # import is already guarded by contextlib.suppress).
+    "gnureadline>=8.2; sys_platform == 'darwin'",
 ]
 
 [project.scripts]

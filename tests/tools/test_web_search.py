@@ -255,7 +255,12 @@ class TestWebSearchProviderProtocol:
 class TestWebSettings:
     def test_defaults_are_safe(self) -> None:
         s = WebSettings()
-        assert s.enabled is False
+        # Phase 14.5: default flipped True after dogfood revealed
+        # that "opt-in via flag" was over-conservative for a
+        # pure-read-only network capability. Graceful no-key
+        # degradation in ``_maybe_register_web_tools`` keeps new
+        # users without a Tavily key from crashing.
+        assert s.enabled is True
         assert s.search_provider == "tavily"
         assert s.api_key is None
         assert s.fetch_timeout_seconds == 10.0

@@ -44,14 +44,24 @@ import contextlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-# Side-effect import: when ``readline`` is imported, Python's built-in
-# ``input()`` switches to libreadline (or libedit on macOS), enabling
-# backspace, arrow-key cursor motion, history (Up/Down), and Ctrl+R
-# search inside the ``oh chat`` REPL prompt. Without this import, the
-# raw-TTY ``input()`` echoes characters but ignores erase and arrow
-# keys, leaving users unable to edit a line before pressing Enter.
-# Guarded import — readline ships with stdlib on Linux/macOS but is
-# absent on Windows; on that platform we degrade silently to raw TTY.
+# Side-effect import: when a readline backend is imported, Python's
+# built-in ``input()`` switches to it, enabling backspace, arrow-key
+# cursor motion, history (Up/Down), and Ctrl+R search inside the
+# ``oh chat`` REPL prompt. Without it, raw-TTY ``input()`` echoes
+# characters but ignores erase / arrow keys.
+#
+# **Order matters on macOS.** The stdlib ``readline`` is backed by
+# ``libedit``, which has a known bug computing cursor positions when
+# an input line mixes CJK (wide) and ASCII (narrow) characters —
+# backspace lands at the wrong byte offset and the user cannot
+# delete a mixed-script prompt. ``gnureadline`` (declared as a
+# macOS-only dep in pyproject.toml) is a binding around the real
+# GNU readline that fixes this. We import it FIRST so it claims the
+# ``readline`` slot before stdlib's libedit-backed module gets a
+# chance to. Linux already ships GNU readline natively; on Windows
+# both imports fail and ``contextlib.suppress`` degrades silently.
+with contextlib.suppress(ImportError):
+    import gnureadline  # type: ignore[import-not-found]  # noqa: F401
 with contextlib.suppress(ImportError):
     import readline  # noqa: F401
 
@@ -248,30 +258,51 @@ def _maybe_register_web_tools(
     *,
     enable_web: bool,
     settings: Settings,
-) -> None:
+    explicit_flag: bool = False,
+) -> bool:
     """Conditionally register :class:`WebSearch` + :class:`WebFetch`.
 
-    Phase 14 (D29.3): when ``--enable-web`` is OFF (or unset and
-    ``OPENHARNESS_WEB__ENABLED`` is False), this is a no-op and the
-    tool catalog stays byte-identical to v0.2.0. When ON, both tools
-    join the registry and the LLM sees them alongside the existing
-    six (Read / Write / Edit / Bash / Grep / Agent).
+    Returns the **effective** web state — ``True`` if both tools got
+    registered, ``False`` otherwise. The caller passes the same value
+    to :func:`build_system_prompt` as ``web_enabled=`` so the prompt
+    matches the actual tool catalog (positive guidance only when
+    tools are really available).
 
-    If ``--enable-web`` is set but no provider API key is configured,
-    raises ``typer.Exit`` with a clear remediation message — silent
-    fallback would lead to confusing "no search results" errors at
-    every search attempt.
+    Phase 14.5 dogfood revision of D29.3 (see
+    [[feedback-opt-in-default-calibration]]): web tools now default
+    ON (mirrors Claude Code / Cursor / industry harness behavior).
+    Two degradation paths cover users who don't have a Tavily key:
+
+    - ``enable_web=False`` (explicit ``--no-enable-web`` or settings
+      override): return False, no-op, no warning.
+    - ``enable_web=True`` AND ``settings.web.api_key is None``:
+      - if ``explicit_flag=True`` (user typed ``--enable-web``):
+        ``typer.Exit(1)`` with remediation — user explicitly asked
+        and deserves a clear answer.
+      - if ``explicit_flag=False`` (default-ON path): print a brief
+        one-line stderr hint and return False so the system prompt
+        falls back to the anti-substitution paragraph. New users
+        with no Tavily key see v0.2.0 behavior, not a crash.
     """
     if not enable_web:
-        return
+        return False
     if settings.web.api_key is None:
-        typer.echo(
-            "--enable-web requires OPENHARNESS_WEB__API_KEY to be set. "
-            "Sign up at https://tavily.com (free tier, 1000/month) and "
-            "export the key, then re-run.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
+        if explicit_flag:
+            typer.echo(
+                "--enable-web requires OPENHARNESS_WEB__API_KEY to be set. "
+                "Sign up at https://tavily.com (free tier, 1000/month) and "
+                "export the key, then re-run.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        # Default-ON path with no key — silently degrade. No stderr
+        # noise: every ``oh ask`` invocation would emit it otherwise,
+        # which is unacceptable UX for users who don't care about
+        # web at all. The system prompt's anti-substitution paragraph
+        # tells the LLM to suggest ``--enable-web`` (which then
+        # surfaces the setup hint contextually, only when the user
+        # actually asks for web-needing info).
+        return False
     api_key_value = settings.web.api_key.get_secret_value()
     web_search_provider = TavilySearchProvider(
         api_key=api_key_value,
@@ -285,6 +316,7 @@ def _maybe_register_web_tools(
             user_agent=f"OpenHarness/{__version__} (+webfetch)",
         )
     )
+    return True
 
 
 def _load_plugin_catalogs(
@@ -483,15 +515,20 @@ async def _run_ask(
     enable_memory = (
         enable_memory_override if enable_memory_override is not None else settings.enable_memory
     )
-    # P14-T4 (D29.3): web-tools opt-in. CLI flag overrides
-    # settings.web.enabled. When OFF, WebSearch / WebFetch are not
-    # registered into the tool catalog and the default system prompt
-    # picks up the D29.6 anti-substitution paragraph (so the LLM is
-    # told explicitly NOT to Grep local files as a research
-    # substitute). Default OFF — provider API key + monthly quota are
-    # external dependencies, surprise-burn is the failure mode we
-    # avoid.
-    enable_web = enable_web_override if enable_web_override is not None else settings.web.enabled
+    # P14-T4 + Phase 14.5 (revised D29.3): web-tools default ON,
+    # graceful no-key degrade. ``settings.web.enabled`` now defaults
+    # True (industry harness convention). When the user has no
+    # OPENHARNESS_WEB__API_KEY, ``_maybe_register_web_tools`` skips
+    # registration silently and returns False; the system prompt
+    # falls back to the D29.6 anti-substitution paragraph (so the
+    # LLM is told explicitly NOT to Grep local files). Explicit
+    # ``--enable-web`` + no key still hard-fails — user asked.
+    if enable_web_override is not None:
+        explicit_web_flag = True
+        enable_web = enable_web_override
+    else:
+        explicit_web_flag = False
+        enable_web = settings.web.enabled
     # P11-T5: compact + extraction CLI flags fold into nested Settings.
     # ``--no-auto-compact`` flips ``compact.enabled=False`` regardless
     # of env. ``--compact-threshold 0.5`` overrides
@@ -644,11 +681,14 @@ async def _run_ask(
         for adapter in pool.adapters:
             registry.register(adapter)
 
-        # P14-T4 (D29.3): conditional registration of web tools. Only
-        # touches the registry when --enable-web is on; when off, the
-        # tool catalog stays byte-identical to v0.2.0 (invariant
-        # T14-* in decisions/29).
-        _maybe_register_web_tools(registry, enable_web=enable_web, settings=settings)
+        # P14-T4 + Phase 14.5: conditional registration of web tools.
+        # Returns the **effective** web state — False when web was
+        # requested but no API key is set (graceful degrade). The
+        # value flows into ``build_system_prompt`` so the prompt
+        # matches the actual catalog.
+        effective_web = _maybe_register_web_tools(
+            registry, enable_web=enable_web, settings=settings, explicit_flag=explicit_web_flag
+        )
 
         # P5c-T3: Skills bootstrap. Convention-driven storage (no Settings
         # field per decisions/12 L2):global = ~/.openharness/skills/,
@@ -761,7 +801,7 @@ async def _run_ask(
                 skill_store=skill_store,
                 claude_md_content=claude_md_content,
                 memory_manifest=memory_manifest,
-                web_enabled=enable_web,
+                web_enabled=effective_web,
             )
 
         # P7b-T2 (D18.2): conditionally enter SandboxExecution.
@@ -1004,8 +1044,14 @@ async def _run_chat(
     enable_memory = (
         enable_memory_override if enable_memory_override is not None else settings.enable_memory
     )
-    # P14-T4 (D29.3): web-tools opt-in. Same shape as ``_run_ask``.
-    enable_web = enable_web_override if enable_web_override is not None else settings.web.enabled
+    # P14-T4 + Phase 14.5 (revised D29.3): web-tools default ON.
+    # Same shape as ``_run_ask``; see that function for the rationale.
+    if enable_web_override is not None:
+        explicit_web_flag = True
+        enable_web = enable_web_override
+    else:
+        explicit_web_flag = False
+        enable_web = settings.web.enabled
     # P11-T5: compact + extraction wiring — same shape as ``_run_ask``.
     compact_enabled = settings.compact.enabled and not no_auto_compact
     compact_threshold_ratio = (
@@ -1049,10 +1095,12 @@ async def _run_chat(
         for adapter in pool.adapters:
             registry.register(adapter)
 
-        # P14-T4 (D29.3): conditional web-tools registration. See
-        # ``_maybe_register_web_tools`` docstring for the off-path
-        # byte-identity guarantee.
-        _maybe_register_web_tools(registry, enable_web=enable_web, settings=settings)
+        # P14-T4 + Phase 14.5: conditional web-tools registration.
+        # Returns effective web state — degrades gracefully when web
+        # was requested but no API key is configured.
+        effective_web = _maybe_register_web_tools(
+            registry, enable_web=enable_web, settings=settings, explicit_flag=explicit_web_flag
+        )
 
         env = detect_environment()
         base_skill_store: SkillStore
@@ -1145,7 +1193,7 @@ async def _run_chat(
             env,
             skill_store=skill_store,
             claude_md_content=claude_md_content,
-            web_enabled=enable_web,
+            web_enabled=effective_web,
         )
 
         typer.echo("oh chat — multi-turn REPL. /help for commands, /exit to quit.")
@@ -1292,7 +1340,7 @@ async def _run_chat(
                         env,
                         skill_store=skill_store,
                         claude_md_content=claude_md_content,
-                        web_enabled=enable_web,
+                        web_enabled=effective_web,
                     )
             bundle_resolved = True
 
@@ -1315,7 +1363,7 @@ async def _run_chat(
                     skill_store=skill_store,
                     claude_md_content=claude_md_content,
                     memory_manifest=memory_manifest,
-                    web_enabled=enable_web,
+                    web_enabled=effective_web,
                 )
 
             context = QueryContext(

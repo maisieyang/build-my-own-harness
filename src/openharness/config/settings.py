@@ -331,14 +331,19 @@ class WebSettings(BaseModel):
     """
 
     enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Master enable for the web tools (:class:`WebSearch` + "
-            ":class:`WebFetch`). When ``False`` (default), tools are "
-            "not registered into the tool catalog and the default "
-            "system prompt picks up the D29.6 anti-substitution "
-            "paragraph. The CLI ``--enable-web`` flag on ``oh ask`` / "
-            "``oh chat`` is OR'd with this setting at startup."
+            ":class:`WebFetch`). Default ``True`` (Phase 14.5 "
+            "dogfood revision of D29.3 — matches Claude Code / "
+            "Cursor / industry harness defaults). When ``True`` AND "
+            ":attr:`api_key` is set, tools register and the system "
+            "prompt switches to positive guidance. When ``True`` but "
+            "no key is set, tools silently skip registration and the "
+            "system prompt falls back to the anti-substitution "
+            "paragraph (graceful degrade — new users without a "
+            "Tavily account see v0.2.0 behavior, not a crash). "
+            "Explicit ``--no-enable-web`` still forces OFF."
         ),
     )
     search_provider: str = Field(
