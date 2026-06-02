@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from openharness.mcp import McpServerConfig
@@ -302,6 +302,90 @@ class SnapshotSettings(BaseModel):
             "main conversation's model. Set to a cheaper variant "
             "(e.g. ``qwen-turbo``) to reduce per-turn cost when "
             "focus-state is enabled."
+        ),
+    )
+
+
+class WebSettings(BaseModel):
+    """Tunables for the Phase 14 web tools (D29.4).
+
+    Web tools (:class:`WebSearch` + :class:`WebFetch`) are opt-in via
+    ``--enable-web`` on ``oh ask`` / ``oh chat`` *or* via
+    ``OPENHARNESS_WEB__ENABLED=true``. When both signals are off, the
+    tools are not registered and the default system prompt picks up
+    the anti-substitution paragraph (D29.6).
+
+    Env-var overrides via the existing ``__`` delimiter:
+
+    - ``OPENHARNESS_WEB__ENABLED=true``
+    - ``OPENHARNESS_WEB__SEARCH_PROVIDER=tavily``
+    - ``OPENHARNESS_WEB__API_KEY=tvly-...``
+    - ``OPENHARNESS_WEB__FETCH_TIMEOUT_SECONDS=15.0``
+    - ``OPENHARNESS_WEB__FETCH_MAX_BYTES=2000000``
+    - ``OPENHARNESS_WEB__FETCH_DEFAULT_MAX_CHARS=8000``
+
+    D29.4: a single ``api_key`` field (not provider-specific naming
+    like ``tavily_api_key``) — the provider is itself a config field,
+    so swapping providers later does not require renaming the env
+    var. The user's mental model stays "I configure web access".
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Master enable for the web tools (:class:`WebSearch` + "
+            ":class:`WebFetch`). When ``False`` (default), tools are "
+            "not registered into the tool catalog and the default "
+            "system prompt picks up the D29.6 anti-substitution "
+            "paragraph. The CLI ``--enable-web`` flag on ``oh ask`` / "
+            "``oh chat`` is OR'd with this setting at startup."
+        ),
+    )
+    search_provider: str = Field(
+        default="tavily",
+        description=(
+            "Which :class:`WebSearchProvider` implementation to "
+            "instantiate when :class:`WebSearch` is registered. v1 "
+            "ships only ``tavily`` (D29.2). Future ``brave`` / etc. "
+            "land as siblings without touching the tool layer."
+        ),
+    )
+    api_key: SecretStr | None = Field(
+        default=None,
+        description=(
+            "API key for the configured ``search_provider``. Wrapped "
+            "in :class:`SecretStr` so it does not leak via ``repr`` "
+            "or log lines. ``None`` means the key was not set — the "
+            "tool layer surfaces a clear ``WebSearch is not "
+            "configured`` error to the LLM rather than crashing."
+        ),
+    )
+    fetch_timeout_seconds: float = Field(
+        default=10.0,
+        gt=0.0,
+        description=(
+            "Per-URL timeout for :class:`WebFetch` HTTP GETs (D29.5). "
+            "10s covers most slow news sites without making the agent "
+            "feel unresponsive."
+        ),
+    )
+    fetch_max_bytes: int = Field(
+        default=5_000_000,
+        gt=0,
+        description=(
+            "Body-size cap for :class:`WebFetch` (D29.5). 5MB is "
+            "well above typical articles (~1MB) and guards against "
+            "pathological pages that would blow memory."
+        ),
+    )
+    fetch_default_max_chars: int = Field(
+        default=10_000,
+        gt=0,
+        description=(
+            "Default ``max_chars`` when the LLM does not specify one "
+            "on a :class:`WebFetch` call (D29.5). 10k chars of "
+            "markdown is roughly 2-3k tokens — comfortable for one "
+            "tool result in a multi-turn research workflow."
         ),
     )
 
@@ -636,6 +720,17 @@ class Settings(BaseSettings):
             "``OPENHARNESS_SNAPSHOT__MAX_AGE_WARN_DAYS``. "
             "See :class:`SnapshotSettings`. The user-visible read opt-"
             "out is the ``--no-resume`` CLI flag, not this setting."
+        ),
+    )
+    web: WebSettings = Field(
+        default_factory=WebSettings,
+        description=(
+            "Nested web-tools tunables (Phase 14 D29.4). Env vars: "
+            "``OPENHARNESS_WEB__ENABLED`` / "
+            "``OPENHARNESS_WEB__SEARCH_PROVIDER`` / "
+            "``OPENHARNESS_WEB__API_KEY`` etc. See :class:`WebSettings`. "
+            "User-visible opt-in is also the ``--enable-web`` CLI flag, "
+            "OR'd with this setting at startup."
         ),
     )
 

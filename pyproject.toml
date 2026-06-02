@@ -71,6 +71,13 @@ dependencies = [
     # below 1.0 since aiodocker is still pre-1.0; bumping is a Phase 8+
     # task. See decisions/16 D18.1.
     "aiodocker>=0.21,<1.0",
+    # P14-T1 (D29.5) — WebFetch tool's HTML → markdown converter.
+    # Pure Python, ~30KB, actively maintained; LangChain / LlamaIndex
+    # use the same lib. stdlib html.parser is too primitive for clean
+    # markdown output, and html2text is ~70KB without a corresponding
+    # quality jump for our use case. httpx is already in the dep tree
+    # via openai SDK so no separate HTTP dep is needed.
+    "markdownify>=0.11,<1.0",
 ]
 
 [project.scripts]
