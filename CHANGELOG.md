@@ -15,7 +15,98 @@ records + framework-level lessons), see
 
 ## [Unreleased]
 
-_Nothing yet._
+Sketch of the next release (likely v0.3.0). Tagged + released when
+the user explicitly cuts it.
+
+### Added — web tools (Phase 14)
+
+- **`WebSearch` tool** — discover URLs for a topic via a pluggable
+  provider; ships with `TavilySearchProvider` (Tavily free tier:
+  1000 searches/month, no credit card). `--enable-web` opt-in;
+  `OPENHARNESS_WEB__API_KEY` required when ON.
+- **`WebFetch` tool** — GET a URL, strip `<script>` / `<style>` /
+  `<nav>` / `<aside>` / `<header>` / `<footer>` via BeautifulSoup,
+  render the rest to markdown via `markdownify`, truncate at
+  `max_chars` (default 10000) with the same `[+N chars truncated]`
+  suffix Phase 4 microcompact uses for tool-result clipping.
+  Streaming body cap (default 5MB) aborts pathological pages
+  mid-fetch.
+- **`WebSearchProvider` Protocol** — Tavily as v1 default behind
+  the Protocol; future Brave / Serper providers land as siblings
+  without touching the `WebSearch` tool.
+- **`--enable-web` CLI flag** on `oh ask` + `oh chat` (mirrors
+  `--enable-plugins` / `--enable-memory` pattern).
+- **Nested `WebSettings`** under `Settings`:
+  `OPENHARNESS_WEB__ENABLED`, `OPENHARNESS_WEB__SEARCH_PROVIDER`,
+  `OPENHARNESS_WEB__API_KEY` (SecretStr), plus fetch timeout /
+  body cap / default char cap tunables.
+
+### Added — system prompt anti-substitution guard (Phase 14, THE bug fix)
+
+- **`web_enabled` three-state kwarg** on `build_system_prompt`:
+  `None` (byte-identity branch — Phase 13 callers unchanged),
+  `True` (`## Web Access` positive-guidance section), `False`
+  (`## No Internet Access` anti-substitution section).
+- When `--enable-web` is OFF, the default system prompt now tells
+  the LLM explicitly: "you have no internet access; do NOT
+  substitute Grep or Read on local files for web queries". This
+  fixes the v0.2.0 dogfood defect where an LLM asked for
+  "research latest LLM developments" Grep'd local notes and
+  confabulated findings with fabricated specs.
+
+### Added — v0.2.0 patch chain (4 bug fixes between v0.2.0 and v0.3.0)
+
+- **`MalformedToolCallFailure`** — defensive JSON parse in
+  `_StreamAssembler.finalize()`. When the LLM's `max_tokens` cap
+  truncates a tool call's `arguments` string mid-JSON, surface a
+  category-specific friendly error instead of a raw
+  `JSONDecodeError` traceback. Heuristic on the parser's
+  `Unterminated string` message routes the error to the
+  `--max-tokens` hint regardless of how the provider labeled
+  `finish_reason` (DashScope reports `tool_calls` here, not
+  `length`).
+- **`oh chat` REPL survives API errors** — broadened `except
+  LoopError` to also catch `OpenHarnessApiError`. A single bad
+  turn no longer kills the entire session; the user can `/clear`,
+  adjust flags, or retry.
+- **`readline` enabled in `oh chat`** — side-effect `import
+  readline` gives backspace, arrow-key cursor motion, history
+  navigation, and Ctrl+R search inside the REPL prompt. Without
+  this, raw `input()` echoed characters but ignored erase keys
+  (libedit on macOS, GNU readline on Linux; Windows no-ops via
+  `contextlib.suppress(ImportError)`).
+- **`DEFAULT_MAX_TOKENS`: 1024 → 8192** — Phase 1's 1024 default
+  was set when there were no tools; with tool-use ship (Phase 2)
+  and especially `Write` / `Agent` tool calls that emit file
+  content as the `arguments` JSON, 1024 routinely truncated
+  mid-string. 8192 aligns with Claude Code / industry harness
+  defaults.
+
+### Added — runtime dependencies
+
+- `markdownify>=0.11,<1.0` — HTML → markdown converter for
+  `WebFetch`.
+- `beautifulsoup4>=4.12,<5.0` — promoted from transitive (pulled
+  by markdownify) to explicit since `WebFetch` uses its API
+  directly for the chrome-stripping pre-pass.
+
+### Quality bars
+
+- Tests grew from 1982 (v0.2.0) to ~2068 (+86 across the v0.2.0
+  patch chain + Phase 14).
+- **mypy --strict src/** clean throughout.
+- **ruff** check + format clean.
+- **≥95% coverage** gate held on Python 3.10 / 3.11.
+- 11 protected directories: 10/11 zero-diff between v0.2.0 and
+  Phase 14 close. `prompts/` is the one exception, holding the
+  `web_enabled` kwarg + the `## Web Access` / `## No Internet
+  Access` section — explicitly documented in Phase 14 boundary
+  doc invariant T14-6.
+- 6 existing tools (`Read` / `Write` / `Edit` / `Bash` / `Grep` /
+  `Agent`) byte-identical.
+- `services/summarize.py` + `services/snapshot.py` +
+  `services/session_memory.py` + `services/focus_state.py`
+  byte-identical.
 
 ---
 
