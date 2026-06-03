@@ -15,8 +15,19 @@ records + framework-level lessons), see
 
 ## [Unreleased]
 
-Sketch of the next release (likely v0.3.0). Tagged + released when
-the user explicitly cuts it.
+_Nothing yet._
+
+---
+
+## [0.3.0] — 2026-06-03
+
+Phase 14 (web tools + anti-substitution prompt) + Phase 15
+(rich.Live TTY spinner) cycle, plus 6 dogfood-driven patches
+collected between v0.2.0 and this release. Theme: turning v0.2.0's
+"shipped feature-complete harness" into "shipped harness that
+actually feels good when you use it" — every defect listed below
+came from real `oh ask` / `oh chat` invocations, not synthetic
+tests.
 
 ### Added — web tools (Phase 14)
 
@@ -82,6 +93,47 @@ the user explicitly cuts it.
   mid-string. 8192 aligns with Claude Code / industry harness
   defaults.
 
+### Added — TTY rendering polish (Phase 15)
+
+- **`rich.Live` spinner for tool calls** — TTY-only animated
+  spinner replaces the previous "tool ran, here's the result" lump
+  with a per-tool-call spinner that ticks during dispatch and
+  collapses into the rendered result on completion. Visual
+  feedback the user sees while a `Bash` / `WebFetch` is running.
+  Detects TTY via `sys.stdout.isatty()`; non-TTY (CI logs, pipes)
+  falls back to the original plain text rendering.
+- **Tool output preview whitespace strip** — surrounding
+  whitespace stripped from the preview line so multi-line tool
+  outputs don't leave a leading blank inside the rendered block.
+
+### Fixed — Phase 14.5 + 14.6 dogfood patches
+
+- **`gnureadline` macOS-only dependency** — the stdlib `readline`
+  on macOS is backed by `libedit`, which has a known bug computing
+  cursor positions when an input line mixes CJK (wide) and ASCII
+  (narrow) characters. Backspace lands at the wrong byte offset
+  and the user cannot delete portions of a mixed-script prompt in
+  `oh chat`. `gnureadline` (declared `sys_platform == 'darwin'`)
+  is imported first in `cli.py`; Linux already ships GNU readline
+  natively; Windows still no-ops via `contextlib.suppress`.
+- **Web tools default ON with graceful no-key degrade** —
+  `WebSettings.enabled` default flipped False → True (mirrors
+  Claude Code / Cursor / industry harness defaults). When the
+  default-ON path encounters no `OPENHARNESS_WEB__API_KEY`,
+  `_maybe_register_web_tools` skips registration silently and
+  returns False, and the system prompt falls back to the
+  anti-substitution paragraph — new users without a Tavily key
+  see v0.2.0 behavior rather than a crash. Explicit
+  `--enable-web` + no key still hard-fails with the original
+  remediation message.
+- **Chat-aware base system prompt (Phase 14.6)** — added one
+  sentence to `_BASE_INSTRUCTIONS`: *"Match response length and
+  tool use to user intent — don't pre-emptively explore the
+  filesystem or invoke tools for greetings or casual messages."*
+  Fixes over-eager `oh chat` responses where simple greetings
+  ("hi") triggered `ls -la` + workspace exploration + "what
+  would you like to work on?" verbosity.
+
 ### Added — runtime dependencies
 
 - `markdownify>=0.11,<1.0` — HTML → markdown converter for
@@ -89,19 +141,22 @@ the user explicitly cuts it.
 - `beautifulsoup4>=4.12,<5.0` — promoted from transitive (pulled
   by markdownify) to explicit since `WebFetch` uses its API
   directly for the chrome-stripping pre-pass.
+- `gnureadline>=8.2; sys_platform == 'darwin'` — macOS-only GNU
+  readline binding (Phase 14.5).
 
 ### Quality bars
 
-- Tests grew from 1982 (v0.2.0) to ~2068 (+86 across the v0.2.0
-  patch chain + Phase 14).
+- **~2029 tests passing** on CI (1982 at v0.2.0 → 2029; +47 net
+  across Phase 14 + 4 v0.2.x patches + Phase 14.5/14.6 + Phase 15).
 - **mypy --strict src/** clean throughout.
 - **ruff** check + format clean.
 - **≥95% coverage** gate held on Python 3.10 / 3.11.
 - 11 protected directories: 10/11 zero-diff between v0.2.0 and
-  Phase 14 close. `prompts/` is the one exception, holding the
+  v0.3.0. `prompts/` is the one exception, holding the
   `web_enabled` kwarg + the `## Web Access` / `## No Internet
-  Access` section — explicitly documented in Phase 14 boundary
-  doc invariant T14-6.
+  Access` section (Phase 14 D29.6) and the chat-aware
+  `_BASE_INSTRUCTIONS` sentence (Phase 14.6) — both explicitly
+  documented as user-feedback-driven exceptions to invariant T14-6.
 - 6 existing tools (`Read` / `Write` / `Edit` / `Bash` / `Grep` /
   `Agent`) byte-identical.
 - `services/summarize.py` + `services/snapshot.py` +
@@ -349,6 +404,7 @@ See [`decisions/23-phase-7-final-boundary.md`](./decisions/23-phase-7-final-boun
 
 ---
 
-[Unreleased]: https://github.com/maisieyang/build-my-own-harness/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/maisieyang/build-my-own-harness/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/maisieyang/build-my-own-harness/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/maisieyang/build-my-own-harness/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/maisieyang/build-my-own-harness/releases/tag/v0.1.0
