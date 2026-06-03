@@ -252,6 +252,64 @@ class TestToolEvents:
         assert ("x" * MAX_OUTPUT_PREVIEW) in rendered
 
     @pytest.mark.asyncio
+    async def test_completed_output_stripped_of_surrounding_whitespace(self) -> None:
+        """Dogfood follow-up: WebFetch via markdownify left N blank lines
+        between ``[Tool] →`` and the real content. ``output.strip()``
+        runs at format time so leading / trailing whitespace from
+        chrome-stripped HTML doesn't bleed into the terminal."""
+        out = io.StringIO()
+        err = io.StringIO()
+        events = _async_iter(
+            [
+                ToolExecutionCompletedEvent(
+                    tool_use_id="t1",
+                    tool_name="WebFetch",
+                    output="\n\n\n\n# Page Title\n\nBody content here\n\n\n",
+                    is_error=False,
+                ),
+                _final_event(),
+            ]
+        )
+
+        await render_stream(events, stdout=out, stderr=err)
+
+        rendered = out.getvalue()
+        # Content sits flush against "→ " — no leading-blank-line gap.
+        assert "[WebFetch] → # Page Title" in rendered
+        # Internal paragraph break preserved.
+        assert "# Page Title\n\nBody content here" in rendered
+        # No trailing whitespace garbage; exactly one \n from format.
+        assert rendered.endswith("Body content here\n")
+
+    @pytest.mark.asyncio
+    async def test_strip_runs_before_truncation_count(self) -> None:
+        """``[+N chars]`` reflects the stripped content's overflow, not
+        the raw padded input's. Confirms strip-then-truncate ordering."""
+        out = io.StringIO()
+        err = io.StringIO()
+        body = "x" * (MAX_OUTPUT_PREVIEW + 100)
+        padded = f"\n\n\n{body}\n\n\n"  # 6 extra whitespace chars
+        events = _async_iter(
+            [
+                ToolExecutionCompletedEvent(
+                    tool_use_id="t1",
+                    tool_name="Bash",
+                    output=padded,
+                    is_error=False,
+                ),
+                _final_event(),
+            ]
+        )
+
+        await render_stream(events, stdout=out, stderr=err)
+
+        rendered = out.getvalue()
+        # Counts 100, not 106 — strip happened before the length check.
+        assert "[+100 chars]" in rendered
+        # Content starts immediately after "→ " (no leading blanks).
+        assert "[Bash] → x" in rendered
+
+    @pytest.mark.asyncio
     async def test_text_deltas_then_tool_events_in_one_turn(self) -> None:
         # Realistic shape: model says something, requests a tool, sees result,
         # says more. saw_text resets between turns so each turn's text is

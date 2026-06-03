@@ -194,9 +194,18 @@ def _render_tool_completed(event: ToolExecutionCompletedEvent) -> str:
 
     Identical content in both TTY and non-TTY branches; the TTY branch
     just runs after Live cleared the spinner region.
+
+    Output is ``.strip()``-ed before truncation: tools like ``WebFetch``
+    whose markdownify output preserves whitespace left by stripped HTML
+    chrome would otherwise render as ``[WebFetch] →`` followed by many
+    blank lines before content. Internal whitespace (paragraph breaks)
+    is preserved — only the surrounding edges are trimmed. The
+    ``[+N chars]`` truncation count reflects the stripped length.
+    The LLM-facing ``ToolResultBlock`` is unaffected (renderer is the
+    UI display surface, consistent with the Phase 1 D12.6 LLM/UI split).
     """
     label = f"{event.tool_name} error" if event.is_error else event.tool_name
-    output = event.output
+    output = event.output.strip()
     if len(output) > MAX_OUTPUT_PREVIEW:
         dropped = len(output) - MAX_OUTPUT_PREVIEW
         output = output[:MAX_OUTPUT_PREVIEW] + f"... [+{dropped} chars]"
