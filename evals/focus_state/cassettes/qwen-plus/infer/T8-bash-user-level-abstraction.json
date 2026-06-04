@@ -1,0 +1,11 @@
+{
+  "case_id": "T8-bash-user-level-abstraction",
+  "model": "qwen-plus",
+  "kind": "infer",
+  "recorded_at": "2026-06-03T23:15:00.470736+00:00",
+  "request_summary": "[user] 帮我跑一下 focus_state 的测试，看是不是过的",
+  "response": {
+    "goal": "verify that the focus_state tests pass",
+    "next_step": "confirm that all 12 tests passed and no failures or warnings were reported"
+  }
+}

@@ -69,6 +69,17 @@ sentence naming the user's current ask) and "next_step" (one
 sentence naming what the assistant should do next). Both strings,
 no markdown, no code fences, no explanation outside the JSON.
 
+For "goal": when the assistant has called a tool with specific
+parameters (Grep pattern, Edit target, Read path), USE those
+parameters to refine the goal. Tool input is usually more specific
+than the user's own words and pins down the actual focus.
+
+For "next_step": if the user signals completion ("done", "ok",
+"完成"), do NOT just wait — propose the most important verification
+or follow-up action (run tests, check edge cases, verify the
+change works end-to-end) that may still be needed before the task
+is truly closed.
+
 Example output:
 {"goal": "fix the failing pytest in test_foo.py", "next_step": "rerun pytest after the fix and verify GREEN"}"""
 
@@ -130,7 +141,7 @@ async def infer_focus_state(
     model: str,
     prior_focus_state: FocusState | None = None,
     timeout_seconds: float = 15.0,
-    max_tokens: int = 256,
+    max_tokens: int = 512,
 ) -> FocusState:
     """Ask the LLM for the current ``FocusState`` given recent messages.
 

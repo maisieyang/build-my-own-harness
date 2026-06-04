@@ -2774,6 +2774,174 @@ def snapshot_gc(
 
 
 # --------------------------------------------------------------------------- #
+# `oh eval` — Stage 1-5 capability-anchored prompt eval                        #
+# --------------------------------------------------------------------------- #
+
+
+eval_app = typer.Typer(
+    name="eval",
+    help="Run capability-anchored prompt eval (Stages 1-5 substrate).",
+)
+app.add_typer(eval_app, name="eval")
+
+
+@eval_app.command(
+    "focus_state",
+    help=(
+        "Run eval against services/focus_state.py — 8 capability-anchored cases, "
+        "4 scorers (parse + keyword + substring + LLM-judge), version-stamped results."
+    ),
+)
+def eval_focus_state(
+    mode: str = typer.Option(
+        "live",
+        "--mode",
+        "-m",
+        help=(
+            "Cassette mode (D33.2): "
+            "'live' (real LLM, no cassette save), "
+            "'record' (real LLM + save cassette), "
+            "'replay' (load cassette, no LLM call)."
+        ),
+    ),
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        help="Override OPENHARNESS_MODEL for this run.",
+    ),
+    no_results: bool = typer.Option(
+        False,
+        "--no-results",
+        help="Skip writing results JSONL (default: write to evals/focus_state/results/).",
+    ),
+) -> None:
+    """Run capability-anchored eval against ``services/focus_state.py``.
+
+    Mirrors ``scripts/spike_focus_state_eval.py`` (legacy debug entry) but
+    as a proper CLI subcommand. Dataset, cassettes, and results all live
+    under ``evals/focus_state/``. Cassette + version stamping per D33 + D34.
+
+    Self-preference accepted (judge_model = main model, D32.5).
+    """
+    import asyncio
+    from typing import cast
+
+    from openharness.eval._printers import print_case, print_summary
+    from openharness.eval.cassette import CassetteMode, CassetteStore
+    from openharness.eval.protocol import Scorer  # noqa: TC001 — used as list[Scorer] annotation
+    from openharness.eval.results import (
+        RunMetadata,
+        build_result_filename,
+        compute_file_hash,
+        compute_rubric_hashes,
+        compute_text_hash,
+        get_git_info,
+        utc_iso_now,
+        write_run_results,
+    )
+    from openharness.eval.rubrics import CAPABILITY_RUBRICS
+    from openharness.eval.runner import run_eval
+    from openharness.eval.scorers import (
+        CapabilityAssertionsScorer,
+        CapabilityLLMJudgeScorer,
+        GoalKeywordMatchScorer,
+        ParseOkScorer,
+    )
+    from openharness.services.focus_state import FOCUS_STATE_SYSTEM_PROMPT
+
+    if mode not in ("live", "record", "replay"):
+        typer.echo(
+            f"Invalid --mode={mode!r}; expected one of: live / record / replay",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+    cassette_mode = cast("CassetteMode", mode)
+
+    settings = _load_settings()
+    client = _build_client(settings)
+    effective_model = model or settings.model
+
+    project_root = Path.cwd()
+    dataset_path = project_root / "evals" / "focus_state" / "dataset.yaml"
+    cassette_root = project_root / "evals" / "focus_state" / "cassettes"
+    results_root = project_root / "evals" / "focus_state" / "results"
+
+    if not dataset_path.exists():
+        typer.echo(
+            f"Dataset not found at {dataset_path}. "
+            "`oh eval focus_state` must be run from the project root containing evals/.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+
+    cassette_store = CassetteStore(cassette_root)
+
+    scorers: list[Scorer] = [
+        ParseOkScorer(),
+        GoalKeywordMatchScorer(),
+        CapabilityAssertionsScorer(),
+        CapabilityLLMJudgeScorer(
+            api_client=client,
+            model=effective_model,
+            cassette_store=cassette_store,
+            cassette_mode=cassette_mode,
+        ),
+    ]
+
+    typer.echo("# focus_state.py eval — `oh eval focus_state` (Stages 1-5 substrate)")
+    typer.echo(f"# model:         {effective_model}")
+    typer.echo(f"# dataset:       {dataset_path.relative_to(Path.cwd())}")
+    typer.echo(f"# cassettes:     {cassette_root.relative_to(Path.cwd())}")
+    typer.echo(f"# cassette_mode: {cassette_mode}")
+    if not no_results:
+        typer.echo(f"# results dir:   {results_root.relative_to(Path.cwd())}")
+    typer.echo(f"# scorers:       {[type(s).__name__ for s in scorers]}")
+
+    async def _orchestrate() -> None:
+        started_at = utc_iso_now()
+        results = await run_eval(
+            dataset_path,
+            scorers,
+            client,
+            effective_model,
+            cassette_root=cassette_root,
+            cassette_mode=cassette_mode,
+        )
+
+        for result in results:
+            print_case(result)
+        print_summary(results)
+
+        if no_results:
+            return
+
+        completed_at = utc_iso_now()
+        git_commit, git_dirty = get_git_info(project_root)
+        metadata = RunMetadata(
+            started_at=started_at,
+            completed_at=completed_at,
+            model=effective_model,
+            judge_model=effective_model,
+            cassette_mode=cassette_mode,
+            dataset_path=str(dataset_path.relative_to(project_root)),
+            dataset_sha256=compute_file_hash(dataset_path),
+            prompt_sha256=compute_text_hash(FOCUS_STATE_SYSTEM_PROMPT),
+            prompt_text=FOCUS_STATE_SYSTEM_PROMPT,
+            rubric_sha256s=compute_rubric_hashes(CAPABILITY_RUBRICS),
+            rubric_texts=dict(CAPABILITY_RUBRICS),
+            scorer_classes=[type(s).__name__ for s in scorers],
+            n_cases=len(results),
+            git_commit=git_commit,
+            git_dirty=git_dirty,
+        )
+        result_path = results_root / build_result_filename(metadata)
+        write_run_results(result_path, metadata, results)
+        typer.echo(f"\n# results written: {result_path.relative_to(Path.cwd())}")
+
+    asyncio.run(_orchestrate())
+
+
+# --------------------------------------------------------------------------- #
 # Entry point                                                                 #
 # --------------------------------------------------------------------------- #
 

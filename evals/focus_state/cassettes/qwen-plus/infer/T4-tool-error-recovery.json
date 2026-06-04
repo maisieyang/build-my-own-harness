@@ -1,0 +1,11 @@
+{
+  "case_id": "T4-tool-error-recovery",
+  "model": "qwen-plus",
+  "kind": "infer",
+  "recorded_at": "2026-06-03T23:14:57.899387+00:00",
+  "request_summary": "[user] 看看 src/openharness/services/nonexistent.py 里写了什么",
+  "response": {
+    "goal": "determine the contents of src/openharness/services/nonexistent.py",
+    "next_step": "inform the user that the file does not exist and suggest checking for a typo or alternative filename"
+  }
+}

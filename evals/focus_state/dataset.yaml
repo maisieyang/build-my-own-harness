@@ -1,0 +1,387 @@
+# focus_state.py eval dataset — capability-anchored
+#
+# 5 cases probing T1 / T2 / T5 / T6 / T7 from Day 1 experiment.
+# See docs/ideas/eval-experiment-day1-focus-state.md for derivation.
+# See evals/focus_state/dataset_card.md for per-case stability profile.
+#
+# Schema: openharness.eval.runner.load_dataset() decodes this into
+# list[Sample]. ConversationMessage is reconstructed via Pydantic
+# model_validate on each message dict.
+
+samples:
+
+  # ===== T1 — Tool name 抽象成 user-side 语言 =====
+  - case_id: T1-tool-name-abstraction
+    capability: T1
+    shape: tool-only
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "找一下项目里所有调用 summarize() 的地方"
+      - role: assistant
+        content:
+          - type: tool_use
+            id: call_grep_summarize
+            name: Grep
+            input:
+              pattern: "summarize("
+              path: "src/openharness/"
+      - role: user
+        content:
+          - type: tool_result
+            tool_use_id: call_grep_summarize
+            content: "src/openharness/services/extract.py:233:    raw = await summarize(\nsrc/openharness/services/focus_state.py:151:    raw = await summarize(\nsrc/openharness/services/compact.py:418:    raw = await summarize("
+      - role: assistant
+        content:
+          - type: tool_use
+            id: call_read_extract
+            name: Read
+            input:
+              file_path: "src/openharness/services/extract.py"
+      - role: user
+        content:
+          - type: tool_result
+            tool_use_id: call_read_extract
+            content: "(file body — 233 lines truncated for spike)"
+    expected_goal_keywords: [summarize]
+    capability_assertions:
+      goal_must_contain: [summarize]
+      goal_must_NOT_contain: ["grep ", "read ", "tool"]
+    notes: |
+      T1 探针 — assistant 全是 tool use 没说话。capability test: goal 应
+      抽象到 user-side 语言（如 'summarize 的调用方'），不能写 tool name
+      当 verb（如 'grep summarize callers'）。真实 caller 来自
+      learnings/phase-13.md §3.1 的 'summarize 7 个 consumer'。
+
+  # ===== T2 — Tool input → 推 user 意图 =====
+  - case_id: T2-tool-input-refines-intent
+    capability: T2
+    shape: multi-step
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "我想看看 services 里的 async 模式"
+      - role: assistant
+        content:
+          - type: text
+            text: "我先 Grep 一下 services 里 async def 的位置。"
+      - role: assistant
+        content:
+          - type: tool_use
+            id: call_grep_async
+            name: Grep
+            input:
+              pattern: "async def"
+              path: "src/openharness/services/"
+      - role: user
+        content:
+          - type: tool_result
+            tool_use_id: call_grep_async
+            content: "src/openharness/services/summarize.py:56:async def summarize(\nsrc/openharness/services/focus_state.py:126:async def infer_focus_state(\nsrc/openharness/services/extract.py:201:async def extract_memories_from_turn("
+    expected_goal_keywords: [async]
+    capability_assertions:
+      goal_must_contain: [async]
+      goal_must_NOT_contain: [pattern, "in general"]
+    notes: |
+      T2 探针 — user ask 模糊 ('async 模式')，assistant tool input 用
+      'async def' pattern 显式 narrowing。capability test: goal 应反映
+      tool input 的具体性（'审查 services 的 async def 函数列表'），不能
+      stay 在 user ask 的模糊层 ('look at async patterns in general')。
+
+  # ===== T5 — Tool chain → 抓 high-level =====
+  - case_id: T5-tool-chain-high-level
+    capability: T5
+    shape: multi-step
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "tests/services/test_focus_state.py 跑出来红的，帮我看一下"
+      - role: assistant
+        content:
+          - type: text
+            text: "我先 Read tests/services/test_focus_state.py 看 fail 的 assertion 是什么。"
+      - role: assistant
+        content:
+          - type: tool_use
+            id: call_read_test
+            name: Read
+            input:
+              file_path: "tests/services/test_focus_state.py"
+      - role: user
+        content:
+          - type: tool_result
+            tool_use_id: call_read_test
+            content: "def test_parse_strips_markdown_fence():\n    text = '```json\\n{\"goal\": \"x\", \"next_step\": \"y\"}\\n```'\n    result = _parse_focus_state_response(text)\n    assert result.goal == 'x'"
+      - role: assistant
+        content:
+          - type: text
+            text: "看到 fail 是 markdown fence 剥离。我再 Grep 一下 _parse_focus_state_response。"
+      - role: assistant
+        content:
+          - type: tool_use
+            id: call_grep_parse
+            name: Grep
+            input:
+              pattern: "_parse_focus_state_response"
+              path: "src/openharness/services/"
+    expected_goal_keywords: [test_focus_state, fix]
+    capability_assertions:
+      goal_must_contain: [test_focus_state, test]
+      goal_must_NOT_contain:
+        - _parse_focus_state_response
+        - "find the implementation"
+        - "查找 _parse"
+        - grep
+    notes: |
+      T5 探针 — 6 message chain (Read → text → Grep)。capability test:
+      goal 应抽到 high-level user task ('修 test_focus_state.py')，不能
+      被最后一步 grep 干扰写成 '查找 _parse_focus_state_response 的实现'。
+      [Day 1 stability: 1/4 — known brittle on cross-model; substring
+      assertion has semantic ceiling, LLM-judge Stage 3 will refine.]
+
+  # ===== T6 — Tool-only no text → 仍能推 goal =====
+  - case_id: T6-tool-only-no-text-still-infer
+    capability: T6
+    shape: tool-only
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "看看 services/extract.py 里 EXTRACTION_SYSTEM_PROMPT 怎么写的"
+      - role: assistant
+        content:
+          - type: tool_use
+            id: call_grep_extract_prompt
+            name: Grep
+            input:
+              pattern: "EXTRACTION_SYSTEM_PROMPT"
+              path: "src/openharness/services/extract.py"
+      - role: user
+        content:
+          - type: tool_result
+            tool_use_id: call_grep_extract_prompt
+            content: "src/openharness/services/extract.py:79:EXTRACTION_SYSTEM_PROMPT = ..."
+      - role: assistant
+        content:
+          - type: tool_use
+            id: call_read_extract_prompt
+            name: Read
+            input:
+              file_path: "src/openharness/services/extract.py"
+              offset: 79
+              limit: 50
+      - role: user
+        content:
+          - type: tool_result
+            tool_use_id: call_read_extract_prompt
+            content: "EXTRACTION_SYSTEM_PROMPT = \"\"\"\\\nYou are extracting durable memories ..."
+    expected_goal_keywords: [EXTRACTION_SYSTEM_PROMPT, extract]
+    capability_assertions:
+      goal_must_contain: [EXTRACTION_SYSTEM_PROMPT, extract]
+      goal_must_NOT_contain: ["grep ", "read ", "tool"]
+    notes: |
+      T6 探针 — assistant 没说一句 text，全是 tool。capability test:
+      goal 必须 non-None（不能因 tool-only 推不出 goal）+ goal 不能写
+      tool name。EXTRACTION_SYSTEM_PROMPT 是 extract.py:79 真实存在的
+      module-level 常量。
+      [Day 1 stability: 3/4 — qwen-plus 写 "read the content of ..."
+      时 "read " 子串误判，是 substring 上限的实例。]
+
+  # ===== T3 — Tool result content → 整合进 next_step =====
+  - case_id: T3-tool-result-content-integration
+    capability: T3
+    shape: multi-step
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "src/openharness/services/focus_state.py 里 inference_started 这个 logger event 有出现在测试里吗"
+      - role: assistant
+        content:
+          - type: text
+            text: "我 Grep 一下 tests/ 看有没有断言 'inference_started'。"
+      - role: assistant
+        content:
+          - type: tool_use
+            id: call_grep_inference_started
+            name: Grep
+            input:
+              pattern: "inference_started"
+              path: "tests/"
+      - role: user
+        content:
+          - type: tool_result
+            tool_use_id: call_grep_inference_started
+            content: "tests/services/test_focus_state.py:123:    assert 'inference_started' in caplog.text"
+    expected_goal_keywords: [inference_started, test]
+    capability_assertions:
+      goal_must_contain: [inference_started]
+      next_step_must_contain_any_of:
+        - test_focus_state
+        - "line 123"
+        - "tests/services/test_focus_state.py"
+        - caplog
+        - "the assertion"
+      next_step_must_NOT_contain:
+        - "show the results"
+        - "show the user"
+        - "analyze the results"
+        - "等用户"
+    notes: |
+      T3 探针 — assistant Grep 找 inference_started → tool_result 返回
+      一个具体的 test 命中（tests/services/test_focus_state.py:123）。
+      capability test: next_step 必须 reference 这个找到的具体 test
+      （文件名 / 行号 / caplog 等具体 token），不能 generic 抽象到
+      'show results' / 'analyze results'（那是没 read 内容的标志）。
+      这是 LLM 是否真的整合 tool_result 内容的 craft test。
+
+  # ===== T4 — Tool error → recovery 路径 =====
+  - case_id: T4-tool-error-recovery
+    capability: T4
+    shape: edge
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "看看 src/openharness/services/nonexistent.py 里写了什么"
+      - role: assistant
+        content:
+          - type: tool_use
+            id: call_read_nonexistent
+            name: Read
+            input:
+              file_path: "src/openharness/services/nonexistent.py"
+      - role: user
+        content:
+          - type: tool_result
+            tool_use_id: call_read_nonexistent
+            content: "Error: file not found: src/openharness/services/nonexistent.py"
+            is_error: true
+    expected_goal_keywords: [nonexistent, services]
+    capability_assertions:
+      goal_must_contain: [services]
+      next_step_must_contain_any_of:
+        - "ls "
+        - "list "
+        - "grep"
+        - "find similar"
+        - correct
+        - actual
+        - "check the"
+        - confirm
+        - 建议
+        - 检查
+        - 确认
+      next_step_must_NOT_contain:
+        - "wait for"
+        - 等用户
+        - "retry the same"
+        - "try again with the same"
+    notes: |
+      T4 探针 — Read 不存在的文件，tool_result is_error=true。capability
+      test: next_step 必须 propose 一个 recovery 路径 (ls services/ 看
+      实际文件列表 / grep 近似名 / 让用户确认正确名字 / 建议改正)，不
+      能 silent wait 或 retry 同 tool 同 path。这是 LLM 对 tool error
+      的 production-grade 反应测试。
+
+  # ===== T8 — Bash command → user-level goal 抽象 =====
+  - case_id: T8-bash-user-level-abstraction
+    capability: T8
+    shape: multi-step
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "帮我跑一下 focus_state 的测试，看是不是过的"
+      - role: assistant
+        content:
+          - type: text
+            text: "我跑 pytest 看一下 tests/services/test_focus_state.py。"
+      - role: assistant
+        content:
+          - type: tool_use
+            id: call_bash_pytest
+            name: Bash
+            input:
+              command: "uv run pytest tests/services/test_focus_state.py -q"
+      - role: user
+        content:
+          - type: tool_result
+            tool_use_id: call_bash_pytest
+            content: "================ 12 passed in 0.34s ================"
+    expected_goal_keywords: [focus_state, test]
+    capability_assertions:
+      goal_must_contain: [focus_state, test]
+      goal_must_NOT_contain:
+        - "uv run"
+        - "execute the command"
+        - "execute the bash"
+        - "shell command"
+        - "run the bash"
+    notes: |
+      T8 探针 — Bash 跑 pytest。capability test: goal 必须是 user-level
+      抽象（'run focus_state tests' / 'verify focus_state tests pass'），
+      不能 leak shell-level 细节 ('execute uv run pytest...' / 'run the
+      bash command')。
+      跟 T1 同 family（tool name 抽象），但这次是 Bash tool，verb 形态
+      更容易被 LLM 当 goal verb（"execute" / "run the command"）。
+
+  # ===== T7 — Edit + 用户字面 done → 识别 follow-up =====
+  - case_id: T7-edit-done-followup-required
+    capability: T7
+    shape: adversarial
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "src/openharness/services/focus_state.py 帮我在 infer_focus_state 里加一行 logging，每次开始推断时 log 'inference_started' 含 model 字段"
+      - role: assistant
+        content:
+          - type: tool_use
+            id: call_edit_focus_state
+            name: Edit
+            input:
+              file_path: "src/openharness/services/focus_state.py"
+              old_string: "    if len(messages) < 2:\n        return FocusState.empty()"
+              new_string: "    _logger.info(\"inference_started\", model=model)\n    if len(messages) < 2:\n        return FocusState.empty()"
+      - role: user
+        content:
+          - type: tool_result
+            tool_use_id: call_edit_focus_state
+            content: "edit succeeded"
+      - role: assistant
+        content:
+          - type: text
+            text: "已加 inference_started log。"
+      - role: user
+        content:
+          - type: text
+            text: "done"
+    expected_goal_keywords: [focus_state, log]
+    capability_assertions:
+      goal_must_contain: [log, focus_state]
+      next_step_must_contain_any_of:
+        - test
+        - 测试
+        - tests
+        - "run "
+        - 运行
+        - pytest
+        - "verify "
+      next_step_must_NOT_contain:
+        - "wait for"
+        - 等用户
+        - 等待用户
+        - "new task"
+        - 新任务
+        - 新的反馈
+    notes: |
+      T7 探针 — Edit succeeded + user 'done'。capability test: next_step
+      必须包含 verify/test 类 follow-up（'pytest tests/services/
+      test_focus_state.py' 或类似），不能是 'wait for new task' /
+      '等用户新任务'（信了字面 done）。
+      [Day 1 stability: 4/4 across 2 models — prompt fix is rock solid;
+      this is the locked failure mode that started the whole loop.]

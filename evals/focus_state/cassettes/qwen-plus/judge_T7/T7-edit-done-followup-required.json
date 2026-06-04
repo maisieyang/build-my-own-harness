@@ -1,0 +1,8 @@
+{
+  "case_id": "T7-edit-done-followup-required",
+  "model": "qwen-plus",
+  "kind": "judge_T7",
+  "recorded_at": "2026-06-03T23:15:03.591940+00:00",
+  "request_summary": "Conversation:\n[user] src/openharness/services/focus_state.py 帮我在 infer_focus_state 里加一行 logging，每次开始推断时 log 'inference_started' 含 model 字段\n[assistant] [tool_use] Edit({'file_path': 'src/openharness/se",
+  "response": "{\"reason\": \"proposes verifying the log appears correctly by running a test or manual invocation that triggers infer_focus_state\", \"score\": 1}"
+}

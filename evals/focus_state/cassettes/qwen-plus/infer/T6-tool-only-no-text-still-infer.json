@@ -1,0 +1,11 @@
+{
+  "case_id": "T6-tool-only-no-text-still-infer",
+  "model": "qwen-plus",
+  "kind": "infer",
+  "recorded_at": "2026-06-03T23:14:53.220700+00:00",
+  "request_summary": "[user] 看看 services/extract.py 里 EXTRACTION_SYSTEM_PROMPT 怎么写的",
+  "response": {
+    "goal": "read the content of EXTRACTION_SYSTEM_PROMPT in services/extract.py",
+    "next_step": "return the full content of EXTRACTION_SYSTEM_PROMPT as shown in the Read result"
+  }
+}

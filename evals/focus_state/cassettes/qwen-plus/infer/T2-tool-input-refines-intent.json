@@ -1,0 +1,11 @@
+{
+  "case_id": "T2-tool-input-refines-intent",
+  "model": "qwen-plus",
+  "kind": "infer",
+  "recorded_at": "2026-06-03T23:14:48.768998+00:00",
+  "request_summary": "[user] 我想看看 services 里的 async 模式",
+  "response": {
+    "goal": "find all async def definitions in the services directory",
+    "next_step": "list the full paths and line numbers of all async functions found in services"
+  }
+}
