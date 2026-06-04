@@ -130,6 +130,13 @@ framework-builder retrospective.
 - **Compaction** — Layer 1 per-tool-result truncation via hook;
   Layer 2 reactive PromptTooLong retry by dropping the oldest
   tool-use/tool-result pair.
+- **Capability-anchored prompt eval** —
+  `src/openharness/eval/` substrate: `Sample` / `Score` / `Scorer`
+  Protocol + 4 scorers (programmatic + LLM-judge) + cassette
+  record/replay/live + 8-axes version-stamped results JSONL +
+  `oh eval` CLI. First consumer at `evals/focus_state/`. 4 boundary
+  docs (`decisions/31-34-eval-*.md`); long-form narrative in
+  `docs/ideas/eval-*.md`.
 
 ---
 
@@ -272,6 +279,30 @@ oh hooks describe audit_log        # Event + docstring
 oh --version
 oh --help
 ```
+
+**Run prompt eval**:
+
+```bash
+oh eval focus_state                          # Live mode (real LLM, write results JSONL)
+oh eval focus_state --mode live              # Same as default
+oh eval focus_state --mode record            # Real LLM + save cassettes (overwrite)
+oh eval focus_state --mode replay            # 0 LLM call, replay cassettes (deterministic)
+oh eval focus_state -m replay                # Short flag
+oh eval focus_state --model qwen-max         # Override OPENHARNESS_MODEL (same-provider only;
+                                             # cross-provider needs BASE_URL + API_KEY too)
+oh eval focus_state --no-results             # Skip writing results JSONL
+```
+
+Cassette modes (D33.2):
+- **`live`** (default): real LLM call every run, no cassette save
+- **`record`**: real LLM call + save cassette (overwrites existing)
+- **`replay`**: load cassette only, never call LLM; missing cassette
+  raises `CassetteMissingError` (no silent fallback to live)
+
+Each run writes `evals/focus_state/results/{timestamp}_{model}_{mode}.jsonl`
+with 8-axes `RunMetadata` header: identity claim (sha256 of prompt /
+rubrics / dataset), content claim (full prompt + rubric text), state
+claim (git_commit + git_dirty). See `decisions/34-eval-stage5-*.md`.
 
 `~/.openharness/.env` is a lower-precedence layer than the project's
 `./.env`, which is lower than shell env vars. Use it for global

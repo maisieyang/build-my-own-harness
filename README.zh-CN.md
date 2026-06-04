@@ -96,22 +96,104 @@ API client 走 OpenAI-compatible wire format，自带 `httpx + openai SDK` retry
 
 ### 6. ⭐ Eval substrate (`src/openharness/eval/`)
 
-> LLM 项目最容易忽视的能力 —— agent capability 的改进，靠 vibes 还是靠 metric？这个 substrate 提供"靠 metric"的工程基础。
+> LLM 项目最容易忽视的能力 —— agent capability 的改进，靠 vibes 还是靠 metric？这个 substrate 提供 "靠 metric" 的工程基础。
 
-- **接口契约**:
-  - `Sample` (dataclass) —— 一条评估样本，含 `id` / `input` / `expected` / `meta`。
-  - `Score` —— 一次评分结果，`value: float` (0-1) + `passed: bool` + `details`。
-  - `Scorer` (Protocol) —— `async def score(sample, actual) -> Score`。
-- **4 类 scorer 组合 (覆盖 90% 评估需求)**:
-  - `ParseOkScorer` —— 结构性 assertion (输出能否被解析？JSON valid？schema match？)
-  - `GoalKeywordMatchScorer` —— 关键词匹配 baseline
-  - `CapabilityAssertionsScorer` —— 字段级 assertion (`field == expected`)
-  - `CapabilityLLMJudgeScorer` —— LLM-as-judge，自然语言 rubric
-- **Dataset 形态** —— `evals/<service>/dataset.yaml` (cases) + `dataset_card.md` (采样方法 / 样本数 / 已知偏差)
-- **Async runner** —— `run_eval(cases, scorers, executor)` 一次跑 N case × N scorer，输出 `CaseResult` 列表
-- **跨模型稳定性档案** —— 同 dataset 跑 N=4 model 看 case 通过率 → 区分 "model bug" vs "harness bug" vs "case 设计有歧义"
-- **首个 consumer** `evals/focus_state/` —— 验证 Phase 13 LLM-authored 元数据准确率，Day 1 (2026-06-03) spike 出来 4 ✓ + 1 ⚠ + 1 ✗ 的 cross-model stability baseline
-- **设计原则** —— substrate 永远不知道具体 capability 含义，service-specific eval 各自写 `evals/<service>/`；Stage 2+ 演进时 substrate 接口不动 (Phase 11 substrate 跨 6 个 phase 7 个 consumer 零修改的复利模式延续到 eval)
+**Substrate (`src/openharness/eval/`, 8 files)**
+
+- `protocol.py` —— `Sample` / `Score` / `Scorer` Protocol (D31)
+- `scorers.py` —— 4 类 scorer 覆盖 90% 评估需求:
+  - `ParseOkScorer` —— 结构性 (输出能否被解析)
+  - `GoalKeywordMatchScorer` —— 关键词 substring baseline
+  - `CapabilityAssertionsScorer` —— 字段级 pre-registered 断言
+  - `CapabilityLLMJudgeScorer` —— LLM-as-judge，自然语言 rubric (D32)
+- `rubrics.py` —— selective rubric 注册表 (只在 substring 已证明 brittle 的 capability 上挂)
+- `runner.py` —— async runner，load → iterate → aggregate
+- `cassette.py` —— record / replay / live 三态 (D33)，每次 LLM call 落盘 JSON，replay 0 cost + deterministic
+- `results.py` —— 8 axes version-stamped `RunMetadata` (D34 + Stage 5.1)
+- `_printers.py` —— shared stdout formatting (CLI + spike)
+
+**Consumer (`evals/focus_state/`)** —— 首个落地 service
+
+- `dataset.yaml` —— 8 capability-anchored cases (T1-T8)
+- `dataset_card.md` —— 跨 model stability profile + brittleness map
+- `cassettes/` —— 12 JSON (8 infer + 4 judge selective)
+- `results/` —— 每次 run 一个 JSONL，默认 gitignored (`.gitignore` 第 53 行的 `*.jsonl` 全局规则)
+
+**怎么跑 —— CLI**
+
+```bash
+# 默认 live mode，真打 LLM + 写 results JSONL
+oh eval focus_state
+
+# Cassette mode 三态
+oh eval focus_state --mode live      # 真打 LLM，不存 cassette
+oh eval focus_state --mode record    # 真打 LLM + 把响应存 cassette (覆盖)
+oh eval focus_state --mode replay    # 0 cost / 0 LLM call，从 cassette 复读
+
+# 短 flag
+oh eval focus_state -m replay
+
+# 跨 model 验证 (覆盖 OPENHARNESS_MODEL)
+oh eval focus_state --model deepseek-v4-flash
+
+# 跑但不写 results (iteration debug 时省 disk)
+oh eval focus_state --no-results
+```
+
+**3 个 cassette mode 取舍**
+
+| Mode | LLM call | 写 cassette | 适合场景 |
+|---|---|---|---|
+| `live` (默认) | ✓ | ✗ | iterate prompt 时看实时效果 |
+| `record` | ✓ | ✓ 覆盖 | 改完 prompt 新建一组 baseline |
+| `replay` | ✗ | ✗ | CI gate / 0 cost stability check |
+
+`replay` 缺 cassette 时不会 silently fall back —— raise `CassetteMissingError` 含 "run record mode first" 提示。这是 D33.2 的明确不撒谎承诺。
+
+**Results JSONL —— 8 axes version stamping**
+
+每次跑写一个 JSONL 到 `evals/focus_state/results/{timestamp}_{model}_{mode}.jsonl`。Header 第一行是 `RunMetadata`，含:
+
+```
+identity claim:   prompt_sha256, rubric_sha256s, dataset_sha256
+                  ↓ 比对身份 (quick diff between runs)
+content claim:    prompt_text, rubric_texts (全文，不只 hash)
+                  ↓ 6 个月后还能读出来，不依赖 git archaeology
+state claim:      git_commit, git_dirty
+                  ↓ working tree 干净时 → 完全 reproducible from git checkout
+                    dirty 时 → 必须以 content claim 字段为 authoritative
+```
+
+读历史 run:
+
+```bash
+cat evals/focus_state/results/<latest>.jsonl \
+    | head -1 | jq '{git_commit, git_dirty, prompt_sha256, model, cassette_mode}'
+```
+
+**典型工作流**
+
+```bash
+# 1. 改 FOCUS_STATE_SYSTEM_PROMPT 一段指令
+vim src/openharness/services/focus_state.py
+
+# 2. 录新 baseline (会真打 LLM + 写 cassette)
+oh eval focus_state --mode record
+
+# 3. CI / 反复 replay 比对，0 cost 看 stability
+oh eval focus_state --mode replay
+
+# 4. 跨 model 验证 prompt 不只对单一 model work
+oh eval focus_state --model deepseek-v4-flash --mode record
+oh eval focus_state --model qwen-plus --mode record
+```
+
+**设计原则**
+
+- substrate 永远不知道具体 capability 含义，service-specific eval 各自写 `evals/<service>/`
+- Stage 2+ 演进时 substrate 接口不动 (Phase 11 substrate 跨 6 phase 7 consumer 零修改的复利模式延续到 eval)
+- 4 个 boundary docs 在 `decisions/31-34-eval-*.md`，30+ ratified design decisions
+- 长篇 narrative 在 `docs/ideas/eval-*.md` (理论 playbook / 第一性原理决策 / 实验 case study / per-stage journal / 博客复盘)
 
 ### 7. CLI + Provider
 
