@@ -5,202 +5,189 @@
   <a href="README.zh-CN.md"><strong>简体中文</strong></a>
 </p>
 
-**OpenHarness 是一个生产级的 Python LLM Agent Harness：你给它一个 prompt，它驱动 LLM 选择工具、安全地执行、循环直到任务完成。**
+[![CI](https://github.com/maisieyang/build-my-own-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/maisieyang/build-my-own-harness/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+![Type checked: mypy](https://img.shields.io/badge/type%20checked-mypy%20strict-1f5082)
 
-它由单人（一名开发者 + Claude Code 作为协作者）从零构建：**v0.1.0 在 23 天内完成发布**，并以版本化的方式持续迭代。除了能跑的运行时之外，它同时是一份**框架设计的案例研究**——仓库完整保留了每个边界文档（`decisions/`）、每个阶段的复盘（`learnings/`）和完整的计划/执行轨迹（`tasks/`），让你不仅能看到“做了什么”，还能看到“每个权衡为什么这么做”。
-
----
-
-## 我做了什么（核心能力）
-
-- **流式工具循环** —— 引擎核心。`run_query()` 是一个 `AsyncIterator`，由 LLM 通过 `tool_use` 块驱动，harness 调度工具、回填结果，循环直到 `end_turn`。
-- **5 个内置工具** —— Read / Write / Edit / Bash / Grep，输入经 Pydantic 校验，输出为结构化 `ToolResult`。
-- **三级权限系统** —— 硬编码敏感路径拒绝 + 用户可配置的 glob 拒绝 + 权限模式覆盖（`--auto` / `--dry-run`）。
-- **Hook 中间件** —— 5 个生命周期事件（PreToolUse / PostToolUse / PreApiCall / PostApiCall / OnError），支持拒绝 / 修改 / 放行语义。
-- **结构化可观测性** —— JSON 日志绑定 `run_id` / `turn_id` / `agent_depth`，可用 `jq` 重建调用链。
-- **MCP 集成** —— 通过 Model Context Protocol（stdio）注册第三方工具服务器。
-- **Slash 命令 / Skills** —— Markdown 定义的自定义命令；Skills 按需懒加载，LLM 看到目录后再展开。
-- **子 Agent 递归调度** —— 带深度上限的 `SpawnAgent` 工具，子 Agent 以不可变方式继承上下文。
-- **沙箱执行** —— 通过 `--sandbox` 在 Docker 中运行，可选 runc / gVisor(runsc) 运行时。
-- **多轮 REPL + 上下文压缩** —— `oh chat` 跨轮累积对话；两层压缩策略控制上下文长度。
+> **生产级 Python LLM Agent Harness —— 一个人从零到一的 Harness 工程化实验。**
+>
+> > *"What I cannot create, I do not understand."* — **Richard Feynman**
+>
+> 想在 Harness 这个领域真正成为专家，在**工程实现** 与 **产品 trade-off** 两条轴上都拥有 first-principles 判断，光读 Claude Code / Codex / LangChain 的源码不够，必须自己从空目录搭一个 production-grade 的出来。这个项目就是这个想法的落地 —— 单人 (开发者 + Claude Code 协作)，多 phase 迭代，每一步保留 boundary doc → plan → execute → retro 的完整 trail。
 
 ---
 
-## 成果一览（v0.1.0 基线）
+## 它做了什么
 
-| 指标 | 数据 |
-|------|------|
-| 首发版本 | v0.1.0，2026-05-20 — 首次公开发布 + 案例研究撰写 |
-| 构建周期 | **23 天**（单人 + Claude Code 协作） |
-| 阶段循环 | 边界文档 → 计划 → 执行 → 复盘，按阶段保留 |
-| 轨迹 | [`decisions/`](./decisions)（逐权衡边界文档）· [`tasks/`](./tasks)（能力级计划）· [`learnings/`](./learnings)（逐阶段复盘 + 框架随笔） |
-| 质量门 | mypy strict · ruff clean · 覆盖率门槛 ≥95%（Python 3.10/3.11） |
-| 各版本数据 | 见 [CHANGELOG.md](./CHANGELOG.md) —— 测试数 / 覆盖率 / 代码量按版本归档 |
+一份完整的 Python LLM agent runtime,覆盖以下基础设施:
+
+- Agent loop
+- tools / skills / commands / bundles / plugins / mcp
+- web tools (WebSearch + WebFetch)
+- memory / session resume / focus state
+- permissions / hooks / sandbox
+- sub-agent dispatch
+- context management (4-tier auto-compaction)
+- provider workflows
+- TUI rendering (rich.Live spinner)
+- ⭐ eval substrate (Sample / Score / Scorer Protocol)
+
+---
+
+## 为什么做这个
+
+这是一个**deliberate learning project** —— 不是 OSS 社区竞品，不是商业产品，是为了**用建造的方式真正掌握 Harness 领域**。
+
+Harness (Anthropic 提出的概念) = 围绕模型构建的全部工程脚手架 —— 工具调度、状态管理、权限、观测、可扩展性、错误恢复。Claude Code、Cursor、LangChain、Aider 都是 harness。它们都在解同一类问题，但在 trade-off 上做了不同的取舍。
+
+只读源码很难看清这些取舍**为什么是这样**。自己从零搭一遍才能体会:
+
+- **为什么 tool result 要 LLM-visible 而不是 engine 内部 retry?** —— 跑通 Bash → 调通 WebFetch → 试着 engine 自动重试 → 发现 LLM 自己决定怎么处理失败远比硬编码 retry 健壮。这是产品 trade-off。
+- **为什么 sub-agent 用 Protocol + 不可变 context 继承?** —— Phase 6 spawn → Phase 7c 加 gVisor 沙箱时第二个实现只用了首个 12% 的代码量。这是工程结构的复利。
+- **为什么 memory extraction 默认要给 stub LLM 测试 testability tax?** —— Phase 11 默认 ON 把所有 stub 测试一次性污染了。这是测试与功能的冲突点。
+
+这类**只能 build-then-see 的判断**是这个项目的真正产物。代码本身可以参考开源；判断不行。
+
+---
+
+## 详细能力分块
+
+### 1. Agent 引擎
+
+`run_query()` 是 async iterator，by `stop_reason` 驱动循环 (`end_turn` / `tool_use` / `max_tokens` / `stop_sequence`)，**caller 的 `initial_messages` 永不 mutate**。Streaming events 解耦 UI 渲染:`ApiTextDeltaEvent` / `ToolUseEvent` / `ToolResultEvent` / `ApiMessageCompleteEvent` / `ConversationCompleteEvent`。
+
+API client 走 OpenAI-compatible wire format，自带 `httpx + openai SDK` retry + 错误分类层 (`AuthenticationFailure` / `RateLimitFailure` / `RequestFailure` / `PromptTooLongFailure` / `MalformedToolCallFailure`)。
+
+### 2. 工具系统
+
+- **6 内置 tool**：`Read` / `Write` / `Edit` / `Bash` / `Grep` 实现 BaseTool 模式；`Agent` (sub-agent) 通过 `dataclasses.replace` 不可变继承 context，带 depth limit (默认 3)。
+- **2 网络 tool**：`WebSearch` 通过 `WebSearchProvider` Protocol 抽象 (v1 装 Tavily，可换 Brave / Serper)；`WebFetch` httpx streaming GET + BeautifulSoup chrome strip (`script` / `style` / `nav` / `aside` / `header` / `footer` decompose) + markdownify HTML → markdown。
+- **每个 tool 强类型**：`BaseTool[InputT extends BaseModel]` Pydantic schema + `ToolResult` 结构化返回。
+- **MCP 适配器**：stdio transport，第三方工具服务器透明注册进同一个 `ToolRegistry`。
+
+### 3. 扩展点 + 用户内容
+
+- **Slash commands** —— 写 `~/.openharness/commands/<name>.md` 注册 `/<name>` 命令，frontmatter 支持参数模板。
+- **Skills** —— `~/.openharness/skills/<name>.md` 是专家文档；LLM 看到 catalog (只有 name + description)，决定相关时 `LoadSkill(name)` 主动加载，惰性节省 context。
+- **Mode Bundles** —— 把"系统提示词 + tool whitelist + deny_paths + 命名 hooks" 复合成命名"模式"，slash command 的 `mode:` frontmatter 引用。
+- **Plugins** —— 统一 `~/.openharness/plugins/<name>/manifest.toml` 注册 hooks / skills / commands / bundles，`<plugin>__<hook>` namespacing 防冲突，`--enable-plugins` opt-in。
+
+### 4. 状态管理
+
+- **Memory** —— YAML-frontmatter 文件，3 scope (user / project / team)，relevance scoring (meta hits + body hits + importance + recency)，零 token 命中直接 drop。
+- **LLM extraction (write path)** —— 每 turn 后台 LLM 抽取候选 memory，signature dedupe，team scope 走 6 模式 secret scanner (PEM / AWS / GitHub / Anthropic / OpenAI / 通用) 拦截泄漏。
+- **Sessions** —— 每 turn 写 `~/.openharness/snapshots/<cwd-hash>/current.json` (atomic via `tempfile + os.replace`)，`--resume` / `--resume-id` 跨进程恢复 `QueryContext.from_snapshot()`，旧 `current.json` 自动轮转到 `history/<git-head>-<utc-ts>.json` (count + age 双阈值 GC)。
+- **LLM-authored task focus state** —— `--llm-focus-state` 启动，每 turn 二级 LLM call 推断当前 task / 下一步 / blockers 写入 `tool_metadata.task_focus_state`，opt-in (默认 OFF) 避免 stub-LLM testability tax。
+- **4-tier auto-compaction**：
+  - L0: token 估算
+  - L2: deterministic head/tail 折叠 (head 900 / tail 500 messages)
+  - L3: session-memory checkpoint 复用 (1h freshness window)
+  - L4: LLM-driven 9-slot 全量压缩
+
+### 5. 安全 + 可观测
+
+- **3-tier permissions** —— 硬编码敏感路径 deny + 用户 glob (`OPENHARNESS_DENY_PATHS`) + 模式覆盖 (`--auto` / `--dry-run`)。
+- **5 lifecycle hooks** —— `PreToolUse` / `PostToolUse` / `PreApiCall` / `PostApiCall` / `OnError`，deny / modify / allow 语义，`HookSpec.re_run_on_reactive_rebuild` 字段支持 PTL drop-oldest 后选择性重跑。
+- **Sandbox** —— `--sandbox` 启动 Docker 容器 (cwd bind-mount + `network=none` + cgroup memory/cpu/pids 限制)；`--sandbox-runtime runsc` 走 gVisor 用户态 syscall 隔离。
+- **结构化日志** —— `structlog` 绑定 `run_id` / `turn_id` / `agent_depth`，`OPENHARNESS_LOG_FORMAT=json` 用 `jq` 重建完整调用链。
+- **rich.Live TTY spinner** —— 工具调度时屏幕实时动画 (TTY-only 检测，CI / pipe 自动 fallback 纯文本)。
+
+### 6. ⭐ Eval substrate (`src/openharness/eval/`)
+
+> LLM 项目最容易忽视的能力 —— agent capability 的改进，靠 vibes 还是靠 metric？这个 substrate 提供"靠 metric"的工程基础。
+
+- **接口契约**:
+  - `Sample` (dataclass) —— 一条评估样本，含 `id` / `input` / `expected` / `meta`。
+  - `Score` —— 一次评分结果，`value: float` (0-1) + `passed: bool` + `details`。
+  - `Scorer` (Protocol) —— `async def score(sample, actual) -> Score`。
+- **4 类 scorer 组合 (覆盖 90% 评估需求)**:
+  - `ParseOkScorer` —— 结构性 assertion (输出能否被解析？JSON valid？schema match？)
+  - `GoalKeywordMatchScorer` —— 关键词匹配 baseline
+  - `CapabilityAssertionsScorer` —— 字段级 assertion (`field == expected`)
+  - `CapabilityLLMJudgeScorer` —— LLM-as-judge，自然语言 rubric
+- **Dataset 形态** —— `evals/<service>/dataset.yaml` (cases) + `dataset_card.md` (采样方法 / 样本数 / 已知偏差)
+- **Async runner** —— `run_eval(cases, scorers, executor)` 一次跑 N case × N scorer，输出 `CaseResult` 列表
+- **跨模型稳定性档案** —— 同 dataset 跑 N=4 model 看 case 通过率 → 区分 "model bug" vs "harness bug" vs "case 设计有歧义"
+- **首个 consumer** `evals/focus_state/` —— 验证 Phase 13 LLM-authored 元数据准确率，Day 1 (2026-06-03) spike 出来 4 ✓ + 1 ⚠ + 1 ✗ 的 cross-model stability baseline
+- **设计原则** —— substrate 永远不知道具体 capability 含义，service-specific eval 各自写 `evals/<service>/`；Stage 2+ 演进时 substrate 接口不动 (Phase 11 substrate 跨 6 个 phase 7 个 consumer 零修改的复利模式延续到 eval)
+
+### 7. CLI + Provider
+
+- **`oh ask "<prompt>"`** —— 单次流式，默认 max_tokens 8192
+- **`oh chat`** —— 多轮 REPL，gnureadline (macOS GNU readline 替代 libedit) + chat-aware base instructions ("Match response length to user intent")
+- **7 introspection 子命令** —— `oh tools list/show` / `oh config show/edit` / `oh hooks list/describe` / `oh memory list/show/path` / `oh snapshot list/show/gc`
+- **Provider 抽象** —— `OPENHARNESS_BASE_URL` 一改即切 (DeepSeek / Qwen via DashScope / Anthropic 兼容端 / Moonshot)，OpenAI-shape wire format 不动代码
+
+---
+
+## Production-grade 基线
+
+| | |
+|---|---|
+| Tests | **2031** on CI (Python 3.10 / 3.11) |
+| 类型检查 | `mypy --strict src/` clean (105 source files) |
+| Lint | `ruff` check + format clean |
+| 覆盖率 | **≥95%** gate held |
+| CI | GitHub Actions matrix |
+| 当前版本 | **v0.3.0** (per-release notes 在 [CHANGELOG.md](./CHANGELOG.md)) |
 
 ---
 
 ## 快速开始
 
-需要 Python ≥ 3.10 和 [uv](https://github.com/astral-sh/uv)。
+需要 Python ≥3.10 和 [uv](https://docs.astral.sh/uv/)。
 
 ```bash
-# 1. 安装 uv（一次性）
+# 1. 装 uv
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# 2. 克隆并同步依赖
+# 2. clone + sync
 git clone https://github.com/maisieyang/build-my-own-harness.git
 cd build-my-own-harness
 uv sync
 
-# 3. 配置 Provider（任何 OpenAI 兼容端点均可：
-#    默认测试目标是 DashScope 上的 Qwen；
-#    换 base_url 即可切到 OpenAI / DeepSeek / Moonshot 等）
-cp .env.example .env
-\$EDITOR .env   # 填入 OPENHARNESS_API_KEY
+# 3. 装全局 oh (editable;改代码立即生效)
+uv tool install --editable .
 
-# 4. 开始提问
-uv run oh ask "list 5 git commands"
+# 4. 配置 ~/.openharness/.env (任何目录跑 oh 都用同一份)
+mkdir -p ~/.openharness
+cat > ~/.openharness/.env <<EOF
+# Provider 任选一家 OpenAI-compatible:
+OPENHARNESS_API_KEY=<your-llm-key>
+OPENHARNESS_BASE_URL=https://api.deepseek.com/
+OPENHARNESS_MODEL=deepseek-chat
 
-# 或开启多轮 REPL：
-uv run oh chat
-```
+# Web tools (可选,装了 oh 自动用):
+OPENHARNESS_WEB__API_KEY=<your-tavily-key>
+EOF
 
-**错误是分类返回的**——默认模式下不会抛 Python traceback：
-
-| 情况 | 你会看到 |
-|------|----------|
-| 未设置 `OPENHARNESS_API_KEY` | 配置错误 + 提示 |
-| Key 错误 | 认证失败（HTTP 401） |
-| Provider 限流 | 重试后仍被限流（HTTP 429） |
-| 循环触达 `max_turns` | 循环错误：触达轮次上限（N）；调高 `--max-turns` 或简化 prompt |
-
----
-
-## 核心能力详解
-
-每一项都链接到 `docs/development-log.md` 中对应阶段的开发叙事，以及 `learnings/phase-*.md` 的构建者复盘。
-
-- **流式工具循环** —— 引擎的心脏。`run_query()` 由 LLM 发出的 `tool_use` 块驱动，harness 调度工具、回填结果，循环直到 `end_turn`。
-- **三级权限系统** —— 硬编码敏感路径拒绝、用户可配 glob 拒绝（`OPENHARNESS_DENY_PATHS`）、权限模式覆盖。
-- **Hook 中间件** —— 内部用于自动截断，对外暴露给用户插件（entry points + 文件系统 `*.py`）。
-- **ModeBundle** —— 把系统提示词 + 工具白名单 + 额外拒绝路径 + 命名 hook 组合成一个具名 “mode”，由 slash 命令的 `mode:` frontmatter 引用。
-- **插件 Hook** —— 第三方 Python 包可通过 `openharness.hooks` entry-point 提供 hook；放在 `~/.openharness/hooks/` 的 `.py` 文件也会被发现。通过 `--enable-plugin-hooks` 开启。
-- **沙箱执行** —— Docker 沙箱（Phase 7b），可选运行时 `--sandbox-runtime runc|runsc`（Phase 7c gVisor 支持）。
-- **上下文压缩** —— Layer 1 通过 hook 对单个工具结果截断；Layer 2 在 `PromptTooLong` 时丢弃最旧的工具调用/结果对并重试。
-
----
-
-## 架构总览
-
-三层关注点，按 phase 纵向切分：
-
-- **Engine（`engine/`）** —— `run_query` 是流式产出 `ApiStreamEvent` 的异步生成器。每轮：发送消息 → 处理 `tool_use` 停止原因 → 调度工具 → 追加结果 → 循环至 `end_turn`。防御性不可变：调用方的 `initial_messages` 永不被改动。
-- **Tools（`tools/`）** —— `BaseTool` 抽象基类 + Pydantic 输入 schema。`ToolRegistry` 是引擎可自省的目录。权限检查在调度**之前**通过 `permissions/checker.py` 完成。
-- **Hooks（`hooks/`）** —— 5 个生命周期事件的中间件链，可拒绝 / 修改 / 观察。Hook 链是核心扩展点：Phase 4 的压缩、Phase 5d 的 bundle、Phase 5e/5f 的插件都挂在它上面。
-
-完整的分层划分、依赖图和设计理由见 `ARCHITECTURE.md`；逐决策的权衡分析见 `decisions/`；构建者复盘见 `learnings/`。
-
-### 项目结构
-
-```
-.
-├── SPEC.md              # 项目契约（目标 / 命令 / 边界）
-├── ARCHITECTURE.md      # 多阶段策略（分层、依赖图）
-├── decisions/           # 决策记录（逐权衡的边界文档）
-├── learnings/           # 逐阶段复盘 + 框架随笔
-├── tasks/               # 逐阶段边界文档 + 实现计划
-├── src/openharness/     # 子系统集合
-│   ├── engine/          # run_query + 工具调度循环
-│   ├── tools/           # 工具注册表 + 5 个内置工具
-│   ├── hooks/           # 中间件（5 个事件）
-│   ├── permissions/     # 三级授权检查器
-│   ├── execution/       # 沙箱抽象 + Docker/gVisor
-│   ├── mcp/             # Model Context Protocol 适配器
-│   └── ...              # api / bundles / commands / skills 等
-├── tests/               # 测试，镜像 src/ 布局
-└── .github/workflows/   # CI：lint + 类型检查 + 测试（Python 3.10/3.11）
+# 5. 跑
+oh ask "你好"
+oh chat
+oh ask "调研一下 GPT-5 最近的更新"   # 自动调 WebSearch + WebFetch
 ```
 
 ---
 
-## CLI 参考
+## 项目的另一面 —— Process artifact
 
-```bash
-# 单次查询
-oh ask "<prompt>"
-oh ask "<prompt>" --model qwen-max      # 覆盖模型
-oh ask "<prompt>" --dry-run             # 只列出工具调用，不执行
-oh ask "<prompt>" --auto                # 跳过权限确认
-oh ask "<prompt>" --sandbox             # 在 Docker 容器内运行 Bash
-oh ask "<prompt>" --sandbox --sandbox-runtime runsc   # gVisor 隔离
+这个项目除了能跑的 harness，还是**整个 Harness 设计过程的完整可读 trail**。每个 phase 都有:
 
-# 多轮交互
-oh chat                                 # 内置 /exit /clear /help
+- [`decisions/<NN>-phase-X-boundary.md`](./decisions/) —— 进入 phase 前 lock 的 invariant + 关键决策 + alternatives 评估
+- [`tasks/phase-X-plan.md`](./tasks/) —— capability 级 plan (故意不细化到 sub-task)
+- [`learnings/phase-X.md`](./learnings/) —— ship 后复盘 + framework 级 lesson
 
-# 自省框架
-oh tools list                           # 内置工具
-oh tools show Read                      # 名称、schema、是否只读、信任来源
-oh config show                          # 生效配置（api_key 已脱敏）
-oh hooks list                           # 内置 hook
-```
+两份方法论 playbook:
 
-## 配置
+- [`PLAYBOOK.md`](./PLAYBOOK.md) —— 工程师视角，4-step phase 循环 + 5 lesson + 3 anti-pattern (~6500 字)
+- [`PLAYBOOK-PM.md`](./PLAYBOOK-PM.md) —— PM 视角，LLM Harness 产品决策框架 + 评测 + 灰度 + 跨角色协作 (~18500 字)
 
-所有设置通过 `OPENHARNESS_` 前缀的环境变量读取（基于 pydantic-settings），模板见 `.env.example`。
-
-| 环境变量 | 默认值 | 用途 |
-|----------|--------|------|
-| `OPENHARNESS_API_KEY` | （必填） | Provider API Key |
-| `OPENHARNESS_BASE_URL` | （必填） | OpenAI 兼容端点 |
-| `OPENHARNESS_MODEL` | `qwen-plus` | 默认模型 |
-| `OPENHARNESS_PERMISSION_MODE` | `default` | default / auto / dry_run |
-| `OPENHARNESS_MAX_AGENT_DEPTH` | `3` | 子 Agent 递归上限 |
-| `OPENHARNESS_SANDBOX_RUNTIME` | `runc` | OCI 运行时（runc / runsc / ...） |
-
-CLI 参数总是覆盖环境变量；环境变量总是覆盖默认值。完整清单见 `.env.example`。
+如果只能读一个文件了解方法论 → [`learnings/phase-7.md`](./learnings/phase-7.md) (v0.1.0 close-out meta-retro)。
 
 ---
-
-## 这个项目是怎么构建的（给好奇的读者）
-
-OpenHarness 不只是能跑的代码，更是一份**在自设的生产约束下做框架设计**的案例研究。如果你想要可直接套用的方法论提炼，先读 `PLAYBOOK.md`（约 6500 字中文）。
-
-**方法论**：每个 phase 都跑同一个四步循环——
-
-1. **边界文档**（`decisions/`）：界定范围内/外，以及变更中必须守住的不变量。写代码前先锁定。
-2. **计划**（`tasks/`）：带验收标准的能力清单，是“框架构建者（人）”与“实现者（Claude Code）”之间的契约。
-3. **执行**：Claude Code 驱动子任务，人只在契约层评审，不看实现细节。
-4. **复盘**（`learnings/`）：哪些抽象经受住了考验、哪些崩了、下一阶段该预测什么——在每个 phase 结束时写，而非项目结束时。
-
-**5 条框架级经验（精简版）**：
-
-1. 抽象优先会复利——正确形状的 Protocol 让 Phase 7c 仅用 7b 12% 的代码量就加上了 gVisor。
-2. 分层模型能承载横切负载——ModeBundle 同时触达 4 层，11 个受保护目录零 diff。
-3. 加法式 kwarg 是扩展稳定 API 的正确形状——默认值=旧行为，opt-in=新功能，旧测试逐字节通过。
-4. 来源无关的目录是可扩展性的解锁点——第二个生产者仅花第一个 60% 的成本。
-5. API 级零 diff 是重构的正确不变量——抽取共享模块后 233 个调用方测试不变；rule-of-three 是甜点而非更早。
-
-从 `learnings/phase-7.md`（覆盖早期全部阶段的元复盘）读起最佳。
-
----
-
-## 开发
-
-```bash
-uv run ruff check && uv run ruff format   # Lint + 格式化
-uv run mypy --strict src/                 # 类型检查（strict 模式）
-uv run pytest                             # 测试 + 覆盖率
-uv run pre-commit install                 # 首次克隆后安装 hook
-```
-
-CI 在 Python 3.10 / 3.11 上跑 lint + 类型检查 + 完整测试。集成测试在缺少环境变量 / Docker / gVisor 时自动跳过，`tests/` 在无外部依赖时始终干净通过。
-
----
-
-## 致谢
-
-本项目的名称与模块词汇承袭自 [HKUDS/OpenHarness](https://github.com/HKUDS/OpenHarness)（MIT 许可）——最初的 Python LLM harness。本仓库（build-my-own-harness）是一份**独立、从零重写的学习产物**：不共享任何代码，实现细节频繁分歧，范围有意更窄（见 `SPEC.md §1` 与 `ARCHITECTURE.md`）。`REFERENCE.md` 记录了上游 v0.1.7 规范作为研究对象，而非复制来源。
 
 ## License
 
-MIT，见 [LICENSE](LICENSE)。
+MIT。详见 [LICENSE](./LICENSE)。
