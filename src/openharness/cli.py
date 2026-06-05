@@ -417,6 +417,11 @@ def _load_memory_entrypoint(memory_dir: Path, *, max_bytes: int) -> str | None:
     Returns ``None`` on: file doesn't exist, oversize, permission
     denied, or decode error. No log on the "doesn't exist" common
     case — projects without MEMORY.md are the normal Phase 10 state.
+
+    **Note (P16-T1)**: this is the LEGACY byte-cap path used by the
+    Phase 10 ``MemoryManifest`` flow. The new CC-style path (D36.11)
+    uses :func:`_load_memory_index_for_injection` instead, which
+    applies a 200-line cap + WARN-on-truncate.
     """
     entrypoint_path = memory_dir / "MEMORY.md"
     if not entrypoint_path.exists():
@@ -428,6 +433,56 @@ def _load_memory_entrypoint(memory_dir: Path, *, max_bytes: int) -> str | None:
     if len(content.encode("utf-8")) > max_bytes:
         return None
     return content
+
+
+# P16-T1 (D36.8): MEMORY.md hard line cap for the system-prompt injection
+# path. Cap is a token-budget invariant, not a tunable — see
+# decisions/36-phase-16-memory-pivot-boundary.md.
+_MEMORY_INDEX_MAX_LINES = 200
+
+
+def _load_memory_index_for_injection(memory_dir: Path) -> str | None:
+    """Read MEMORY.md for D36.11 system-prompt injection — P16-T1.
+
+    Behavior per D36.8 / D36.11:
+
+    - File doesn't exist → return ``None`` (caller injects placeholder).
+      No log; absent MEMORY.md is the normal cold-start state.
+    - OSError / decode error → WARN log ``memory_index_read_failed``,
+      return ``None`` (caller injects placeholder so session start
+      does not fail).
+    - File exists + ≤ 200 lines → return full content.
+    - File exists + > 200 lines → WARN log ``memory_index_truncated``,
+      return first 200 lines.
+
+    Distinct from :func:`_load_memory_entrypoint` (the Phase 10 byte-cap
+    path) — D36.8 explicitly switched the cap from bytes to lines for
+    the new path. Both functions coexist until T2 retires the legacy
+    Phase 10 ``MemoryManifest`` flow.
+    """
+    log = get_logger("memory")
+    entrypoint_path = memory_dir / "MEMORY.md"
+    if not entrypoint_path.exists():
+        return None
+    try:
+        content = entrypoint_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        log.warning(
+            "memory_index_read_failed",
+            path=str(entrypoint_path),
+            error=str(exc),
+        )
+        return None
+    lines = content.splitlines()
+    if len(lines) > _MEMORY_INDEX_MAX_LINES:
+        log.warning(
+            "memory_index_truncated",
+            path=str(entrypoint_path),
+            total_lines=len(lines),
+            kept_lines=_MEMORY_INDEX_MAX_LINES,
+        )
+        lines = lines[:_MEMORY_INDEX_MAX_LINES]
+    return "\n".join(lines)
 
 
 async def _run_ask(
@@ -788,6 +843,7 @@ async def _run_ask(
             system_prompt = bundle.system_prompt
         else:
             memory_manifest: MemoryManifest | None = None
+            memory_index_content: str | None = None
             if memory_store is not None and memory_dir is not None:
                 memory_manifest = _build_memory_manifest_for_query(
                     memory_store=memory_store,
@@ -795,12 +851,20 @@ async def _run_ask(
                     query=prompt,
                     memory_settings=settings.memory,
                 )
+                # P16-T1 (D36.11): CC-style ## Memory section injection.
+                # memory_dir + memory_index_content take precedence over
+                # memory_manifest for the Memory slot (build_system_prompt
+                # contract). Manifest still computed for legacy callers
+                # until T2 deprecates that path.
+                memory_index_content = _load_memory_index_for_injection(memory_dir)
             system_prompt = build_system_prompt(
                 effective_registry.to_api_schema(),
                 env,
                 skill_store=skill_store,
                 claude_md_content=claude_md_content,
                 memory_manifest=memory_manifest,
+                memory_dir=memory_dir,
+                memory_index_content=memory_index_content,
                 web_enabled=effective_web,
             )
 
@@ -1357,12 +1421,19 @@ async def _run_chat(
                     query=user_input,
                     memory_settings=settings.memory,
                 )
+                # P16-T1 (D36.11): per-turn MEMORY.md re-read so the LLM
+                # sees the index updated by the previous turn's memory
+                # writes. memory_dir + memory_index_content supersede
+                # memory_manifest for the Memory slot.
+                memory_index_content = _load_memory_index_for_injection(memory_dir)
                 system_prompt = build_system_prompt(
                     effective_registry.to_api_schema(),
                     env,
                     skill_store=skill_store,
                     claude_md_content=claude_md_content,
                     memory_manifest=memory_manifest,
+                    memory_dir=memory_dir,
+                    memory_index_content=memory_index_content,
                     web_enabled=effective_web,
                 )
 

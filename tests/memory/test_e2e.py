@@ -127,8 +127,29 @@ class TestMemoryE2E:
     def test_query_match_injects_memory_into_system_prompt(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Phase 16 (D36.11) supersedes Phase 10's body auto-injection.
+
+        New contract: ``oh ask`` injects the ``## Memory`` rules block
+        plus the ``### Memory Index`` from MEMORY.md. The LLM is then
+        expected to issue a ``Read`` tool call for the memory file
+        whose hook matches the query (rather than the harness pre-
+        loading the body). This test now seeds **both** the memory
+        ``.md`` file and a MEMORY.md index pointing at it, then verifies
+        the new section flow.
+        """
+        from pathlib import Path
+
         captured = _seed_env_and_stub(monkeypatch)
         _seed_stripe_memory()
+        # P16-T1: seed the MEMORY.md index so it gets injected (without
+        # an index, the new path emits the empty-placeholder).
+        memory_dir = get_project_memory_dir(Path.cwd())
+        (memory_dir / "MEMORY.md").write_text(
+            "# Memory index\n\n"
+            "- [Stripe SDK version](stripe-sdk-version.md) — pin 8.x + "
+            "legacy refund API\n",
+            encoding="utf-8",
+        )
 
         runner = CliRunner()
         result = runner.invoke(cli_module.app, ["ask", "how do I issue a stripe refund"])
@@ -136,12 +157,17 @@ class TestMemoryE2E:
         assert result.exit_code == 0, result.stderr
         assert captured.context is not None
         prompt = captured.context.system_prompt  # type: ignore[attr-defined]
-        # Section heading present
-        assert "## Relevant Memories" in prompt
-        # Memory name + description in the subsection header
-        assert "### stripe-sdk-version" in prompt
-        # Body content injected
-        assert "Stripe SDK pinned to 8.x" in prompt
+        # New ## Memory section with rules block present
+        assert "## Memory" in prompt
+        assert "You have a persistent" in prompt
+        # ### Memory Index section with the seeded entry
+        assert "### Memory Index" in prompt
+        assert "[Stripe SDK version](stripe-sdk-version.md)" in prompt
+        # Memory body is NOT auto-injected anymore — LLM expected to
+        # Read it on demand. Verify the legacy ## Relevant Memories
+        # section is gone.
+        assert "## Relevant Memories" not in prompt
+        assert "Stripe SDK pinned to 8.x" not in prompt
 
     def test_query_match_increments_use_count_atomically(
         self, monkeypatch: pytest.MonkeyPatch

@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from openharness.prompts.memory import format_memory_rules_section
 from openharness.prompts.memory_inject import (
     format_memory_index_section,
     format_relevant_memories_section,
@@ -35,6 +36,9 @@ if TYPE_CHECKING:
     from openharness.prompts.memory_inject import MemoryManifest
     from openharness.protocols import ToolSpec
     from openharness.skills.store import SkillStore
+
+
+_EMPTY_INDEX_PLACEHOLDER = "*(MEMORY.md is empty — no memories yet)*"
 
 
 @dataclass(frozen=True)
@@ -93,6 +97,8 @@ def build_system_prompt(
     skill_store: SkillStore | None = None,
     claude_md_content: str | None = None,
     memory_manifest: MemoryManifest | None = None,
+    memory_dir: Path | None = None,
+    memory_index_content: str | None = None,
     web_enabled: bool | None = None,
 ) -> str:
     """Assemble the system prompt from base + tools + skills + env + memory.
@@ -119,22 +125,42 @@ def build_system_prompt(
       substitution when external info is requested but web tools
       are not registered).
 
-    Section order (D28.6 + D29.6):
+    **P16-T1 (D36.10/D36.11)** adds two more kwargs for the Claude-Code-
+    style memory architecture pivot:
+
+    - ``memory_dir``: when set, emit a ``## Memory`` section containing
+      the CC-style write rules (from :mod:`prompts.memory`) followed by
+      a ``### Memory Index`` subsection with the MEMORY.md content (or
+      empty placeholder).
+    - ``memory_index_content``: the MEMORY.md text (already truncated
+      to first 200 lines by caller per D36.8). ``None`` or empty →
+      placeholder text "MEMORY.md is empty — no memories yet".
+
+    ``memory_dir`` and the legacy ``memory_manifest`` are **mutually
+    exclusive section sources** for the ``## Memory`` slot: when
+    ``memory_dir`` is provided, the new combined rules+index section is
+    emitted and ``memory_manifest`` is ignored for the ``## Memory``
+    section (relevant memories from manifest are also dropped — D36.7
+    deprecates that path). The legacy path (manifest only, no
+    ``memory_dir``) remains for byte-identical compatibility with Phase
+    10/11 callers until T2 fully migrates them.
+
+    Section order (D28.6 + D29.6 + D36.10):
 
     1. base instructions
     2. ``## Tools``
     3. ``## Available Skills`` (if skill_store present + non-empty)
     4. ``## Environment``
     5. ``## Project Instructions`` (if claude_md_content present)
-    6. ``## Memory`` (if memory_manifest.entrypoint_content present)
-    7. ``## Relevant Memories`` (if memory_manifest.relevant non-empty)
-    8. ``## Web Access`` or ``## No Internet Access``
+    6. ``## Memory`` — NEW combined (D36.10) when ``memory_dir`` set,
+       LEGACY ``## Memory`` + ``## Relevant Memories`` (D28.6) otherwise
+    7. ``## Web Access`` or ``## No Internet Access``
        (if ``web_enabled`` is not None)
 
     All sections joined by blank lines (``\\n\\n``). Same Markdown-``##``
     convention as P2-T5 (D11.3). The byte-identical invariant
-    (P10-T4.4a) holds: when ALL four optional kwargs default to None,
-    the output is byte-exact to today's prompt — existing 233+ caller
+    (P10-T4.4a) holds: when ALL optional kwargs default to None, the
+    output is byte-exact to today's prompt — existing 233+ caller
     tests pass unchanged.
 
     The new memory sections come AFTER Environment because the
@@ -154,7 +180,14 @@ def build_system_prompt(
     sections.append(_format_environment_section(env))
     if claude_md_content is not None:
         sections.append(claude_md_content)
-    if memory_manifest is not None:
+    if memory_dir is not None:
+        # P16-T1 (D36.10/D36.11): CC-style combined ## Memory section
+        # (rules + index). When memory_dir is set, memory_manifest is
+        # ignored for the Memory slot — the new path supersedes Phase
+        # 10's split rendering.
+        sections.append(_format_combined_memory_section(memory_dir, memory_index_content))
+    elif memory_manifest is not None:
+        # Legacy Phase 10/11 path — byte-identical to v0.3.x callers.
         memory_index = format_memory_index_section(memory_manifest)
         if memory_index is not None:
             sections.append(memory_index)
@@ -225,6 +258,29 @@ def _format_web_disabled_section() -> str:
         "history, general principles), answer from training data and "
         "note your cutoff if relevant."
     )
+
+
+def _format_combined_memory_section(memory_dir: Path, memory_index_content: str | None) -> str:
+    """Render the CC-style ``## Memory`` section — rules + index — per D36.10.
+
+    The rules section (from :func:`prompts.memory.format_memory_rules_section`)
+    starts with ``## Memory`` and contains the write contract / type
+    definitions / "DO save when" + "DO NOT save" / `[[slug]]` syntax /
+    200-line cap notes. The MEMORY.md index content is appended as a
+    ``### Memory Index`` subsection at the end of the section.
+
+    Empty / None ``memory_index_content`` → render
+    :data:`_EMPTY_INDEX_PLACEHOLDER` so the LLM sees that the index
+    mechanism exists but is currently empty (vs. silently omitting,
+    which would leave the LLM unsure whether memory is configured).
+    """
+    rules = format_memory_rules_section(memory_dir)
+    body = (memory_index_content or "").strip()
+    if body:
+        index_block = f"### Memory Index\n\n```md\n{body}\n```"
+    else:
+        index_block = f"### Memory Index\n\n{_EMPTY_INDEX_PLACEHOLDER}"
+    return f"{rules}\n\n{index_block}"
 
 
 def _format_tools_section(tools: list[ToolSpec]) -> str:
