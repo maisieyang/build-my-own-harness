@@ -1,5 +1,19 @@
 """Extract durable memories from a completed turn — P11-T4.4d/4e.
 
+**DEPRECATED — Phase 16 D36.9** (2026-06-05). This module's
+``extract_memories_from_turn`` secondary-LLM-pass is superseded by
+the Claude-Code-style inline LLM-self-decides memory write pattern
+(D36.3 / D36.10 / D36.11). ``ExtractionSettings.enabled`` default
+flipped ``True`` → ``False`` in Phase 16; the engine call site in
+``engine/query.py`` early-returns when ``not enabled``. Code retained
+as a safety net so an explicit ``OPENHARNESS_EXTRACTION__ENABLED=true``
+opt-in still works (rollback path); a future cleanup phase will
+delete the module entirely. New code should NOT call into this
+module — let the main LLM emit Write + Edit tool_use blocks directly
+during the conversation turn.
+
+---
+
 Per ``decisions/26-phase-11-boundary.md`` D29.5: at the end of each
 user turn (after :func:`update_session_memory_file` writes the
 deterministic checkpoint), run a focused **secondary LLM pass** that

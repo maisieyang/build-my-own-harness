@@ -109,8 +109,6 @@ from openharness.memory import (
     FilesystemMemoryStore,
     MemoryStore,
     get_project_memory_dir,
-    mark_memory_used,
-    select_relevant_memories,
 )
 from openharness.observability import configure_logging
 
@@ -129,7 +127,6 @@ from openharness.plugins import (
     PluginLoader,
 )
 from openharness.prompts import (
-    MemoryManifest,
     build_system_prompt,
     detect_environment,
     load_claude_md_prompt,
@@ -143,9 +140,6 @@ from openharness.skills.store import EmptySkillStore, FilesystemSkillStore, Skil
 from openharness.tools import LoadSkillTool, create_default_tool_registry
 from openharness.tools.web_fetch import WebFetch
 from openharness.tools.web_search import TavilySearchProvider, WebSearch
-
-if TYPE_CHECKING:
-    from openharness.config.settings import MemorySettings
 
 # Default per-call output cap. Phase 1 originally shipped 1024 (no tools),
 # but with tool-use ship (Phase 2) and especially Agent / Write tool calls
@@ -360,84 +354,14 @@ def _load_plugin_catalogs(
 # --------------------------------------------------------------------------- #
 
 
-def _build_memory_manifest_for_query(
-    *,
-    memory_store: MemoryStore,
-    memory_dir: Path,
-    query: str,
-    memory_settings: MemorySettings,
-) -> MemoryManifest:
-    """Compute the :class:`MemoryManifest` to inject for ``query`` — P10-T4.4f.
-
-    Three steps:
-
-    1. ``select_relevant_memories(query, ...)`` — score + filter the
-       discovered memories against query tokens; keep top-N per
-       ``memory_settings.max_files``.
-    2. ``mark_memory_used(m)`` on each picked memory — atomic
-       frontmatter rewrite that increments ``use_count`` and stamps
-       ``last_used_at``. Closes the loop Phase 13's stale-memory GC
-       needs.
-    3. ``_load_memory_entrypoint(memory_dir, max_bytes=...)`` — read
-       the optional ``MEMORY.md`` index file if it exists and fits
-       under the byte cap.
-
-    Returns a :class:`MemoryManifest` ready to flow through
-    :func:`build_system_prompt`'s ``memory_manifest`` kwarg.
-    Empty manifest (no relevant memories AND no MEMORY.md) is fine —
-    the formatters return ``None`` per section and ``build_system_prompt``
-    omits both.
-    """
-    memories = memory_store.discover().values()
-    relevant = select_relevant_memories(
-        query,
-        memories,
-        max_results=memory_settings.max_files,
-    )
-    for memory in relevant:
-        # Writes to disk — atomic via tempfile + os.replace. Failure
-        # logs ``memory_usage_update_failed`` and is non-blocking.
-        mark_memory_used(memory)
-    entrypoint = _load_memory_entrypoint(memory_dir, max_bytes=memory_settings.max_entrypoint_bytes)
-    return MemoryManifest(
-        entrypoint_content=entrypoint,
-        relevant=tuple(relevant),
-    )
-
-
-def _load_memory_entrypoint(memory_dir: Path, *, max_bytes: int) -> str | None:
-    """Read ``MEMORY.md`` from ``memory_dir`` if it exists + fits under cap.
-
-    Phase 10 (D28.6) doesn't truncate the index — by convention MEMORY.md
-    is a small TOC. Files exceeding ``max_bytes`` are skipped entirely
-    (returns ``None`` so ``## Memory`` section is omitted) rather than
-    truncated with a marker, because a half-cut index is less useful
-    than no index at all (the LLM can't navigate it).
-
-    Returns ``None`` on: file doesn't exist, oversize, permission
-    denied, or decode error. No log on the "doesn't exist" common
-    case — projects without MEMORY.md are the normal Phase 10 state.
-
-    **Note (P16-T1)**: this is the LEGACY byte-cap path used by the
-    Phase 10 ``MemoryManifest`` flow. The new CC-style path (D36.11)
-    uses :func:`_load_memory_index_for_injection` instead, which
-    applies a 200-line cap + WARN-on-truncate.
-    """
-    entrypoint_path = memory_dir / "MEMORY.md"
-    if not entrypoint_path.exists():
-        return None
-    try:
-        content = entrypoint_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return None
-    if len(content.encode("utf-8")) > max_bytes:
-        return None
-    return content
-
-
 # P16-T1 (D36.8): MEMORY.md hard line cap for the system-prompt injection
 # path. Cap is a token-budget invariant, not a tunable — see
 # decisions/36-phase-16-memory-pivot-boundary.md.
+#
+# (Phase 10's ``_build_memory_manifest_for_query`` + ``_load_memory_entrypoint``
+# byte-cap helpers were removed in Phase 16 T2 per D36.7 — harness-side
+# relevance ranking is superseded by LLM-self-selects from the MEMORY.md
+# index injected via :func:`_load_memory_index_for_injection`.)
 _MEMORY_INDEX_MAX_LINES = 200
 
 
@@ -455,10 +379,9 @@ def _load_memory_index_for_injection(memory_dir: Path) -> str | None:
     - File exists + > 200 lines → WARN log ``memory_index_truncated``,
       return first 200 lines.
 
-    Distinct from :func:`_load_memory_entrypoint` (the Phase 10 byte-cap
-    path) — D36.8 explicitly switched the cap from bytes to lines for
-    the new path. Both functions coexist until T2 retires the legacy
-    Phase 10 ``MemoryManifest`` flow.
+    The Phase 10 ``MemoryManifest`` byte-cap flow it superseded was
+    retired in P16-T2 (D36.7). D36.8 explicitly switched the cap from
+    bytes to lines for this path.
     """
     log = get_logger("memory")
     entrypoint_path = memory_dir / "MEMORY.md"
@@ -835,34 +758,26 @@ async def _run_ask(
         # by ``build_system_prompt`` itself via the ``skill_store`` kwarg.
         # P5d-T4: bundle.system_prompt REPLACES base when set; otherwise
         # build against EFFECTIVE registry so the tool catalog reflects
-        # any whitelist filter. P10-T4.4f: when memory is enabled AND
-        # the bundle doesn't override, also inject ``claude_md_content``
-        # + a per-query ``MemoryManifest`` so the LLM sees project
-        # instructions + relevant memories alongside tools / env.
+        # any whitelist filter. P10-T4.4f (refined P16-T1/T2 D36.10/D36.11):
+        # when memory is enabled AND the bundle doesn't override, inject
+        # ``claude_md_content`` + the CC-style ``## Memory`` section
+        # (rules block + MEMORY.md index) so the LLM sees project
+        # instructions + memory entrypoint alongside tools / env.
         if bundle is not None and bundle.system_prompt is not None:
             system_prompt = bundle.system_prompt
         else:
-            memory_manifest: MemoryManifest | None = None
             memory_index_content: str | None = None
             if memory_store is not None and memory_dir is not None:
-                memory_manifest = _build_memory_manifest_for_query(
-                    memory_store=memory_store,
-                    memory_dir=memory_dir,
-                    query=prompt,
-                    memory_settings=settings.memory,
-                )
-                # P16-T1 (D36.11): CC-style ## Memory section injection.
-                # memory_dir + memory_index_content take precedence over
-                # memory_manifest for the Memory slot (build_system_prompt
-                # contract). Manifest still computed for legacy callers
-                # until T2 deprecates that path.
+                # P16-T2 (D36.7 / D36.11): the only memory-side
+                # computation production needs is reading MEMORY.md for
+                # injection. Phase 10's relevance ranking + use_count
+                # bookkeeping was retired alongside extraction (D36.9).
                 memory_index_content = _load_memory_index_for_injection(memory_dir)
             system_prompt = build_system_prompt(
                 effective_registry.to_api_schema(),
                 env,
                 skill_store=skill_store,
                 claude_md_content=claude_md_content,
-                memory_manifest=memory_manifest,
                 memory_dir=memory_dir,
                 memory_index_content=memory_index_content,
                 web_enabled=effective_web,
@@ -1222,9 +1137,10 @@ async def _run_chat(
                 plugin_catalog=plugin_catalogs.commands,
             )
 
-        # P10-T4.4f: memory subsystem assembled ONCE per ``oh chat``
-        # session. Per-turn ``MemoryManifest`` rebuild happens inside
-        # the loop with the current user_input as the relevance query.
+        # P10-T4.4f (refined P16-T1/T2 D36.11): memory subsystem
+        # assembled ONCE per ``oh chat`` session. Per-turn MEMORY.md
+        # re-read happens inside the loop so the LLM sees the index
+        # updated by the previous turn's writes.
         memory_dir: Path | None = None
         memory_store: MemoryStore | None = None
         claude_md_content: str | None = None
@@ -1415,23 +1331,17 @@ async def _run_chat(
             # multi-turn conversations get fresh relevance scoring
             # against the current user_input.
             if memory_store is not None and memory_dir is not None and not bundle_overrides_prompt:
-                memory_manifest = _build_memory_manifest_for_query(
-                    memory_store=memory_store,
-                    memory_dir=memory_dir,
-                    query=user_input,
-                    memory_settings=settings.memory,
-                )
-                # P16-T1 (D36.11): per-turn MEMORY.md re-read so the LLM
-                # sees the index updated by the previous turn's memory
-                # writes. memory_dir + memory_index_content supersede
-                # memory_manifest for the Memory slot.
+                # P16-T1/T2 (D36.7 / D36.11): per-turn MEMORY.md re-read
+                # so the LLM sees the index updated by the previous
+                # turn's memory writes. Phase 10's relevance ranking +
+                # use_count bookkeeping was retired alongside extraction
+                # (D36.9) — the LLM picks what to Read from the index.
                 memory_index_content = _load_memory_index_for_injection(memory_dir)
                 system_prompt = build_system_prompt(
                     effective_registry.to_api_schema(),
                     env,
                     skill_store=skill_store,
                     claude_md_content=claude_md_content,
-                    memory_manifest=memory_manifest,
                     memory_dir=memory_dir,
                     memory_index_content=memory_index_content,
                     web_enabled=effective_web,

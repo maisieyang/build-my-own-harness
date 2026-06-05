@@ -50,13 +50,19 @@ from openharness.memory.model import (
     parse_memory,
 )
 from openharness.memory.paths import get_project_memory_dir
-from openharness.memory.relevance import select_relevant_memories
 from openharness.memory.store import (
     EmptyMemoryStore,
     FilesystemMemoryStore,
     MemoryStore,
 )
-from openharness.memory.usage import mark_memory_used
+
+# P16-T2 (D36.7): ``select_relevant_memories`` and ``mark_memory_used`` are
+# NOT re-exported here. Phase 10's harness-side relevance ranking is
+# deprecated — the LLM does selection from the MEMORY.md index now
+# (D36.4). Existing internal callers (tests, the deprecated relevance
+# module itself) keep working via the fully-qualified paths
+# ``openharness.memory.relevance.select_relevant_memories`` and
+# ``openharness.memory.usage.mark_memory_used``.
 
 __all__ = [
     "EmptyMemoryStore",
@@ -69,7 +75,5 @@ __all__ = [
     "UnknownMemoryError",
     "compute_memory_signature",
     "get_project_memory_dir",
-    "mark_memory_used",
     "parse_memory",
-    "select_relevant_memories",
 ]

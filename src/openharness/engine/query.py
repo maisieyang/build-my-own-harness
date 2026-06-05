@@ -97,6 +97,18 @@ async def _maybe_extract_memories(
 ) -> None:
     """P11-T4.4f: run extraction secondary pass if enabled + store available.
 
+    **DEPRECATED — Phase 16 D36.9** (2026-06-05). The default for
+    ``ExtractionSettings.enabled`` flipped ``True`` → ``False`` in
+    Phase 16, so this function early-returns for the typical
+    production path. The new architecture has the main LLM write
+    memories inline via Write + Edit tools during the conversation
+    turn (D36.10 / D36.11), making this secondary pass redundant.
+    Kept around so an explicit
+    ``OPENHARNESS_EXTRACTION__ENABLED=true`` opt-in (or
+    ``ExtractionSettings(enabled=True)`` programmatic override) still
+    behaves as before — a roll-back safety net until a future cleanup
+    phase removes the call entirely.
+
     Awaited (not asyncio.create_task) so failures are contained within
     the run_query lifetime. Extraction itself never raises — returns
     an :class:`ExtractionResult` with ``error`` set on failure. We log
@@ -104,7 +116,8 @@ async def _maybe_extract_memories(
 
     Skipped silently when:
     - ``context.memory_store`` is None (caller didn't wire memory)
-    - ``context.extract_enabled`` is False (caller opted out)
+    - ``context.extract_enabled`` is False (caller opted out; this is
+      the new Phase 16 default)
     """
     if context.memory_store is None or not context.extract_enabled:
         return

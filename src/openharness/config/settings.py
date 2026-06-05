@@ -150,17 +150,32 @@ class CompactSettings(BaseModel):
 class ExtractionSettings(BaseModel):
     """Tunables for the Phase 11 memory-extraction secondary pass (D29.5).
 
+    **DEPRECATED — Phase 16 D36.9**. The Phase 11 secondary-LLM-pass
+    extraction architecture is superseded by Claude-Code-style inline
+    LLM-self-decides memory writes (via the Write + Edit tools, see
+    D36.10/D36.11). Default flipped ``True`` → ``False`` in Phase 16
+    so production sessions no longer fire the per-turn extraction
+    call. Code retained as a safety net until a future cleanup phase
+    deletes it. To re-enable explicitly (e.g., to roll back the new
+    architecture), set ``OPENHARNESS_EXTRACTION__ENABLED=true`` or
+    omit ``--no-extract`` flag in a context where you've manually
+    opted in.
+
     Env-var overrides: ``OPENHARNESS_EXTRACTION__MODEL=qwen-turbo``
     sets ``settings.extraction.model``. CLI ``--no-extract`` flips
-    ``enabled=False``.
+    ``enabled=False`` (post-Phase-16 this is the no-op confirmation
+    of the new default; pre-Phase-16 it was the opt-out path).
     """
 
     enabled: bool = Field(
-        default=True,
+        default=False,
         description=(
-            "Enable the per-turn extraction secondary pass. When false, "
-            "the engine never invokes extract_memories_from_turn; agent "
-            "writes to the memory store via filesystem tools instead. "
+            "Enable the per-turn extraction secondary pass. **DEPRECATED "
+            "by Phase 16 D36.9 — default flipped to False.** When false "
+            "(new default), the engine never invokes "
+            "extract_memories_from_turn; the main LLM is expected to "
+            "write memories inline via Write + Edit tools per the "
+            "Claude-Code-style architecture (D36.10/D36.11). "
             "Override: ``OPENHARNESS_EXTRACTION__ENABLED`` env / "
             "``--no-extract`` CLI flag."
         ),

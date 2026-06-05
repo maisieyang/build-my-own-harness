@@ -1,5 +1,20 @@
 """Relevance scoring for memory injection — P10-T3.3a.
 
+**DEPRECATED — Phase 16 D36.7** (2026-06-05). Harness-side relevance
+ranking is superseded by Claude-Code-style **LLM-self-selects** from
+the MEMORY.md index injected into the system prompt (D36.4). The
+production CLI path (``_run_ask`` / ``_run_chat``) no longer calls
+:func:`select_relevant_memories`; the LLM scans MEMORY.md entries
+itself and issues Read tool calls for whichever bodies it judges
+relevant to the current turn. Code retained so the module's existing
+unit tests (``tests/memory/test_relevance.py``) continue to verify
+the algorithm's semantics in isolation; a future cleanup phase will
+delete this module along with :mod:`openharness.services.extract`.
+New code should NOT call ``select_relevant_memories`` — see D36
+boundary doc §四 anti-scope.
+
+---
+
 Per ``decisions/25-phase-10-boundary.md`` D28.7: turn a passive memory
 pile into a query-relevant top-N. The load-bearing rule is **zero-
 token-hits exclusion** — a memory whose name/description/tags/body

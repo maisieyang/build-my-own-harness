@@ -42,9 +42,14 @@ class TestCompactSettingsDefaults:
 
 
 class TestExtractionSettingsDefaults:
-    def test_defaults_match_d29_8(self) -> None:
+    def test_defaults_match_phase_16_d36_9(self) -> None:
+        """Phase 16 D36.9 flipped ``enabled`` default ``True`` → ``False``.
+
+        The other Phase 11 D29.8 defaults (max_records / model / timeout)
+        are unchanged — they remain meaningful for the rollback path
+        (when ``--enable-extract`` or explicit env override is set)."""
         s = ExtractionSettings()
-        assert s.enabled is True
+        assert s.enabled is False
         assert s.max_records_per_turn == 3
         assert s.model is None  # default → use main convo model
         assert s.timeout_s == 30.0
@@ -62,12 +67,21 @@ class TestSettingsNestedDefaults:
 
     def test_extraction_field_uses_default_factory(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _seed_required_env(monkeypatch)
-        # Conftest sets OPENHARNESS_EXTRACTION__ENABLED=false for test
-        # isolation (stub LLMs can't satisfy extraction's JSON-output
-        # prompt). Undo to verify production default.
-        monkeypatch.delenv("OPENHARNESS_EXTRACTION__ENABLED")
+        # Phase 16 D36.9 default is False (deprecated path); pre-Phase-16
+        # conftest used to set OPENHARNESS_EXTRACTION__ENABLED=false for
+        # isolation, which is now the production default — no env
+        # cleanup needed to verify the default.
+        monkeypatch.delenv("OPENHARNESS_EXTRACTION__ENABLED", raising=False)
         settings = Settings()
         assert isinstance(settings.extraction, ExtractionSettings)
+        assert settings.extraction.enabled is False
+
+    def test_extraction_explicit_true_still_enables(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The Phase 11 code path is the rollback safety net (D36.9) —
+        explicit opt-in must still flip the flag back to True."""
+        _seed_required_env(monkeypatch)
+        monkeypatch.setenv("OPENHARNESS_EXTRACTION__ENABLED", "true")
+        settings = Settings()
         assert settings.extraction.enabled is True
 
 

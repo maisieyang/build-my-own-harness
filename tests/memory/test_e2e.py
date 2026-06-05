@@ -169,52 +169,16 @@ class TestMemoryE2E:
         assert "## Relevant Memories" not in prompt
         assert "Stripe SDK pinned to 8.x" not in prompt
 
-    def test_query_match_increments_use_count_atomically(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _seed_env_and_stub(monkeypatch)
-        path = _seed_stripe_memory()
-
-        runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "stripe refund question"])
-
-        assert result.exit_code == 0
-        # Re-parse from disk — the in-memory Memory instance is frozen and
-        # untouched; the file's frontmatter is what gets updated.
-        reparsed = parse_memory(path)
-        assert reparsed is not None
-        assert reparsed.use_count == 1
-        assert reparsed.last_used_at is not None
-
-    def test_zero_token_query_does_not_inject_or_mark_used(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # D28.7 load-bearing rule: query with no token overlap → memory
-        # is NOT injected AND use_count stays 0. Without this, every
-        # turn would silently bump use_count for every memory, breaking
-        # the Phase 13 stale-GC signal.
-        #
-        # Query carefully crafted to share NO tokens with the stripe
-        # memory (body or meta). Note: Phase 10 doesn't strip stopwords
-        # (per D28.7 sub-decision), so any query containing "the" /
-        # "is" / "to" etc. that also appear in the memory body would
-        # spuriously match. Phase 10 retro flags this as a known
-        # limitation to evaluate.
-        captured = _seed_env_and_stub(monkeypatch)
-        path = _seed_stripe_memory()
-
-        runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "Tuesday calendar planning notes"])
-
-        assert result.exit_code == 0
-        # No Relevant Memories section in the prompt
-        prompt = captured.context.system_prompt  # type: ignore[attr-defined]
-        assert "## Relevant Memories" not in prompt
-        # And use_count untouched on disk
-        reparsed = parse_memory(path)
-        assert reparsed is not None
-        assert reparsed.use_count == 0
-        assert reparsed.last_used_at is None
+    # Phase 16 T2 (D36.7) retired both the use_count side-effect and the
+    # zero-token relevance filter. The replaced tests asserted Phase 10
+    # behavior that the new architecture deliberately drops — the LLM is
+    # now responsible for deciding which memory body to Read after
+    # scanning the MEMORY.md index, so neither use_count tracking nor
+    # query-side relevance filtering is part of the contract anymore.
+    # Algorithm-level coverage for the deprecated relevance + use_count
+    # paths lives in ``tests/memory/test_relevance.py`` and
+    # ``tests/memory/test_usage.py`` against the still-functional
+    # module-level functions.
 
     def test_disable_memory_flag_skips_injection(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # --no-enable-memory makes the prompt byte-identical to pre-
