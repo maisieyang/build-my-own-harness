@@ -1,0 +1,11 @@
+{
+  "case_id": "T1-tool-name-abstraction",
+  "model": "qwen3.7-max",
+  "kind": "infer",
+  "recorded_at": "2026-06-04T07:49:16.355956+00:00",
+  "request_summary": "[user] 找一下项目里所有调用 summarize() 的地方",
+  "response": {
+    "goal": "Find all calls to summarize() in the project",
+    "next_step": "Read src/openharness/services/focus_state.py around line 151 to review the second call to summarize()"
+  }
+}

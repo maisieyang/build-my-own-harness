@@ -1,0 +1,11 @@
+{
+  "case_id": "T8-bash-user-level-abstraction",
+  "model": "qwen3.7-max",
+  "kind": "infer",
+  "recorded_at": "2026-06-04T07:50:18.198782+00:00",
+  "request_summary": "[user] 帮我跑一下 focus_state 的测试，看是不是过的",
+  "response": {
+    "goal": "run the focus_state tests to verify if they pass",
+    "next_step": "inform the user that all 12 tests in tests/services/test_focus_state.py passed successfully"
+  }
+}

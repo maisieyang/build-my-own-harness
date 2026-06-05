@@ -1,0 +1,11 @@
+{
+  "case_id": "T7-edit-done-followup-required",
+  "model": "qwen3.7-max",
+  "kind": "infer",
+  "recorded_at": "2026-06-04T07:50:27.115950+00:00",
+  "request_summary": "[user] src/openharness/services/focus_state.py 帮我在 infer_focus_state 里加一行 logging，每次开始推断时 log 'inference_started' 含 model 字段",
+  "response": {
+    "goal": "add a logging statement for 'inference_started' containing the model field in infer_focus_state within src/openharness/services/focus_state.py",
+    "next_step": "run the test suite or trigger an inference to verify the new log statement outputs correctly without causing errors"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "case_id": "T3-tool-result-content-integration",
+  "model": "qwen3.7-max",
+  "kind": "infer",
+  "recorded_at": "2026-06-04T07:50:03.721228+00:00",
+  "request_summary": "[user] src/openharness/services/focus_state.py 里 inference_started 这个 logger event 有出现在测试里吗",
+  "response": {
+    "goal": null,
+    "next_step": null
+  }
+}

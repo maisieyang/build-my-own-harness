@@ -1,0 +1,11 @@
+{
+  "case_id": "T2-tool-input-refines-intent",
+  "model": "qwen3.7-max",
+  "kind": "infer",
+  "recorded_at": "2026-06-04T07:49:24.622981+00:00",
+  "request_summary": "[user] 我想看看 services 里的 async 模式",
+  "response": {
+    "goal": "find and examine async def patterns in the services directory",
+    "next_step": "read src/openharness/services/summarize.py and src/openharness/services/focus_state.py to show the user the async function implementations"
+  }
+}

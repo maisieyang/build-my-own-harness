@@ -1,0 +1,8 @@
+{
+  "case_id": "T5-tool-chain-high-level",
+  "model": "qwen3.7-max",
+  "kind": "judge_T5",
+  "recorded_at": "2026-06-04T07:49:36.870629+00:00",
+  "request_summary": "Conversation:\n[user] tests/services/test_focus_state.py 跑出来红的，帮我看一下\n[assistant] 我先 Read tests/services/test_focus_state.py 看 fail 的 assertion 是什么。\n[assistant] [tool_use] Read({'file_path': 'tests/serv",
+  "response": "{\"reason\": \"The goal focuses on fixing the failing test, which is the high-level user task, while appropriately mentioning the symbol as the means to achieve the fix.\", \"score\": 1}"
+}

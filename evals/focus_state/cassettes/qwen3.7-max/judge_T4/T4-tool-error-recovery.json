@@ -1,0 +1,8 @@
+{
+  "case_id": "T4-tool-error-recovery",
+  "model": "qwen3.7-max",
+  "kind": "judge_T4",
+  "recorded_at": "2026-06-04T07:50:12.844021+00:00",
+  "request_summary": "Conversation:\n[user] 看看 src/openharness/services/nonexistent.py 里写了什么\n[assistant] [tool_use] Read({'file_path': 'src/openharness/services/nonexistent.py'})\n[user] [tool_result] Error: file not found: ",
+  "response": "{\"reason\": \"The next step proposes asking the user for the correct file path after a file not found error, which is a meaningful recovery action aligned with verifying the file path with the user.\", \"score\": 1}"
+}

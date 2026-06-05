@@ -1,0 +1,11 @@
+{
+  "case_id": "T6-tool-only-no-text-still-infer",
+  "model": "qwen3.7-max",
+  "kind": "infer",
+  "recorded_at": "2026-06-04T07:49:44.116877+00:00",
+  "request_summary": "[user] 看看 services/extract.py 里 EXTRACTION_SYSTEM_PROMPT 怎么写的",
+  "response": {
+    "goal": "read the EXTRACTION_SYSTEM_PROMPT variable in src/openharness/services/extract.py",
+    "next_step": "display the retrieved content of EXTRACTION_SYSTEM_PROMPT to the user and summarize its instructions"
+  }
+}
