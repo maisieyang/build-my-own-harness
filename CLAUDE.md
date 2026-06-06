@@ -52,6 +52,36 @@ compound interest in subsequent phases. The meta-retro §3.1 documents
 this with the Phase 7a/7b/7c sequence: 7c shipped in **12% the LoC of
 7b** because the substrate Protocol was designed correctly in 7a.
 
+### Step 1 boundary doc must include §六 Wiring audit
+
+Every new phase boundary doc carries a `§六 Wiring audit` section
+that enumerates each existing runtime layer the new contract crosses
++ a one-sentence verdict per layer (`unchanged` / `requires
+extension` / `requires bypass`). Default candidate layers to audit:
+
+- `permissions/` (Tier 1 / 2 / 3 + any per-feature exceptions)
+- `hooks/` (pre/post-tool-use, pre/post-api-call, on-error)
+- `services/snapshot.py` + `services/session_memory.py`
+- `services/compact.py` (L1-L4)
+- `observability/` (logger names + WARN / INFO event identifiers)
+- CLI surface (typer subcommands + flag deletions / additions)
+- Eval substrate (focus_state + memory_decision consumers)
+
+Reference implementation: [`decisions/37-phase-17-boundary.md`](./decisions/37-phase-17-boundary.md) §六.
+
+Motivating incident: Phase 16 retro §2 Gap A — the D28.1 ("memory
+dir outside cwd") × P3-T3.3c ("writes must be inside cwd") collision
+was invisible at boundary-doc time, surfaced at dogfood time, and
+required a fix commit. A pre-boundary §六 audit would have caught
+"Tier 3 — requires extension (memory_dir is now a write target by
+D36.10)" and the gap would have shipped with T1 instead of being a
+T5 hotfix.
+
+When the §六 audit produces multiple `requires bypass` verdicts or
+≥ 3 `requires extension` verdicts, the contract is reaching across
+too many layers — re-ratify scope or split the phase before drafting
+step-2 plan.
+
 ---
 
 ## Spec at the right altitude — capability, not sub-task
