@@ -44,6 +44,18 @@ last_used_at: 2026-05-26T11:00:00+00:00
 """
 
 
+_CC_STYLE_MEMORY = """\
+---
+name: {name}
+description: {description}
+metadata:
+  type: {type_}
+---
+
+{body}
+"""
+
+
 def _seed_memory(
     memory_dir: Path,
     *,
@@ -53,7 +65,7 @@ def _seed_memory(
     body: str = "Body",
     use_count: int = 0,
 ) -> Path:
-    """Write a valid memory file into ``memory_dir``."""
+    """Write a Phase 10-style memory file (full 14-field frontmatter)."""
     memory_dir.mkdir(parents=True, exist_ok=True)
     path = memory_dir / f"{name}.md"
     path.write_text(
@@ -68,6 +80,29 @@ def _seed_memory(
     return path
 
 
+def _seed_cc_memory(
+    memory_dir: Path,
+    *,
+    name: str,
+    description: str = "CC-style memory",
+    type_: str = "feedback",
+    body: str = "Body",
+) -> Path:
+    """Write a D36.10 CC-style memory file (name + description +
+    nested metadata.type only — no id / scope / timestamps)."""
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    path = memory_dir / f"{name}.md"
+    path.write_text(
+        _CC_STYLE_MEMORY.format(
+            name=name,
+            description=description,
+            type_=type_,
+            body=body,
+        )
+    )
+    return path
+
+
 def _seed_required_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")
     monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://example.com/v1")
@@ -75,13 +110,15 @@ def _seed_required_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 class TestMemoryList:
     def test_empty_store_text(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """P17-T4 (D37.4): empty store renders ``(no memories yet)`` —
+        the storage-path hint was dropped because the main LLM is the
+        writer now and the user no longer needs the path to drop
+        files manually."""
         _seed_required_env(monkeypatch)
         runner = CliRunner(env={"COLUMNS": "200"})
         result = runner.invoke(app, ["memory", "list"])
         assert result.exit_code == 0
-        assert "(no memories" in result.stdout
-        # Storage path shown so user knows where to drop files
-        assert ".openharness/memory" in result.stdout
+        assert "(no memories yet)" in result.stdout
 
     def test_empty_store_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _seed_required_env(monkeypatch)
@@ -122,21 +159,71 @@ class TestMemoryList:
         assert data[0]["scope"] == "private"
         assert data[0]["last_used_at"] is not None
 
-    def test_sort_by_use_count_desc(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # Most-used first; ties broken by name (alphabetical).
+    def test_sort_alphabetical_case_insensitive(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """P17-T4 (D37.4): D37.4 dropped the use_count sort key (Phase
+        10/11 relevance metadata is deprecated) — list is now sorted
+        alphabetically by name, case-insensitive."""
         _seed_required_env(monkeypatch)
         from pathlib import Path
 
         memory_dir = get_project_memory_dir(Path.cwd())
-        _seed_memory(memory_dir, name="zebra", id_="01HZ000000", use_count=5)
-        _seed_memory(memory_dir, name="alpha", id_="01HA000000", use_count=10)
-        _seed_memory(memory_dir, name="beta", id_="01HB000000", use_count=10)
+        _seed_memory(memory_dir, name="zebra", id_="01HZ000000")
+        _seed_memory(memory_dir, name="alpha", id_="01HA000000")
+        _seed_memory(memory_dir, name="Beta", id_="01HB000000")
         runner = CliRunner(env={"COLUMNS": "200"})
         result = runner.invoke(app, ["memory", "list", "--format", "json"])
         data = json.loads(result.stdout)
-        # use_count desc: alpha+beta (both 10) > zebra (5)
-        # tiebreaker: alpha < beta alphabetically
-        assert [m["name"] for m in data] == ["alpha", "beta", "zebra"]
+        # Case-insensitive alphabetical: alpha, Beta, zebra
+        assert [m["name"] for m in data] == ["alpha", "Beta", "zebra"]
+
+    def test_lists_cc_and_legacy_memories_together(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """P17-T4 (D37.4) + D37.1: ``oh memory list`` displays
+        memories written by both the Phase 16 dogfood (CC schema —
+        name + description + metadata.type only) and Phase 10/11
+        files (full 14-field frontmatter). The 2026-06-06 dogfood
+        was the regression case for the CC half."""
+        _seed_required_env(monkeypatch)
+        from pathlib import Path
+
+        memory_dir = get_project_memory_dir(Path.cwd())
+        # Phase 10 legacy file
+        _seed_memory(
+            memory_dir,
+            name="legacy-pref",
+            id_="01HL000000",
+            description="Legacy preference from Phase 10",
+        )
+        # CC-style file (what the main LLM emits per D36.10)
+        _seed_cc_memory(
+            memory_dir,
+            name="user-role-and-values",
+            description="Engineer between jobs, solo-building with AI",
+            type_="user",
+        )
+        runner = CliRunner(env={"COLUMNS": "200"})
+        result = runner.invoke(app, ["memory", "list"])
+        assert result.exit_code == 0
+        assert "legacy-pref" in result.stdout
+        assert "user-role-and-values" in result.stdout
+        # Type rendering: legacy is project, CC is user
+        assert "project" in result.stdout
+        assert "user" in result.stdout
+
+    def test_long_name_truncated_with_ellipsis(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """P17-T4: name max 40 chars per D37.4."""
+        _seed_required_env(monkeypatch)
+        from pathlib import Path
+
+        long_name = "a" * 60  # 60 chars, should truncate to 39 + ellipsis
+        memory_dir = get_project_memory_dir(Path.cwd())
+        _seed_memory(memory_dir, name=long_name)
+        runner = CliRunner(env={"COLUMNS": "200"})
+        result = runner.invoke(app, ["memory", "list"])
+        assert result.exit_code == 0
+        # Truncated form ends with the ellipsis char
+        assert "a" * 39 + "…" in result.stdout
+        # Full 60-char name does NOT appear verbatim
+        assert "a" * 60 not in result.stdout
 
     def test_malformed_files_silently_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Plan deferred the "(invalid: <reason>)" row — for now,

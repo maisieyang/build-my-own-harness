@@ -2278,9 +2278,25 @@ def hooks_describe(
 
 memory_app = typer.Typer(
     name="memory",
-    help="Inspect project memory store (read-only — no add/edit in Phase 10).",
+    help=("Inspect project memory store (read-only — the main LLM is the writer per D36.10)."),
 )
 app.add_typer(memory_app, name="memory")
+
+
+# P17-T4 (D37.4): name + description truncation caps for the text
+# renderer. Wide enough to be useful, narrow enough to keep one
+# memory per line on a standard 120-col terminal.
+_LIST_NAME_MAX = 40
+_LIST_DESCRIPTION_MAX = 60
+
+
+def _truncate(s: str, limit: int) -> str:
+    """Truncate ``s`` to at most ``limit`` chars, ending with a single-char
+    ellipsis when truncation occurred. Matches the visual contract the
+    list renderer ships."""
+    if len(s) <= limit:
+        return s
+    return s[: limit - 1] + "…"
 
 
 @memory_app.command("list", help="List memories in this project's store.")
@@ -2292,13 +2308,13 @@ def memory_list(
         help="Output format: text (default) or json.",
     ),
 ) -> None:
-    """List memories sorted by ``(-use_count, name)`` — most-used first.
+    """List memories sorted alphabetically by name (case-insensitive).
 
-    Empty store → single ``(no memories — storage at <path>)`` line so
-    the user sees WHERE to drop a hand-written memory file. Malformed
-    files don't appear (``parse_memory`` returns ``None`` + warning
-    log;the store skips them silently). To see warnings,
-    re-run with ``--log-level INFO``.
+    Text renderer displays three columns per D37.4: ``name`` (truncated
+    to 40 chars), ``type``, ``description`` (truncated to 60 chars).
+    Empty store → single ``(no memories yet)`` line. Malformed files
+    don't appear (``parse_memory`` returns ``None``; the store skips
+    them silently). To see warnings, re-run with ``--log-level INFO``.
     """
     import json
 
@@ -2313,10 +2329,11 @@ def memory_list(
         if format == "json":
             typer.echo("[]")
             return
-        typer.echo(f"(no memories — storage at {storage_dir})")
+        typer.echo("(no memories yet)")
         return
 
-    memories.sort(key=lambda m: (-m.use_count, m.name))
+    # D37.4: alphabetical by name, case-insensitive.
+    memories.sort(key=lambda m: m.name.lower())
 
     if format == "json":
         data = [
@@ -2336,22 +2353,20 @@ def memory_list(
         typer.echo(json.dumps(data, indent=2))
         return
 
-    # Text format: aligned columns. Description truncated to 60 chars so
-    # long descriptions don't blow out the line width.
-    name_width = max(len(m.name) for m in memories) + 2
+    # Text format: name / type / description columns per D37.4.
+    # Field fallbacks for defensive UX even though parse_memory rejects
+    # missing description / type today — keeps the renderer robust if
+    # a future schema relaxation lets these through.
+    name_width = min(_LIST_NAME_MAX, max(len(m.name) for m in memories)) + 2
     type_width = max(len(m.type.value) for m in memories) + 2
-    use_width = max(len(str(m.use_count)) for m in memories) + 2
-    use_width = max(use_width, 5)  # min "use" header width
     for m in memories:
-        desc = m.description if len(m.description) <= 60 else m.description[:57] + "..."
-        last_used = m.last_used_at.isoformat() if m.last_used_at else "(never)"
-        typer.echo(
-            f"{m.name:<{name_width}}"
-            f"{m.type.value:<{type_width}}"
-            f"{m.use_count:<{use_width}}"
-            f"{last_used:<32}"
-            f"{desc}"
-        )
+        name_field = _truncate(m.name, _LIST_NAME_MAX)
+        type_field = m.type.value if m.type is not None else "(unknown)"
+        if m.description and m.description.strip():
+            desc_field = _truncate(m.description, _LIST_DESCRIPTION_MAX)
+        else:
+            desc_field = "(no description)"
+        typer.echo(f"{name_field:<{name_width}}{type_field:<{type_width}}{desc_field}")
 
 
 @memory_app.command("show", help="Show a memory's full frontmatter + body.")
