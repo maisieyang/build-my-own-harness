@@ -15,7 +15,77 @@ records + framework-level lessons), see
 
 ## [Unreleased]
 
-_Nothing yet._
+Phase 18 (M1 of CC Skill 接入) — `oh chat` REPL now triggers user-
+installed skills via `/<skill-name> [args]` directly, matching the
+Claude Code UX. SkillStore lookup is wired as the second resolver
+fallback after CommandStore, so existing Phase 5b slash commands
+keep priority; an unknown `/<name>` prints a difflib-based
+"Did you mean a skill?" hint. The full `parse-credit-report` dogfood
+from the finance-skills repo runs end-to-end in <1 second per slash
+without any plugin loader yet — drop a single `.md` file into
+`~/.openharness/skills/` and it works.
+
+### Added — Slash-skill triggering (Phase 18 / M1)
+
+- **`/<skill-name> [args]` in `oh chat` REPL.** Resolver order:
+  built-in (`/exit` / `/clear` / `/compact` / `/help` / `/skills`)
+  → user CommandStore → user SkillStore → unknown with closest-
+  skill hint via `difflib.get_close_matches`. Skill-name hit
+  synthesizes a 2- or 3-message LoadSkill envelope
+  (`assistant tool_use(LoadSkill)` + `user tool_result(skill.body)`
+  + optional `user TextBlock(args)`) and extends conversation
+  history before the next LLM turn. The synth envelope **bypasses**
+  hook chain + permission checker + actual tool execution
+  (D38.5 deliberate bypass — UI action, not LLM action), and
+  emits a single observability INFO event
+  `slash_skill_invoked` with `synthetic: true` marker for
+  audit / debugging.
+- **`/skills` built-in REPL command.** Lists the discovered
+  skill catalog as alphabetical `<name>  <description>` rows;
+  empty catalog prints `(no skills installed)`. Helps confirm
+  a freshly dropped `SKILL.md` was picked up.
+- **`engine.slash_skill.synthesize_skill_envelope` helper.**
+  Pure function returning the D38.2 envelope shape; importable
+  for tests and downstream consumers. Imports nothing from
+  `tools/` / `permissions/` / `hooks/` / `observability/` /
+  `cli/` — architecture isolation enforced by static-AST check
+  in `tests/engine/test_slash_skill_envelope.py`.
+- **`synth_<id>` tool-use-id prefix.** Distinguishes
+  user-typed `/<skill>` envelopes from real LLM-driven
+  `LoadSkill` calls in snapshots, logs, and compaction. The
+  marker lives only in the envelope helper + observability
+  event payload; `services/compact.py` stays synth-unaware
+  (forcing function test asserts no `synth_` literal in
+  `compact.py`).
+
+### Notes — what M1 does NOT include
+
+- **CC plugin directory format** (`.claude-plugin/plugin.json`,
+  `skills/<n>/SKILL.md` directory shape, `.mcp.json`). M1 only
+  reads the existing OH single-`.md` skill format; the
+  finance-skills dogfood required one `cp` per skill. CCPluginLoader
+  is M2 / Phase 19.
+- **CC declarative agents** (`agents/<n>.md` with `tools:`
+  whitelist). M3 / Phase 20.
+- **`oh ask "/<skill>"`** — single-turn `oh ask` is not extended;
+  M1 is chat-only (D38.6 deferred until M2 / M3 clarify the
+  single-turn folding shape).
+- **`{args}` substitution into skill body.** CC's SKILL.md does
+  not use `{args}` placeholders, so M1 doesn't either; args land
+  in the trailing user message instead (D38.3). Dogfood
+  validated this — LLM correctly read args as "task subject"
+  vs body as "expert guidance."
+
+### Documentation — Phase 18
+
+- [`decisions/38-phase-18-boundary.md`](./decisions/38-phase-18-boundary.md) —
+  scope, capability list, the 7 D38 sub-decisions, and the §六
+  wiring audit (13 layers / verdicts) for M1.
+- [`tasks/phase-18-plan.md`](./tasks/phase-18-plan.md) — T1–T5
+  capability-level plan + acceptance criteria.
+- [`learnings/phase-18.md`](./learnings/phase-18.md) — close-out
+  retro: dogfood evidence, 13/13 §六 verdicts held, M2 + M3
+  predictions for `synthesize_skill_envelope` reuse.
 
 ---
 
