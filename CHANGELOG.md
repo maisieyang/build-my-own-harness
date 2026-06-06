@@ -19,6 +19,155 @@ _Nothing yet._
 
 ---
 
+## [0.4.0] — 2026-06-06
+
+Phase 16 (memory architecture pivot to Claude-Code-style LLM-
+self-decides) + Phase 17 (memory substrate cleanup + methodology
+evolution) cycle, plus one dogfood-driven hotfix discovered
+between the two phases. Theme: the harness's writing surface for
+durable memory is now the main LLM's responsibility — emitted
+inline during the conversation via `Write` + `Edit` tools — not a
+per-turn secondary-LLM-pass.
+
+The Phase 11 `extract_memories_from_turn` machinery shipped in
+v0.2.0 and refined in v0.3.0 is gone. What replaces it is a
+system prompt section (the same prompt Claude Code uses, with the
+project's memory dir interpolated) plus a session-start MEMORY.md
+index injection that lets the LLM see what memories already exist
+without paying for harness-side relevance ranking.
+
+### Added — Claude-Code-style memory architecture (Phase 16)
+
+- **`## Memory` system prompt section** — project-agnostic copy
+  with the four type definitions (`user` / `feedback` / `project`
+  / `reference`), the two-step write contract (`Write` the `.md`
+  body then `Edit` MEMORY.md to add the pointer line), `[[slug]]`
+  forward-reference syntax for linking related memories, and the
+  200-line cap on MEMORY.md so it fits in every session-start
+  injection.
+- **Session-start MEMORY.md injection** — `oh ask` and `oh chat`
+  both read `<memory_dir>/MEMORY.md` and inject it as
+  `### Memory Index` inside the `## Memory` section. `oh chat`
+  rebuilds the injection every turn so the LLM sees writes from
+  the previous turn the next time it reasons. WARN log when the
+  index exceeds 200 lines; quietly fall back to an empty
+  placeholder on `OSError`.
+- **`evals/memory_decision/` — Stage 1-5 substrate consumer** for
+  decision surface #4 (inline decision class side effects) per
+  [`decisions/35-eval-coverage-map.md`](./decisions/35-eval-coverage-map.md)
+  §D35.5. Six capability-anchored samples (2 cold-start + 3
+  warm-start + 1 trivial-skip), five scorers (judgment +
+  frontmatter validity + index update + no destructive overwrite
+  + memory-type LLM-judge), four new `M-judge-*` rubrics. The
+  infer call is multi-turn with real tool execution scoped to
+  `/tmp/oh_eval_memory_decision/<case>/` — single-turn proved
+  insufficient to discriminate model gap from eval scaffold gap.
+- **`oh eval memory_decision` CLI subcommand** — mirrors `oh eval
+  focus_state` (`--mode live/record/replay`, `--model`,
+  `--no-results`); shares `CassetteStore` + `RunMetadata`
+  persistence with focus_state; ships parallel scorer + runner
+  for the multi-turn shape.
+- **§六 Wiring audit discipline** in CLAUDE.md (methodology
+  evolution) — every future phase boundary doc enumerates each
+  runtime layer the new contract crosses + a one-sentence verdict
+  per layer (`unchanged` / `requires extension` / `requires
+  bypass`). [`decisions/37-phase-17-boundary.md`](./decisions/37-phase-17-boundary.md)
+  §六 is the reference implementation; the motivating incident is
+  the Phase 16 T5 dogfood Gap A (permission tier blocked the
+  memory writes).
+
+### Added — Phase 17 schema acceptance + CLI rendering
+
+- **`Memory.id` is optional** — frontmatter omitting the field
+  triggers an auto-generated `sha1(name + str(path.resolve()))[:16]`
+  id. Phase 10/11 files that DO carry an id keep theirs verbatim
+  (frontmatter wins). Deterministic across reparses of the same
+  file.
+- **CC-schema fields auto-fill** — `parse_memory` now accepts the
+  three-field D36.10 shape (name + description +
+  `metadata.type`) and fills `scope` → `private`,
+  `created_at` → `now()`, `updated_at` → `created_at`,
+  `signature` via the existing body-hash. The
+  `metadata.type` nested-frontmatter location is accepted
+  alongside the Phase 10 top-level `type:` field; top-level
+  wins when both exist.
+- **`oh memory list` adapted to D36.10** — three text-format
+  columns (name truncated to 40 chars, type, description
+  truncated to 60 chars) sorted alphabetically by name (case-
+  insensitive). The JSON format is unchanged so any consumer
+  scripting against `--format json` keeps working.
+- **Memory-dir Tier 3 permission exception** — `Write` and
+  `Edit` calls targeting paths under
+  `get_project_memory_dir(cwd)` bypass the "writes must be
+  inside cwd" rule. The exception is narrow: it short-circuits
+  only when the path resolves under the deterministic
+  per-project memory dir, leaving every other outside-cwd write
+  to ASK as before. Closes the dogfood-discovered Gap A.
+
+### Changed
+
+- **`oh memory list` columns** — was 5 (name / type / use_count /
+  last_used_at / description), now 3 (name / type / description).
+  `use_count` and `last_used_at` are still in `--format json`
+  output for backward compat, but the text view dropped them
+  because the relevance-tracker machinery that populated them is
+  gone.
+- **`oh memory list` sort key** — was `(-use_count, name)`, now
+  alphabetical `name.lower()`. CC-style memory dirs have a
+  longer tail of equally-relevant entries; alphabetical scales
+  better than use-count for that distribution.
+- **`oh memory list` empty message** — was
+  `"(no memories — storage at <path>)"`, now `"(no memories
+  yet)"`. The storage-path hint was useful when the user was the
+  memory writer (Phase 10); the main LLM is the writer now, so
+  the path is information the user no longer needs.
+- **Memory model field order** — `id` moved from required-
+  positional to the optional-with-defaults section of the frozen
+  dataclass. Constructor kwargs are unchanged; only positional
+  construction breaks, which no caller used.
+
+### Removed
+
+- **Phase 11 extraction stack** — `services/extract.py`,
+  `_maybe_extract_memories` (engine), `QueryContext.extract_*`
+  fields, `ExtractionSettings` (config), `--no-extract` CLI flag,
+  three test files, the matching `ExtractionSettings` test
+  classes. The Phase 11 secondary-LLM-pass that proposed 0-3
+  memories per turn is wholly replaced by the LLM's inline
+  Write / Edit during the conversation. Code retained as a
+  flag-gated safety net through v0.3.x; six commits without a
+  rollback in Phase 16 proved deprecation was complete.
+- **`select_relevant_memories` and `mark_memory_used` re-exports**
+  from `openharness.memory` package — the symbols still exist in
+  the deprecated `memory.relevance.py` and `memory.usage.py`
+  modules so the algorithm-level unit tests keep passing, but
+  the public API stopped re-exporting them in Phase 16.
+
+### Fixed
+
+- **Tier 3 permission tier blocked memory writes** — D28.1 puts
+  the memory dir outside cwd (so it can't be accidentally
+  committed); P3-T3.3c requires writes inside cwd; D36.10 made
+  the main LLM the memory writer. The three intersected as
+  "permission denied (requires confirmation): outside project
+  root" on every memory-write attempt. The 2026-06-06 dogfood
+  surfaced it; commit [50bc5fe] added the deterministic
+  memory-dir bypass in `_matches_tier3`.
+- **Parser warning-skipped CC-style memory files** — the
+  2026-06-06 dogfood showed `oh memory list` displaying zero
+  memories even with two CC-shape files on disk. Phase 17 T1
+  taught `parse_memory` to accept the CC schema; `oh memory
+  list` now shows them.
+- **`FilesystemMemoryStore.discover()` warned on MEMORY.md** —
+  every session startup logged
+  `memory_missing_frontmatter source_path=.../MEMORY.md`
+  because the parent class's glob picked up the LLM-visible
+  index file and tried to parse it. Phase 17 T3 added a
+  one-line filter inside `parse_memory` itself, keeping the
+  shared markdown_store substrate content-agnostic.
+
+---
+
 ## [0.3.0] — 2026-06-03
 
 Phase 14 (web tools + anti-substitution prompt) + Phase 15
