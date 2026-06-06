@@ -99,7 +99,6 @@ def _ctx(
         max_turns=2,
         permission_mode=PermissionMode.DEFAULT,
         compact_enabled=False,
-        extract_enabled=False,
         snapshot_enabled=snapshot_enabled,
         llm_focus_state_enabled=llm_focus_state_enabled,
     )
@@ -193,7 +192,6 @@ class TestFocusStateOptInBehavior:
             max_turns=2,
             permission_mode=PermissionMode.DEFAULT,
             compact_enabled=False,
-            extract_enabled=False,
             session_memory_path=session_path,
             snapshot_enabled=True,
             llm_focus_state_enabled=True,
@@ -236,7 +234,6 @@ class TestFocusStateModelOverride:
             max_turns=2,
             permission_mode=PermissionMode.DEFAULT,
             compact_enabled=False,
-            extract_enabled=False,
             snapshot_enabled=True,
             llm_focus_state_enabled=True,
             llm_focus_state_model="qwen-turbo",  # different from main

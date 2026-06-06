@@ -49,8 +49,8 @@ def get_project_memory_dir(cwd: str | Path) -> Path:
 
     This function does NOT call :meth:`Path.mkdir`. The directory may
     not exist yet — that's expected on first read for a project that
-    hasn't written any memories. Phase 11 writers create the dir
-    lazily on first :func:`extract_memories_from_turn` output.
+    hasn't written any memories. The main LLM creates the dir lazily
+    via the Write tool the first time it produces a memory (D36.11).
 
     :func:`Path.home` is evaluated **at call time**, not at module
     import — so tests' ``monkeypatch.setenv("HOME", ...)`` isolation

@@ -92,7 +92,6 @@ def _ctx(
         max_turns=2,
         permission_mode=PermissionMode.DEFAULT,
         compact_enabled=False,
-        extract_enabled=False,
         session_memory_path=session_memory_path,
         snapshot_enabled=snapshot_enabled,
     )

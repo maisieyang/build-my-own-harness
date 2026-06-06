@@ -1,10 +1,14 @@
-"""Tests for ``CompactSettings`` + ``ExtractionSettings`` — P11-T5.5a.
+"""Tests for ``CompactSettings`` — P11-T5.5a.
 
 Three surfaces:
 
 1. Defaults match D29.8
 2. Nested env vars via ``__`` delimiter
 3. Programmatic construction
+
+**Phase 17 D37.3**: the parallel ``ExtractionSettings`` test classes
+this file used to host were removed when the Phase 11 extraction
+stack was deleted. CompactSettings is unchanged.
 """
 
 from __future__ import annotations
@@ -13,7 +17,6 @@ import pytest
 
 from openharness.config.settings import (
     CompactSettings,
-    ExtractionSettings,
     Settings,
 )
 
@@ -41,48 +44,12 @@ class TestCompactSettingsDefaults:
             CompactSettings(threshold_ratio=-0.1)
 
 
-class TestExtractionSettingsDefaults:
-    def test_defaults_match_phase_16_d36_9(self) -> None:
-        """Phase 16 D36.9 flipped ``enabled`` default ``True`` → ``False``.
-
-        The other Phase 11 D29.8 defaults (max_records / model / timeout)
-        are unchanged — they remain meaningful for the rollback path
-        (when ``--enable-extract`` or explicit env override is set)."""
-        s = ExtractionSettings()
-        assert s.enabled is False
-        assert s.max_records_per_turn == 3
-        assert s.model is None  # default → use main convo model
-        assert s.timeout_s == 30.0
-
-    def test_max_records_accepts_zero(self) -> None:
-        assert ExtractionSettings(max_records_per_turn=0).max_records_per_turn == 0
-
-
 class TestSettingsNestedDefaults:
     def test_compact_field_uses_default_factory(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _seed_required_env(monkeypatch)
         settings = Settings()
         assert isinstance(settings.compact, CompactSettings)
         assert settings.compact.threshold_ratio == 0.83
-
-    def test_extraction_field_uses_default_factory(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _seed_required_env(monkeypatch)
-        # Phase 16 D36.9 default is False (deprecated path); pre-Phase-16
-        # conftest used to set OPENHARNESS_EXTRACTION__ENABLED=false for
-        # isolation, which is now the production default — no env
-        # cleanup needed to verify the default.
-        monkeypatch.delenv("OPENHARNESS_EXTRACTION__ENABLED", raising=False)
-        settings = Settings()
-        assert isinstance(settings.extraction, ExtractionSettings)
-        assert settings.extraction.enabled is False
-
-    def test_extraction_explicit_true_still_enables(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The Phase 11 code path is the rollback safety net (D36.9) —
-        explicit opt-in must still flip the flag back to True."""
-        _seed_required_env(monkeypatch)
-        monkeypatch.setenv("OPENHARNESS_EXTRACTION__ENABLED", "true")
-        settings = Settings()
-        assert settings.extraction.enabled is True
 
 
 class TestCompactNestedEnvOverride:
@@ -109,26 +76,6 @@ class TestCompactNestedEnvOverride:
         assert settings.compact.full_compact_timeout_s == 15.0
 
 
-class TestExtractionNestedEnvOverride:
-    def test_enabled_false_disables(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _seed_required_env(monkeypatch)
-        monkeypatch.setenv("OPENHARNESS_EXTRACTION__ENABLED", "false")
-        settings = Settings()
-        assert settings.extraction.enabled is False
-
-    def test_model_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _seed_required_env(monkeypatch)
-        monkeypatch.setenv("OPENHARNESS_EXTRACTION__MODEL", "qwen-turbo")
-        settings = Settings()
-        assert settings.extraction.model == "qwen-turbo"
-
-    def test_max_records_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _seed_required_env(monkeypatch)
-        monkeypatch.setenv("OPENHARNESS_EXTRACTION__MAX_RECORDS_PER_TURN", "5")
-        settings = Settings()
-        assert settings.extraction.max_records_per_turn == 5
-
-
 class TestProgrammaticConstruction:
     def test_pass_compact_settings_directly(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _seed_required_env(monkeypatch)
@@ -136,10 +83,3 @@ class TestProgrammaticConstruction:
         settings = Settings(compact=custom)
         assert settings.compact.enabled is False
         assert settings.compact.threshold_ratio == 0.5
-
-    def test_pass_extraction_settings_directly(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _seed_required_env(monkeypatch)
-        custom = ExtractionSettings(enabled=False, model="qwen-turbo")
-        settings = Settings(extraction=custom)
-        assert settings.extraction.enabled is False
-        assert settings.extraction.model == "qwen-turbo"

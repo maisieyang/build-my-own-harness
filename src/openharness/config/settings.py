@@ -147,69 +147,6 @@ class CompactSettings(BaseModel):
     )
 
 
-class ExtractionSettings(BaseModel):
-    """Tunables for the Phase 11 memory-extraction secondary pass (D29.5).
-
-    **DEPRECATED — Phase 16 D36.9**. The Phase 11 secondary-LLM-pass
-    extraction architecture is superseded by Claude-Code-style inline
-    LLM-self-decides memory writes (via the Write + Edit tools, see
-    D36.10/D36.11). Default flipped ``True`` → ``False`` in Phase 16
-    so production sessions no longer fire the per-turn extraction
-    call. Code retained as a safety net until a future cleanup phase
-    deletes it. To re-enable explicitly (e.g., to roll back the new
-    architecture), set ``OPENHARNESS_EXTRACTION__ENABLED=true`` or
-    omit ``--no-extract`` flag in a context where you've manually
-    opted in.
-
-    Env-var overrides: ``OPENHARNESS_EXTRACTION__MODEL=qwen-turbo``
-    sets ``settings.extraction.model``. CLI ``--no-extract`` flips
-    ``enabled=False`` (post-Phase-16 this is the no-op confirmation
-    of the new default; pre-Phase-16 it was the opt-out path).
-    """
-
-    enabled: bool = Field(
-        default=False,
-        description=(
-            "Enable the per-turn extraction secondary pass. **DEPRECATED "
-            "by Phase 16 D36.9 — default flipped to False.** When false "
-            "(new default), the engine never invokes "
-            "extract_memories_from_turn; the main LLM is expected to "
-            "write memories inline via Write + Edit tools per the "
-            "Claude-Code-style architecture (D36.10/D36.11). "
-            "Override: ``OPENHARNESS_EXTRACTION__ENABLED`` env / "
-            "``--no-extract`` CLI flag."
-        ),
-    )
-    max_records_per_turn: int = Field(
-        default=3,
-        ge=0,
-        description=(
-            "Cap on memories proposed per turn. The LLM may suggest "
-            "more; only the first ``max_records_per_turn`` get written. "
-            "0 disables (same as ``enabled=False`` but keeps the LLM "
-            "call for observability)."
-        ),
-    )
-    model: str | None = Field(
-        default=None,
-        description=(
-            "Model for the extraction LLM call. ``None`` (default) uses "
-            "the same model as the main conversation. Set to a cheaper "
-            "variant (e.g., ``qwen-turbo``) to save cost. Phase 11 sub-"
-            "decision per boundary doc."
-        ),
-    )
-    timeout_s: float = Field(
-        default=30.0,
-        gt=0.0,
-        description=(
-            "Timeout for the extraction LLM call. Extraction is best-"
-            "effort — timeout returns ExtractionResult with error set; "
-            "the turn still completes."
-        ),
-    )
-
-
 class SnapshotHistorySettings(BaseModel):
     """Tunables for the Phase 13 history/ rotation (D31.2).
 
@@ -722,14 +659,6 @@ class Settings(BaseSettings):
             "Nested compact-pipeline tunables (D29.3 + D29.8). Env vars: "
             "``OPENHARNESS_COMPACT__THRESHOLD_RATIO`` / "
             "``OPENHARNESS_COMPACT__ENABLED`` etc. See :class:`CompactSettings`."
-        ),
-    )
-    extraction: ExtractionSettings = Field(
-        default_factory=ExtractionSettings,
-        description=(
-            "Nested extraction tunables (D29.5 + D29.8). Env vars: "
-            "``OPENHARNESS_EXTRACTION__ENABLED`` / "
-            "``OPENHARNESS_EXTRACTION__MODEL`` etc. See :class:`ExtractionSettings`."
         ),
     )
     snapshot: SnapshotSettings = Field(

@@ -99,7 +99,6 @@ def _ctx(
         max_turns=2,
         permission_mode=PermissionMode.DEFAULT,
         compact_enabled=False,
-        extract_enabled=False,
         snapshot_enabled=True,
         llm_focus_state_enabled=llm_focus_state_enabled,
     )

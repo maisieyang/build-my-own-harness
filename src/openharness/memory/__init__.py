@@ -9,11 +9,13 @@ Per ``decisions/25-phase-10-boundary.md``:
 - D28.4: :class:`FilesystemMemoryStore` will be the 6th consumer of
   :mod:`openharness.markdown_store` — the 4th compounding test of
   Phase 8's substrate.
-- D28.5: only ``scope: private`` in Phase 10; ``team`` defers to
-  Phase 11 (alongside extraction + secret scanning).
-- D28.9: **no agent write path in Phase 10**. Memories are created
-  by manual filesystem edits in this phase; Phase 11 adds the
-  ``extract_memories_from_turn`` secondary LLM pass.
+- D28.5: only ``scope: private`` in Phase 10; ``team`` lands in
+  Phase 11 (alongside secret scanning).
+- D28.9: Phase 10 had **no agent write path** — memories were
+  created by manual filesystem edits. Phase 11 added the
+  ``extract_memories_from_turn`` secondary LLM pass; Phase 16
+  D36.10/D36.11 made the main LLM the writer via Write + Edit
+  tools; Phase 17 D37.3 retired the Phase 11 secondary pass.
 
 Phase 10 tasks:
 

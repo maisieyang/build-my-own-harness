@@ -106,20 +106,10 @@ class QueryContext:
     # skip the L4 LLM call entirely. ``None`` (default) skips L3 — L0
     # / L2 / L4 still run.
     session_memory_path: Path | None = None
-    # P11-T4.4f (decisions/26 D29.5): extraction secondary pass.
-    # When ``memory_store`` is set AND ``extract_enabled=True``, the
-    # engine awaits ``extract_memories_from_turn`` at the END of each
-    # run_query invocation (when stop_reason != tool_use). Extraction
-    # is contained — failures log a warning but don't propagate to
-    # the caller. ``memory_store=None`` (default) skips extraction
-    # entirely.
-    extract_enabled: bool = True
-    extract_max_records: int = 3
-    extract_timeout_s: float = 30.0
     memory_store: Any = None  # FilesystemMemoryStore | None — Any avoids
-    # the circular import (services/extract.py uses QueryContext
-    # indirectly via the engine, and FilesystemMemoryStore lives
-    # under memory/). Runtime type-checked in the engine.
+    # circular imports (FilesystemMemoryStore lives under memory/ and
+    # the engine references it as opaque storage). Runtime type-checked
+    # by callers that actually use the store.
     # P12-T3 (decisions/27 D30.8): per-turn JSON snapshot writer.
     # When True, the engine calls ``services.snapshot.write_session_snapshot``
     # at the end of each user turn (alongside the session_memory
@@ -171,9 +161,6 @@ class QueryContext:
         compact_threshold_ratio: float = 0.83,
         compact_full_max_tokens: int = 20_000,
         compact_full_timeout_s: float = 25.0,
-        extract_enabled: bool = True,
-        extract_max_records: int = 3,
-        extract_timeout_s: float = 30.0,
         max_turns: int = 20,
         max_agent_depth: int = 3,
     ) -> tuple[QueryContext, list[ConversationMessage]]:
@@ -240,9 +227,6 @@ class QueryContext:
             compact_full_max_tokens=compact_full_max_tokens,
             compact_full_timeout_s=compact_full_timeout_s,
             session_memory_path=session_memory_path,
-            extract_enabled=extract_enabled,
-            extract_max_records=extract_max_records,
-            extract_timeout_s=extract_timeout_s,
             memory_store=memory_store,
             snapshot_enabled=snapshot_enabled,
             snapshot_max_age_warn_days=snapshot_max_age_warn_days,

@@ -432,7 +432,6 @@ async def _run_ask(
     enable_web_override: bool | None = None,
     compact_threshold_override: float | None = None,
     no_auto_compact: bool = False,
-    no_extract: bool = False,
     resume: bool = False,
     resume_id: str | None = None,
     llm_focus_state_override: bool | None = None,
@@ -507,21 +506,21 @@ async def _run_ask(
     else:
         explicit_web_flag = False
         enable_web = settings.web.enabled
-    # P11-T5: compact + extraction CLI flags fold into nested Settings.
-    # ``--no-auto-compact`` flips ``compact.enabled=False`` regardless
-    # of env. ``--compact-threshold 0.5`` overrides
-    # ``compact.threshold_ratio``. ``--no-extract`` flips
-    # ``extraction.enabled=False``. Other CompactSettings /
-    # ExtractionSettings knobs use env-only override
-    # (``OPENHARNESS_COMPACT__FULL_COMPACT_TIMEOUT_S`` etc.) — no CLI
-    # flag for every field to keep the surface area small.
+    # P11-T5 (refined P17-T2 D37.3): compact CLI flags fold into
+    # nested Settings. ``--no-auto-compact`` flips
+    # ``compact.enabled=False`` regardless of env.
+    # ``--compact-threshold 0.5`` overrides
+    # ``compact.threshold_ratio``. Other CompactSettings knobs use
+    # env-only override (``OPENHARNESS_COMPACT__FULL_COMPACT_TIMEOUT_S``
+    # etc.) — no CLI flag for every field to keep the surface area
+    # small. The Phase 11 extraction settings + ``--no-extract`` flag
+    # were retired in Phase 17 D37.3.
     compact_enabled = settings.compact.enabled and not no_auto_compact
     compact_threshold_ratio = (
         compact_threshold_override
         if compact_threshold_override is not None
         else settings.compact.threshold_ratio
     )
-    extract_enabled = settings.extraction.enabled and not no_extract
 
     # P3-T5.5e:configure logging FIRST so any subsequent error path
     # (client build / system prompt build) is observable.
@@ -841,9 +840,6 @@ async def _run_ask(
                 get_session_memory_dir(env.cwd) / "checkpoint.md" if enable_memory else None
             ),
             memory_store=memory_store,
-            extract_enabled=extract_enabled,
-            extract_max_records=settings.extraction.max_records_per_turn,
-            extract_timeout_s=settings.extraction.timeout_s,
             # P12-T3 (D30.8): per-turn snapshot writer. Engine fires
             # ``write_session_snapshot`` at user-turn end alongside
             # the session_memory writer (single tool_metadata producer
@@ -896,9 +892,6 @@ async def _run_ask(
                     compact_threshold_ratio=compact_threshold_ratio,
                     compact_full_max_tokens=settings.compact.full_compact_max_tokens,
                     compact_full_timeout_s=settings.compact.full_compact_timeout_s,
-                    extract_enabled=extract_enabled,
-                    extract_max_records=settings.extraction.max_records_per_turn,
-                    extract_timeout_s=settings.extraction.timeout_s,
                     max_turns=context.max_turns,
                     max_agent_depth=settings.max_agent_depth,
                 )
@@ -962,7 +955,6 @@ async def _run_chat(
     enable_web_override: bool | None = None,
     compact_threshold_override: float | None = None,
     no_auto_compact: bool = False,
-    no_extract: bool = False,
     resume: bool = False,
     resume_id: str | None = None,
     llm_focus_state_override: bool | None = None,
@@ -1038,7 +1030,6 @@ async def _run_chat(
         if compact_threshold_override is not None
         else settings.compact.threshold_ratio
     )
-    extract_enabled = settings.extraction.enabled and not no_extract
 
     configure_logging(level=log_level, format=log_format)
 
@@ -1373,9 +1364,6 @@ async def _run_chat(
                     get_session_memory_dir(env.cwd) / "checkpoint.md" if enable_memory else None
                 ),
                 memory_store=memory_store,
-                extract_enabled=extract_enabled,
-                extract_max_records=settings.extraction.max_records_per_turn,
-                extract_timeout_s=settings.extraction.timeout_s,
                 # P12-T3 (D30.8): snapshot writer mirrored from ask.
                 snapshot_enabled=settings.snapshot.enabled,
                 snapshot_max_age_warn_days=settings.snapshot.max_age_warn_days,
@@ -1653,15 +1641,6 @@ def ask(
             "request shape or when L4 LLM cost is unwanted."
         ),
     ),
-    no_extract: bool = typer.Option(
-        False,
-        "--no-extract",
-        help=(
-            "Disable the per-turn memory-extraction secondary pass "
-            "(Phase 11 D29.5). The main conversation is unaffected. "
-            "Overrides OPENHARNESS_EXTRACTION__ENABLED."
-        ),
-    ),
     resume: bool = typer.Option(
         False,
         "--resume",
@@ -1742,7 +1721,6 @@ def ask(
                 enable_web_override=enable_web,
                 compact_threshold_override=compact_threshold,
                 no_auto_compact=no_auto_compact,
-                no_extract=no_extract,
                 # P12-T5: --resume / --resume-id. --resume-id implies
                 # --resume so the user doesn't have to type both.
                 resume=resume or resume_id is not None,
@@ -1872,11 +1850,6 @@ def chat(
         "--no-auto-compact",
         help="Disable proactive auto-compact (Phase 11). Reactive PTL retry still active.",
     ),
-    no_extract: bool = typer.Option(
-        False,
-        "--no-extract",
-        help="Disable per-turn memory extraction (Phase 11 D29.5).",
-    ),
     resume: bool = typer.Option(
         False,
         "--resume",
@@ -1937,7 +1910,6 @@ def chat(
                 enable_web_override=enable_web,
                 compact_threshold_override=compact_threshold,
                 no_auto_compact=no_auto_compact,
-                no_extract=no_extract,
                 # P12-T5: --resume / --resume-id (latter implies former).
                 resume=resume or resume_id is not None,
                 resume_id=resume_id,

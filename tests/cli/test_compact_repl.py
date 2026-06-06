@@ -1,16 +1,18 @@
-"""Tests for P11-T5 CLI surface: ``/compact`` REPL + 3 new flags.
+"""Tests for the ``/compact`` REPL command + the compact CLI flags.
 
 Covers:
 
 1. ``--no-auto-compact`` propagates to ``QueryContext.compact_enabled=False``
-2. ``--no-extract`` propagates to ``QueryContext.extract_enabled=False``
-3. ``--compact-threshold 0.5`` propagates to
+2. ``--compact-threshold 0.5`` propagates to
    ``QueryContext.compact_threshold_ratio==0.5``
-4. ``--enable-memory --no-extract`` combo: memory wired, extract off
-5. ``/compact`` REPL command on empty history → friendly no-op
-6. ``/compact`` REPL command with history → calls
+3. ``/compact`` REPL command on empty history → friendly no-op
+4. ``/compact`` REPL command with history → calls
    ``services.compact.full_compact`` and reports token deltas
-7. ``--help`` output mentions the new flags
+5. ``--help`` output mentions the new flags
+
+**Phase 17 D37.3**: the parallel ``--no-extract`` flag tests that
+this file used to host were removed when the Phase 11 extraction
+stack was deleted.
 """
 
 from __future__ import annotations
@@ -109,17 +111,6 @@ class TestAskCompactExtractFlags:
         assert len(captured) == 1
         assert captured[0].compact_enabled is False  # type: ignore[attr-defined]
 
-    def test_no_extract_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _set_min_env(monkeypatch)
-        monkeypatch.setattr(cli_module, "_build_client", lambda _s: _StubClient())
-        captured, fake = _capture_query_context()
-        monkeypatch.setattr(cli_module, "run_query", fake)
-
-        runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "--no-extract", "hi"])
-        assert result.exit_code == 0, result.stderr
-        assert captured[0].extract_enabled is False  # type: ignore[attr-defined]
-
     def test_compact_threshold_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_min_env(monkeypatch)
         monkeypatch.setattr(cli_module, "_build_client", lambda _s: _StubClient())
@@ -130,21 +121,6 @@ class TestAskCompactExtractFlags:
         result = runner.invoke(cli_module.app, ["ask", "--compact-threshold", "0.5", "hi"])
         assert result.exit_code == 0, result.stderr
         assert captured[0].compact_threshold_ratio == 0.5  # type: ignore[attr-defined]
-
-    def test_memory_on_extract_off_combo(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # Memory subsystem stays wired (memory_store not None); only
-        # extraction is gated off.
-        _set_min_env(monkeypatch)
-        monkeypatch.setattr(cli_module, "_build_client", lambda _s: _StubClient())
-        captured, fake = _capture_query_context()
-        monkeypatch.setattr(cli_module, "run_query", fake)
-
-        runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "--enable-memory", "--no-extract", "hi"])
-        assert result.exit_code == 0, result.stderr
-        ctx = captured[0]
-        assert ctx.memory_store is not None  # type: ignore[attr-defined]
-        assert ctx.extract_enabled is False  # type: ignore[attr-defined]
 
     def test_threshold_invalid_above_one_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_min_env(monkeypatch)
@@ -171,18 +147,6 @@ class TestChatCompactExtractFlags:
         assert result.exit_code == 0, result.stderr
         assert len(captured) >= 1
         assert captured[0].compact_enabled is False  # type: ignore[attr-defined]
-
-    def test_chat_no_extract(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _set_min_env(monkeypatch)
-        monkeypatch.setattr(cli_module, "_build_client", lambda _s: _StubClient())
-        captured, fake = _capture_query_context()
-        monkeypatch.setattr(cli_module, "run_query", fake)
-        _stub_inputs(monkeypatch, ["hi", "/exit"])
-
-        runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["chat", "--no-extract"])
-        assert result.exit_code == 0, result.stderr
-        assert captured[0].extract_enabled is False  # type: ignore[attr-defined]
 
 
 # --------------------------------------------------------------------------- #
@@ -268,7 +232,6 @@ class TestHelpMentionsNewFlags:
         result = runner.invoke(cli_module.app, ["ask", "--help"])
         assert result.exit_code == 0
         assert "--no-auto-compact" in result.stdout
-        assert "--no-extract" in result.stdout
         assert "--compact-threshold" in result.stdout
 
     def test_chat_help_lists_new_flags(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -277,7 +240,6 @@ class TestHelpMentionsNewFlags:
         result = runner.invoke(cli_module.app, ["chat", "--help"])
         assert result.exit_code == 0
         assert "--no-auto-compact" in result.stdout
-        assert "--no-extract" in result.stdout
         assert "--compact-threshold" in result.stdout
 
     def test_chat_help_text_mentions_compact_repl(self, monkeypatch: pytest.MonkeyPatch) -> None:
