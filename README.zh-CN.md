@@ -46,7 +46,7 @@ Harness (Anthropic 提出的概念) = 围绕模型构建的全部工程脚手架
 
 - **为什么 tool result 要 LLM-visible 而不是 engine 内部 retry?** —— 跑通 Bash → 调通 WebFetch → 试着 engine 自动重试 → 发现 LLM 自己决定怎么处理失败远比硬编码 retry 健壮。这是产品 trade-off。
 - **为什么 sub-agent 用 Protocol + 不可变 context 继承?** —— Phase 6 spawn → Phase 7c 加 gVisor 沙箱时第二个实现只用了首个 12% 的代码量。这是工程结构的复利。
-- **为什么 memory extraction 默认要给 stub LLM 测试 testability tax?** —— Phase 11 默认 ON 把所有 stub 测试一次性污染了。这是测试与功能的冲突点。
+- **为什么 memory extraction 这条 secondary-LLM-pass 路径整条退役?** —— Phase 11 默认 ON 把 stub 测试一次性污染、Phase 16 把"何时写 memory"的决策权交回主 LLM、Phase 17 把残留代码完全删除。一次性能看到"从机械触发 → LLM 自决 → 删除残留" 整条 deprecation 曲线。
 
 这类**只能 build-then-see 的判断**是这个项目的真正产物。代码本身可以参考开源；判断不行。
 
@@ -76,8 +76,9 @@ API client 走 OpenAI-compatible wire format，自带 `httpx + openai SDK` retry
 
 ### 4. 状态管理
 
-- **Memory** —— YAML-frontmatter 文件，3 scope (user / project / team)，relevance scoring (meta hits + body hits + importance + recency)，零 token 命中直接 drop。
-- **LLM extraction (write path)** —— 每 turn 后台 LLM 抽取候选 memory，signature dedupe，team scope 走 6 模式 secret scanner (PEM / AWS / GitHub / Anthropic / OpenAI / 通用) 拦截泄漏。
+- **Memory (Phase 16 Claude-Code 模式)** —— YAML-frontmatter 文件，4 种 type (`user` / `feedback` / `project` / `reference`)，per-project 存储在 `~/.openharness/memory/<project-hash>/`。**主 LLM 自决何时写**：在对话中 inline 调用 `Write` 写 `.md` body + `Edit` 更新 MEMORY.md 索引，整套 contract 跟 Claude Code 自身的 memory pattern 同形。Phase 11 的 secondary-LLM-pass extraction 已在 Phase 17 退役。
+- **`oh memory list / show / path`** —— 用户侧 introspection，name / type / description 三列按字母序展示。
+- **Team-scope secret scanner** —— team 类型 memory 写入前走 6 模式扫描 (PEM / AWS / GitHub / Anthropic / OpenAI / 通用) 拦截泄漏 (Phase 11 写入路径退役后仍作为算法 module 保留)。
 - **Sessions** —— 每 turn 写 `~/.openharness/snapshots/<cwd-hash>/current.json` (atomic via `tempfile + os.replace`)，`--resume` / `--resume-id` 跨进程恢复 `QueryContext.from_snapshot()`，旧 `current.json` 自动轮转到 `history/<git-head>-<utc-ts>.json` (count + age 双阈值 GC)。
 - **LLM-authored task focus state** —— `--llm-focus-state` 启动，每 turn 二级 LLM call 推断当前 task / 下一步 / blockers 写入 `tool_metadata.task_focus_state`，opt-in (默认 OFF) 避免 stub-LLM testability tax。
 - **4-tier auto-compaction**：
@@ -112,12 +113,22 @@ API client 走 OpenAI-compatible wire format，自带 `httpx + openai SDK` retry
 - `results.py` —— 8 axes version-stamped `RunMetadata` (D34 + Stage 5.1)
 - `_printers.py` —— shared stdout formatting (CLI + spike)
 
-**Consumer (`evals/focus_state/`)** —— 首个落地 service
+**Consumer 1 (`evals/focus_state/`)** —— secondary-LLM-pass 评估 (单次 JSON 输出 capability)
 
 - `dataset.yaml` —— 8 capability-anchored cases (T1-T8)
 - `dataset_card.md` —— 跨 model stability profile + brittleness map
-- `cassettes/` —— 12 JSON (8 infer + 4 judge selective)
+- `cassettes/` —— infer + selective judge cassettes
 - `results/` —— 每次 run 一个 JSONL，默认 gitignored (`.gitignore` 第 53 行的 `*.jsonl` 全局规则)
+
+**Consumer 2 (`evals/memory_decision/`)** —— Phase 16 T3 加，决策面 #4 (inline decision class side effects) 评估
+
+- `dataset.yaml` —— 6 capability-anchored cases (2 cold-start + 3 warm-start + 1 trivial-skip)
+- `dataset_card.md` —— 三声明 header (capability claim / input spec / judgment spec)
+- 5 scorer (judgment + frontmatter 合法性 + index update + 无 destructive overwrite + memory-type LLM-judge)
+- **Multi-turn infer** 在 `/tmp/oh_eval_memory_decision/<case>/` 隔离 fixture 上 real tool execution —— single-turn 一度在 warm-start 上 0/3 PASS 混淆 model gap 跟 eval scaffold gap，multi-turn 把信号 attribute 干净 (qwen3.7-max 3/3 warm = 100%)。
+- 4 个 `M-judge-*` rubric 接受 "type 分类的多个 defensible 读法" (因为 CC taxonomy 在边界上重叠)。
+
+参见 `decisions/35-eval-coverage-map.md` §D35.5——这 2 个 consumer 各覆盖一个独立的决策面，substrate 复用但 Sample/scorer/runner 各自实现的策略由 D35.6 "substrate reuse ≥ rebuild" 不变量约束。
 
 **怎么跑 —— CLI**
 
@@ -138,6 +149,9 @@ oh eval focus_state --model deepseek-v4-flash
 
 # 跑但不写 results (iteration debug 时省 disk)
 oh eval focus_state --no-results
+
+# Phase 16 加的第二 consumer —— inline decision 决策面 gating eval
+oh eval memory_decision --mode replay  # 复读 cassette 验证 contract
 ```
 
 **3 个 cassette mode 取舍**
@@ -208,12 +222,12 @@ oh eval focus_state --model qwen-plus --mode record
 
 | | |
 |---|---|
-| Tests | **2031** on CI (Python 3.10 / 3.11) |
-| 类型检查 | `mypy --strict src/` clean (105 source files) |
+| Tests | 跨 Python 3.10 / 3.11 全绿 (具体计数随 release 漂移，见 CHANGELOG) |
+| 类型检查 | `mypy --strict src/` clean |
 | Lint | `ruff` check + format clean |
 | 覆盖率 | **≥95%** gate held |
 | CI | GitHub Actions matrix |
-| 当前版本 | **v0.3.0** (per-release notes 在 [CHANGELOG.md](./CHANGELOG.md)) |
+| 发布历史 | 见 [CHANGELOG.md](./CHANGELOG.md)（含当前版本号、per-release notes） |
 
 ---
 

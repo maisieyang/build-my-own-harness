@@ -7,7 +7,8 @@
 ![Type checked: mypy](https://img.shields.io/badge/type%20checked-mypy%20strict-1f5082)
 
 > **A production-grade Python harness for LLM agents — and a documented case study in framework design.**
-> **v0.1.0 shipped in 23 days, single developer + Claude Code.** Continues to evolve in versioned releases; each phase preserves boundary doc → plan → retro in this repo.
+>
+> Single developer + Claude Code, multi-phase iteration with preserved boundary doc → plan → retro per phase. See [CHANGELOG.md](./CHANGELOG.md) for releases.
 
 OpenHarness is a Claude-Code-style agent harness: you give it a prompt,
 it talks to an LLM, the LLM picks tools, the harness runs them safely,
@@ -34,16 +35,16 @@ and what the next phase predicted before being built**.
 
 ---
 
-## At a glance (v0.1.0 baseline)
+## At a glance
 
 | | |
 |---|---|
-| Released | 2026-05-20 — first public release / case-study writeup |
-| Built in | **23 days** (single developer + Claude Code as collaborator) |
 | Phase loop | boundary-doc → plan → execute → retro, preserved per phase |
 | Trail | [`decisions/`](./decisions) (per-trade-off rationale) · [`tasks/`](./tasks) (capability plans) · [`learnings/`](./learnings) (per-phase retros + framing essays) |
 | Quality bars | mypy strict · ruff clean · ≥95% coverage gate (Python 3.10/3.11) |
-| Per-release stats | See [CHANGELOG.md](./CHANGELOG.md) for test counts / coverage / LoC per version |
+| Releases | See [CHANGELOG.md](./CHANGELOG.md) for per-release notes |
+
+(Looking for the v0.1.0 case-study baseline — release date, build time, ship summary? See the **SPEC v1 status** section near the bottom.)
 
 ---
 
@@ -134,9 +135,23 @@ framework-builder retrospective.
   `src/openharness/eval/` substrate: `Sample` / `Score` / `Scorer`
   Protocol + 4 scorers (programmatic + LLM-judge) + cassette
   record/replay/live + 8-axes version-stamped results JSONL +
-  `oh eval` CLI. First consumer at `evals/focus_state/`. 4 boundary
-  docs (`decisions/31-34-eval-*.md`); long-form narrative in
+  `oh eval` CLI. Two consumers ship: `evals/focus_state/`
+  (secondary-LLM-pass evaluation) and `evals/memory_decision/`
+  (multi-turn inline decision surface, Phase 16 T3). Boundary
+  docs `decisions/31-34-eval-*.md`; long-form narrative in
   `docs/ideas/eval-*.md`.
+- **Claude-Code-style auto memory** (Phase 16 + 17) — the main
+  LLM decides when to durably remember user preferences, project
+  state, corrections, and external-system pointers, then emits
+  the two-step write inline during the conversation: `Write` the
+  `.md` body, then `Edit` MEMORY.md to add the pointer line.
+  Storage is per-project under
+  `~/.openharness/memory/<project-hash>/`; `oh memory list/show`
+  inspects what's there. The `evals/memory_decision/` gating eval
+  validates the contract via multi-turn infer with real tool
+  execution. See [`docs/ideas/memory-first-principles.md`](./docs/ideas/memory-first-principles.md)
+  for the design derivation and `decisions/35-37` for the eval
+  coverage map + memory pivot + cleanup boundary docs.
 
 ---
 
@@ -276,6 +291,11 @@ oh hooks list                      # Built-in hooks (audit_log / deny_writes)
 oh hooks list --enable-plugin-hooks  # Also include entry-point + filesystem plugins
 oh hooks describe audit_log        # Event + docstring
 
+oh memory list                     # Per-project memories (name / type / description, alphabetical)
+oh memory list --format json       # Same, machine-readable
+oh memory show <name>              # Frontmatter + body verbatim
+oh memory path                     # Per-project storage directory path
+
 oh --version
 oh --help
 ```
@@ -283,7 +303,8 @@ oh --help
 **Run prompt eval**:
 
 ```bash
-oh eval focus_state                          # Live mode (real LLM, write results JSONL)
+oh eval focus_state                          # Secondary-pass eval (single-turn JSON output)
+oh eval memory_decision                      # Decision-surface #4 eval (multi-turn tool use)
 oh eval focus_state --mode live              # Same as default
 oh eval focus_state --mode record            # Real LLM + save cassettes (overwrite)
 oh eval focus_state --mode replay            # 0 LLM call, replay cassettes (deterministic)
@@ -378,8 +399,8 @@ retrospectives, see [`learnings/`](./learnings).
 ├── ARCHITECTURE.md           # Multi-phase strategy (tiers, dependency graph)
 ├── REFERENCE.md              # Reverse-engineered OpenHarness reference
 ├── pyproject.toml            # Single source of truth (deps, ruff, mypy, pytest)
-├── decisions/                # 24 decision records (per-trade-off)
-├── learnings/                # 18 per-phase retros + framing essays (31 total)
+├── decisions/                # Per-trade-off decision records
+├── learnings/                # Per-phase retrospectives + framing essays
 ├── tasks/                    # Per-phase boundary docs + implementation plans
 ├── docs/
 │   ├── development-log.md    # Per-phase feature narratives (READ FOR HISTORY)
@@ -395,17 +416,22 @@ retrospectives, see [`learnings/`](./learnings).
 │   ├── compaction/           # Phase 4 truncation hooks
 │   ├── config/               # pydantic-settings layer (OPENHARNESS_*)
 │   ├── engine/               # run_query + tool dispatch loop
+│   ├── eval/                 # Capability-anchored eval substrate (Stage 1-5)
 │   ├── execution/            # Phase 7a substrate abstraction + 7b/7c sandbox
 │   ├── hooks/                # Phase 3 middleware (5 events)
 │   ├── markdown_store/       # Phase 8 shared parse + filesystem store
 │   ├── mcp/                  # Phase 5 Model Context Protocol adapters
+│   ├── memory/               # Phase 10+ memory subsystem (Phase 16 CC pivot)
 │   ├── observability/        # Phase 3 structured logging + 3-ID trace
 │   ├── permissions/          # Phase 3 three-tier authz checker
-│   ├── prompts.py            # Phase 2 system prompt assembly
+│   ├── plugins/              # Phase 9 plugin discovery + catalogs
+│   ├── prompts/              # System prompt assembly (Phase 2 base + Phase 16 ## Memory)
 │   ├── protocols/            # Phase 1 Pydantic v2 wire types (Anthropic-shape)
+│   ├── services/             # Phase 11 LLM-orchestration workflows (summarize / compact / snapshot)
 │   ├── skills/               # Phase 5c lazy-loaded expertise
-│   └── tools/                # Phase 2 tool registry + 5 built-in tools
-├── tests/                    # ~1277 tests mirroring src/ layout
+│   └── tools/                # Phase 2 tool registry + 5 built-in tools + Phase 14 web
+├── evals/                    # Eval consumers (focus_state + memory_decision)
+├── tests/                    # Test suite mirroring src/ layout
 ├── .github/workflows/ci.yml  # Lint + type-check + test on Python 3.10/3.11
 └── .pre-commit-config.yaml   # Fast hooks only (ruff + hygiene)
 ```
@@ -465,7 +491,7 @@ to `.claude/settings.json` (gitignored) and replace
 | Bundle composition | Pre-LLM resolution; engine zero-diff | [`decisions/17-phase-5d-boundary.md`](./decisions/17-phase-5d-boundary.md) |
 | Plugin discovery | Entry points (5e) + `.py` files (5f), opt-in | [`decisions/18-phase-5e-boundary.md`](./decisions/18-phase-5e-boundary.md), [`decisions/20-phase-5f-boundary.md`](./decisions/20-phase-5f-boundary.md) |
 
-Full decision index: [`decisions/`](./decisions) (24 docs).
+Full decision index: [`decisions/`](./decisions).
 
 ---
 
@@ -476,14 +502,17 @@ Full decision index: [`decisions/`](./decisions) (24 docs).
 against the original SPEC, and [CHANGELOG.md](./CHANGELOG.md) for
 post-v1 releases.
 
-**Optional follow-ups** (acknowledged in meta-retro §5 and
+Several SPEC v1 "optional follow-ups" have shipped in later
+releases — memory system, LLM auto-compaction, capability-
+anchored prompt eval. See [CHANGELOG.md](./CHANGELOG.md) for
+which release each feature landed in.
+
+**Still optional / unshipped** (acknowledged in meta-retro §5 and
 [`decisions/23-phase-7-final-boundary.md`](./decisions/23-phase-7-final-boundary.md) §6,
 none required for SPEC v1):
 
 - Anthropic native client (~150 LoC; `protocols/` is already
   Anthropic-shape, so the wire translation is one-sided)
-- LLM auto-compaction Layer 3 (turn-summarization for long sessions)
-- Memory system (YAML-frontmatter `~/.openharness/memory/`)
 - Keyring auth + multi-profile API key management
 - `oh mcp add/list`, `oh skill run` subcommands
 - REPL polish (`/save`, `/load`, multi-line input)
