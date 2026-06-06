@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import difflib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -100,6 +101,7 @@ from openharness.commands.model import Command  # noqa: TC001 — runtime use in
 from openharness.compaction import TruncateToolResultHook
 from openharness.config import Settings
 from openharness.engine import QueryContext, run_query
+from openharness.engine.slash_skill import synthesize_skill_envelope
 from openharness.errors import LoopError, OpenHarnessError
 from openharness.execution import ExecutionEnvironment, SandboxExecution
 from openharness.execution.host import _HOST_EXECUTION
@@ -916,6 +918,38 @@ async def _run_ask(
 # --------------------------------------------------------------------------- #
 
 
+def _split_slash_invocation(prompt: str) -> tuple[str, str]:
+    """Split ``"/name args..."`` into ``("name", "args...")``.
+
+    Mirrors ``commands.expand._split_invocation`` but lives here so the
+    REPL resolver can peek at the name BEFORE deciding between
+    CommandStore and SkillStore (D38.1). Keeping a tiny local copy
+    avoids importing a private symbol from the commands package.
+    """
+    body = prompt[1:]  # strip leading "/"
+    parts = body.split(None, 1)
+    if not parts:
+        return "", ""
+    if len(parts) == 1:
+        return parts[0], ""
+    return parts[0], parts[1]
+
+
+def _emit_skill_catalog(skill_store: SkillStore) -> None:
+    """Render ``/skills`` output — alphabetical ``<name>  <description>``
+    (D38.4). Empty catalog → ``(no skills installed)``.
+    """
+    catalog = skill_store.discover()
+    if not catalog:
+        typer.echo("(no skills installed)")
+        return
+    names = sorted(catalog.keys())
+    width = max(len(n) for n in names)
+    for name in names:
+        skill = catalog[name]
+        typer.echo(f"  {name.ljust(width)}  {skill.description}")
+
+
 _CHAT_HELP_TEXT = """\
 oh chat — multi-turn REPL commands:
   /exit, /quit       leave the REPL
@@ -923,11 +957,15 @@ oh chat — multi-turn REPL commands:
   /compact           force full LLM-based compaction of the conversation
                      (Phase 11 D29.6) — replaces history with a 9-slot
                      summary regardless of token threshold
+  /skills            list available skills (Phase 18 D38.4)
   /help              show this message
 
 User-authored slash commands (Phase 5b) work too — type ``/name args``
 to expand a command. Bundles (Phase 5d) resolve on the FIRST message
-of the session and persist for the rest.
+of the session and persist for the rest. Phase 18 (D38.1) extends the
+resolver: ``/<name>`` falls through to SkillStore if no Command matches,
+synthesizing a LoadSkill envelope so the skill body lands in
+conversation history without an LLM round-trip.
 
 Use Ctrl+D (EOF) to exit; Ctrl+C cancels the current input line."""
 
@@ -1221,6 +1259,11 @@ async def _run_chat(
             if user_input == "/help":
                 typer.echo(_CHAT_HELP_TEXT)
                 continue
+            # Phase 18 D38.4: list available skills. Dogfood entry point so
+            # users can confirm a freshly dropped SKILL.md was discovered.
+            if user_input == "/skills":
+                _emit_skill_catalog(skill_store)
+                continue
             # P11-T5 (D29.6): force full LLM-based compaction. Same
             # primitive as auto-compact L4, but invoked unconditionally
             # on the current history. Replaces ``history`` with a single
@@ -1257,16 +1300,47 @@ async def _run_chat(
                 typer.echo(f"(compacted: {before_tokens} → {after_tokens} tokens)")
                 continue
 
-            # Phase 5b slash command expansion (for non-built-in).
+            # Phase 5b / 18 slash dispatch — D38.1 fallback order:
+            #   built-ins (handled above) → CommandStore → SkillStore →
+            #   UnknownCommandError. CommandStore-first preserves Phase
+            #   5b's user-priority semantics; SkillStore-second gives CC
+            #   ``/<skill>`` zero-migration UX (D38.1 rationale).
             invoked_command = None
-            if user_input.startswith("/") and command_store is not None:
-                try:
+            slash_skill_invoked = False
+            if user_input.startswith("/"):
+                slash_name, slash_args = _split_slash_invocation(user_input)
+                cmd = command_store.get(slash_name) if command_store is not None else None
+                if cmd is not None:
+                    # CommandStore hit → Phase 5b path (substitute body + carry mode).
                     user_input, invoked_command = resolve_command_invocation(
                         user_input, command_store
                     )
-                except UnknownCommandError as exc:
-                    typer.echo(f"Unknown command: {exc}", err=True)
-                    continue  # don't exit — let user retry
+                else:
+                    # CommandStore miss → SkillStore fallback (D38.1 step 3).
+                    skill = skill_store.get(slash_name)
+                    if skill is not None:
+                        envelope = synthesize_skill_envelope(skill, slash_args)
+                        history.extend(envelope)
+                        # D38.5 forcing function: synth envelope is a UI action,
+                        # not an LLM action — must be visible in observability so
+                        # hook authors understand why PreToolUse did not fire.
+                        get_logger("slash_skill").info(
+                            "slash_skill_invoked",
+                            skill_name=skill.name,
+                            args_length=len(slash_args),
+                            synthetic=True,
+                        )
+                        slash_skill_invoked = True
+                    else:
+                        # D38.1 step 4 — Unknown. Suggest closest skill if any.
+                        typer.echo(f"Unknown command: {slash_name}", err=True)
+                        skill_names = sorted(skill_store.discover().keys())
+                        closest = difflib.get_close_matches(
+                            slash_name, skill_names, n=3, cutoff=0.5
+                        )
+                        if closest:
+                            typer.echo(f"Did you mean a skill? Closest: {', '.join(closest)}")
+                        continue  # don't exit — let user retry
 
             # Phase 5d bundle resolution (FIRST turn only, per D24.4).
             if (
@@ -1377,7 +1451,13 @@ async def _run_chat(
                 llm_focus_state_model=settings.snapshot.focus_state_model,
             )
 
-            history.append(ConversationMessage(role="user", content=[TextBlock(text=user_input)]))
+            # Phase 18 D38.2: slash-skill envelope already extended history
+            # (assistant tool_use + user tool_result + optional user TextBlock(args));
+            # appending another user TextBlock here would duplicate the trailing args.
+            if not slash_skill_invoked:
+                history.append(
+                    ConversationMessage(role="user", content=[TextBlock(text=user_input)])
+                )
 
             captured: list[ConversationMessage] | None = None
 
