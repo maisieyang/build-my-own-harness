@@ -281,3 +281,98 @@ class TestMatchesTier3:
         # Bash 不带 path 字段(args 没 path) → Tier 3 跳过,Bash 的安全
         # 完全在 Tier 1/2/Hook 那一层。
         assert _matches_tier3(False, None, tmp_path) is None
+
+    def test_strict_tool_path_inside_memory_dir_passes(self, tmp_path: Path) -> None:
+        """P16-T5 dogfood fix: writes targeting the per-project memory
+        dir bypass the "outside cwd" rejection. Required so the main
+        LLM can execute the Phase 16 D36.10/D36.11 memory write
+        contract — its target dir is at
+        ``~/.openharness/memory/<basename>-<sha1>/``, outside cwd by
+        D28.1 design.
+        """
+        from openharness.memory.paths import get_project_memory_dir
+        from openharness.permissions.tier_based import _matches_tier3
+
+        memory_dir = get_project_memory_dir(tmp_path)
+        memory_target = memory_dir / "my-feedback.md"
+        assert _matches_tier3(False, str(memory_target), tmp_path) is None
+
+    def test_strict_tool_memory_md_index_passes(self, tmp_path: Path) -> None:
+        """Same as above but for the MEMORY.md index file specifically —
+        this is the file the T5 dogfood saw rejected.
+        """
+        from openharness.memory.paths import get_project_memory_dir
+        from openharness.permissions.tier_based import _matches_tier3
+
+        memory_dir = get_project_memory_dir(tmp_path)
+        memory_md = memory_dir / "MEMORY.md"
+        assert _matches_tier3(False, str(memory_md), tmp_path) is None
+
+    def test_strict_tool_other_outside_paths_still_ask(self, tmp_path: Path) -> None:
+        """The memory-dir exception is *narrow* — other outside-cwd
+        paths still surface the reason string. Guards against the
+        exception turning into a general Tier 3 relaxation.
+        """
+        from openharness.permissions.tier_based import _matches_tier3
+
+        # /tmp/elsewhere is neither cwd nor memory_dir → reason returned.
+        reason = _matches_tier3(False, "/tmp/elsewhere.txt", tmp_path)
+        assert reason is not None
+        assert "outside project root" in reason
+
+
+class TestInsideProjectMemoryDir:
+    """``_inside_project_memory_dir(path, cwd)`` — Phase 16 T5 dogfood
+    fix helper. Resolves ``cwd`` to its per-project memory dir via
+    :func:`openharness.memory.paths.get_project_memory_dir` and checks
+    whether ``path`` is under it.
+    """
+
+    def test_path_inside_memory_dir_is_true(self, tmp_path: Path) -> None:
+        from openharness.memory.paths import get_project_memory_dir
+        from openharness.permissions.tier_based import (
+            _inside_project_memory_dir,
+        )
+
+        memory_dir = get_project_memory_dir(tmp_path)
+        target = memory_dir / "user-role.md"
+        assert _inside_project_memory_dir(target, tmp_path) is True
+
+    def test_path_nested_inside_memory_dir_is_true(self, tmp_path: Path) -> None:
+        from openharness.memory.paths import get_project_memory_dir
+        from openharness.permissions.tier_based import (
+            _inside_project_memory_dir,
+        )
+
+        memory_dir = get_project_memory_dir(tmp_path)
+        # team/ subdir per Phase 11 D29.10
+        target = memory_dir / "team" / "shared-fact.md"
+        assert _inside_project_memory_dir(target, tmp_path) is True
+
+    def test_path_outside_memory_dir_is_false(self, tmp_path: Path) -> None:
+        from openharness.permissions.tier_based import (
+            _inside_project_memory_dir,
+        )
+
+        assert _inside_project_memory_dir("/etc/passwd", tmp_path) is False
+
+    def test_path_inside_cwd_but_not_memory_dir_is_false(self, tmp_path: Path) -> None:
+        """cwd-internal paths aren't memory_dir paths — the two
+        domains are disjoint by D28.1.
+        """
+        from openharness.permissions.tier_based import (
+            _inside_project_memory_dir,
+        )
+
+        cwd_internal = tmp_path / "src" / "main.py"
+        assert _inside_project_memory_dir(cwd_internal, tmp_path) is False
+
+    def test_traversal_climbing_out_of_memory_dir_is_false(self, tmp_path: Path) -> None:
+        from openharness.memory.paths import get_project_memory_dir
+        from openharness.permissions.tier_based import (
+            _inside_project_memory_dir,
+        )
+
+        memory_dir = get_project_memory_dir(tmp_path)
+        sneaky = memory_dir / ".." / ".." / "etc" / "passwd"
+        assert _inside_project_memory_dir(sneaky, tmp_path) is False

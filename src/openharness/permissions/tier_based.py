@@ -128,6 +128,37 @@ def _inside_project_root(path: Path | str, cwd: Path) -> bool:
     return True
 
 
+def _inside_project_memory_dir(path: Path | str, cwd: Path) -> bool:
+    """True iff ``path`` is under the per-project memory dir for ``cwd``.
+
+    The memory dir lives at ``~/.openharness/memory/<basename>-<sha1>/``
+    by D28.1 — **outside cwd by design** so it can't be accidentally
+    committed. But Phase 16 (D36.3 + D36.11) makes the main LLM the
+    write-path author: it gets the ``## Memory`` system prompt section
+    telling it to Write/Edit files under that exact dir. Without this
+    exception, Tier 3's "writes must be inside cwd" rule would block
+    every memory write — exactly the failure mode the T5 dogfood
+    surfaced ("permission denied: ... outside project root").
+
+    This is an *explicit narrow exception* tied to a single dir
+    resolved deterministically from cwd, NOT a general relaxation of
+    Tier 3. Other outside-cwd paths still hit ASK as before.
+    """
+    # Import here to avoid pulling memory machinery into the
+    # permissions module's top-level load graph (keeps the substrate
+    # boundary clean — permissions doesn't depend on memory at
+    # import time, just at this one runtime check).
+    from openharness.memory.paths import get_project_memory_dir
+
+    memory_dir = get_project_memory_dir(cwd)
+    p = Path(path) if isinstance(path, str) else path
+    try:
+        p.resolve(strict=False).relative_to(memory_dir.resolve(strict=False))
+    except ValueError:
+        return False
+    return True
+
+
 def _matches_tier3(
     is_read_only: bool,
     path: str | None,
@@ -155,6 +186,12 @@ def _matches_tier3(
     if path is None:
         return None
     if _inside_project_root(path, cwd):
+        return None
+    # P16-T5 dogfood fix: the per-project memory dir is an explicit
+    # allowed write destination, since Phase 16's D36.10/D36.11
+    # contract makes the main LLM the memory writer. See
+    # :func:`_inside_project_memory_dir` for the rationale.
+    if _inside_project_memory_dir(path, cwd):
         return None
     return f"path {path!r} is outside project root (cwd: {cwd})"
 
