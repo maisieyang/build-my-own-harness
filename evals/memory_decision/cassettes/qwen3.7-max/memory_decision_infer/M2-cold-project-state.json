@@ -1,0 +1,36 @@
+{
+  "case_id": "M2-cold-project-state",
+  "model": "qwen3.7-max",
+  "kind": "memory_decision_infer",
+  "recorded_at": "2026-06-05T10:09:56.712564+00:00",
+  "request_summary": "[cold-start] We're freezing all non-critical merges after 2026-06-11 (next Thursday) — mobile team is cutting a release branch. ",
+  "response": {
+    "tool_uses": [
+      {
+        "name": "Read",
+        "id": "call_869b56436dbf44d59f71d84f",
+        "input": {
+          "file_path": "/tmp/oh_eval_memory_decision/M2-cold-project-state/MEMORY.md"
+        }
+      },
+      {
+        "name": "Write",
+        "id": "call_58af9dc6ac86463dbb14ede3",
+        "input": {
+          "file_path": "/tmp/oh_eval_memory_decision/M2-cold-project-state/project_merge_freeze.md",
+          "content": "---\nname: merge-freeze-2026-06\ndescription: Non-critical merge freeze starting 2026-06-11 for mobile release branch cut — affects all teams\nmetadata:\n  type: project\n---\n\nAll non-critical merges are frozen starting **2026-06-11** (announced as \"next Thursday\" on ~2026-06-04). The mobile team is cutting a release branch on that date.\n\n**Why:** Mobile release stability — minimizing change volume during the release branch process.\n\n**How to apply:** Before 2026-06-11, flag any PRs or changes that need to land as critical or time-sensitive. After 2026-06-11, avoid merging non-critical work and check whether the freeze has lifted before proceeding with routine merges. Confirm with the mobile team when the freeze ends.\n"
+        }
+      },
+      {
+        "name": "Write",
+        "id": "call_7d7b66ebcf274edca589f053",
+        "input": {
+          "file_path": "/tmp/oh_eval_memory_decision/M2-cold-project-state/MEMORY.md",
+          "content": "- [Merge Freeze 2026-06](project_merge_freeze.md) — Non-critical merges frozen from 2026-06-11 for mobile release branch cut\n"
+        }
+      }
+    ],
+    "text": "I'll save this so future conversations know about the freeze. Let me record it now.\n\nGot it. I've saved that the merge freeze starts **2026-06-11** for the mobile release branch cut. I'll keep this in mind for any future work around that timeframe and flag anything time-sensitive that needs to land before then.",
+    "turn_count": 3
+  }
+}

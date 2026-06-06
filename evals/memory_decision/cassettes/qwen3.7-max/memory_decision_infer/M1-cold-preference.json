@@ -1,0 +1,29 @@
+{
+  "case_id": "M1-cold-preference",
+  "model": "qwen3.7-max",
+  "kind": "memory_decision_infer",
+  "recorded_at": "2026-06-05T10:09:36.119481+00:00",
+  "request_summary": "[cold-start] I prefer terse responses without trailing summaries — just show me the diff. ",
+  "response": {
+    "tool_uses": [
+      {
+        "name": "Write",
+        "id": "call_e8bf796885a24817bffdfc58",
+        "input": {
+          "file_path": "/tmp/oh_eval_memory_decision/M1-cold-preference/feedback_response_style.md",
+          "content": "---\nname: feedback-response-style\ndescription: User wants terse responses with no trailing summaries — show diffs directly without commentary\nmetadata:\n  type: feedback\n---\n\nKeep responses terse. No trailing summaries or recaps. When showing changes, present the diff directly without extra commentary.\n\n**Why:** User finds summaries and wrap-ups unnecessary noise.\n**How to apply:** After making edits, stop. Don't add \"Here's what I changed:\" or \"In summary…\" closers.\n"
+        }
+      },
+      {
+        "name": "Write",
+        "id": "call_0048b3313813496f89f366c6",
+        "input": {
+          "file_path": "/tmp/oh_eval_memory_decision/M1-cold-preference/MEMORY.md",
+          "content": "- [Response style](feedback_response_style.md) — Terse responses, no summaries, show diffs directly\n"
+        }
+      }
+    ],
+    "text": "Got it.",
+    "turn_count": 2
+  }
+}

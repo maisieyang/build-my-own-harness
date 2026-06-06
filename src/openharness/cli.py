@@ -2922,6 +2922,185 @@ def eval_focus_state(
     asyncio.run(_orchestrate())
 
 
+@eval_app.command(
+    "memory_decision",
+    help=(
+        "Run memory_decision eval — Phase 16 T3 D35.5 P0 gating eval for "
+        "decision surface #4 (inline decision class side-effects). 6 cases, "
+        "5 scorers, version-stamped results."
+    ),
+)
+def eval_memory_decision(
+    mode: str = typer.Option(
+        "live",
+        "--mode",
+        "-m",
+        help=(
+            "Cassette mode (D33.2): "
+            "'live' (real LLM, no cassette save), "
+            "'record' (real LLM + save cassette), "
+            "'replay' (load cassette, no LLM call)."
+        ),
+    ),
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        help="Override OPENHARNESS_MODEL for this run.",
+    ),
+    no_results: bool = typer.Option(
+        False,
+        "--no-results",
+        help="Skip writing results JSONL (default: write to evals/memory_decision/results/).",
+    ),
+) -> None:
+    """Run the memory_decision gating eval (Phase 16 T3).
+
+    Tests decision surface #4 (inline decision) per
+    ``decisions/35-eval-coverage-map.md`` §D35.5 P0. The eval drives
+    the LLM through the Claude-Code-style memory write contract
+    (judge → Write ``.md`` → Edit ``MEMORY.md``) with real tool
+    execution against a per-sample fixture under
+    ``/tmp/oh_eval_memory_decision/``. Scorers observe the aggregate
+    multi-turn tool_use sequence; pass-bar is warm-start PASS ≥ 80%.
+
+    Self-preference accepted (judge_model = main model, D32.5).
+    """
+    import asyncio
+    from typing import cast
+
+    from openharness.eval._memory_decision_printers import (
+        print_case,
+        print_summary,
+    )
+    from openharness.eval.cassette import CassetteMode, CassetteStore
+    from openharness.eval.memory_decision import (
+        _MEMORY_DIR_PLACEHOLDER,
+        _build_eval_system_prompt,
+        run_memory_decision_eval,
+    )
+    from openharness.eval.memory_decision_scorers import (
+        FrontmatterValidScorer,
+        IndexUpdateScorer,
+        JudgmentScorer,
+        MemoryTypeLLMJudgeScorer,
+        NoDestructiveOverwriteScorer,
+    )
+    from openharness.eval.results import (
+        RunMetadata,
+        build_result_filename,
+        compute_file_hash,
+        compute_rubric_hashes,
+        compute_text_hash,
+        get_git_info,
+        utc_iso_now,
+        write_memory_decision_results,
+    )
+    from openharness.eval.rubrics import CAPABILITY_RUBRICS
+
+    if mode not in ("live", "record", "replay"):
+        typer.echo(
+            f"Invalid --mode={mode!r}; expected one of: live / record / replay",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+    cassette_mode = cast("CassetteMode", mode)
+
+    settings = _load_settings()
+    client = _build_client(settings)
+    effective_model = model or settings.model
+
+    project_root = Path.cwd()
+    dataset_path = project_root / "evals" / "memory_decision" / "dataset.yaml"
+    cassette_root = project_root / "evals" / "memory_decision" / "cassettes"
+    results_root = project_root / "evals" / "memory_decision" / "results"
+
+    if not dataset_path.exists():
+        typer.echo(
+            f"Dataset not found at {dataset_path}. "
+            "`oh eval memory_decision` must be run from the project root containing evals/.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+
+    cassette_store = CassetteStore(cassette_root)
+
+    scorers = [
+        JudgmentScorer(),
+        FrontmatterValidScorer(),
+        IndexUpdateScorer(),
+        NoDestructiveOverwriteScorer(),
+        MemoryTypeLLMJudgeScorer(
+            api_client=client,
+            model=effective_model,
+            cassette_store=cassette_store,
+            cassette_mode=cassette_mode,
+        ),
+    ]
+
+    typer.echo("# memory_decision eval — `oh eval memory_decision` (Phase 16 T3)")
+    typer.echo(f"# model:         {effective_model}")
+    typer.echo(f"# dataset:       {dataset_path.relative_to(Path.cwd())}")
+    typer.echo(f"# cassettes:     {cassette_root.relative_to(Path.cwd())}")
+    typer.echo(f"# cassette_mode: {cassette_mode}")
+    if not no_results:
+        typer.echo(f"# results dir:   {results_root.relative_to(Path.cwd())}")
+    typer.echo(f"# scorers:       {[type(s).__name__ for s in scorers]}")
+
+    # Stamp the system prompt by reconstructing it for the dir
+    # placeholder — actual per-case prompts interpolate sample dirs,
+    # but the *template* is what we hash for D34.3 reproducibility.
+    eval_prompt_template = _build_eval_system_prompt(
+        _MEMORY_DIR_PLACEHOLDER, "<MEMORY.md content interpolated per case>"
+    )
+    # Subset of CAPABILITY_RUBRICS that this eval actually uses, so
+    # the rubric_hashes stamp reflects what was applied (not
+    # focus_state's T4-T7 set).
+    eval_rubrics = {k: v for k, v in CAPABILITY_RUBRICS.items() if k.startswith("M-")}
+
+    async def _orchestrate() -> None:
+        started_at = utc_iso_now()
+        results = await run_memory_decision_eval(
+            dataset_path,
+            scorers,
+            client,
+            effective_model,
+            cassette_root=cassette_root,
+            cassette_mode=cassette_mode,
+        )
+
+        for r in results:
+            print_case(r)
+        print_summary(results)
+
+        if no_results:
+            return
+
+        completed_at = utc_iso_now()
+        git_commit, git_dirty = get_git_info(project_root)
+        metadata = RunMetadata(
+            started_at=started_at,
+            completed_at=completed_at,
+            model=effective_model,
+            judge_model=effective_model,
+            cassette_mode=cassette_mode,
+            dataset_path=str(dataset_path.relative_to(project_root)),
+            dataset_sha256=compute_file_hash(dataset_path),
+            prompt_sha256=compute_text_hash(eval_prompt_template),
+            prompt_text=eval_prompt_template,
+            rubric_sha256s=compute_rubric_hashes(eval_rubrics),
+            rubric_texts=eval_rubrics,
+            scorer_classes=[type(s).__name__ for s in scorers],
+            n_cases=len(results),
+            git_commit=git_commit,
+            git_dirty=git_dirty,
+        )
+        result_path = results_root / build_result_filename(metadata)
+        write_memory_decision_results(result_path, metadata, results)
+        typer.echo(f"\n# results written: {result_path.relative_to(Path.cwd())}")
+
+    asyncio.run(_orchestrate())
+
+
 # --------------------------------------------------------------------------- #
 # Entry point                                                                 #
 # --------------------------------------------------------------------------- #

@@ -1,0 +1,239 @@
+# memory_decision eval dataset — decision surface #4 (inline decision)
+#
+# 6 capability-anchored samples probing the LLM's ability to do the
+# Claude-Code-style memory write pattern as a single inline tool-call
+# decision:
+#
+#   user msg → (system prompt = CC memory rules + MEMORY.md index)
+#            → model emits Write(.md frontmatter) + Edit(MEMORY.md)
+#              tool_use blocks inline, OR correctly skips when input
+#              is not memory-worthy.
+#
+# See dataset_card.md for the three-claim header (D35.3) + per-shape
+# fixture rationale + per-rubric coverage.
+#
+# Schema:
+#   openharness.eval.memory_decision.load_memory_decision_dataset()
+#   parses this into list[MemoryDecisionSample].
+#
+# Shape distribution: 2 cold-start + 3 warm-start + 1 trivial-skip
+# (per Phase 16 plan T3 acceptance "≥6 scenarios: 2 cold + 3 warm + 1
+# trivial-skip"). Warm-start scenarios are the discriminating ones —
+# the 2026-06-05 spike showed cold-start gets ~80% PASS on both
+# qwen-plus and qwen3.7-max while warm-start is where the contract
+# stresses.
+
+samples:
+
+  # ===== M1 — Cold-start: preference =====
+  - case_id: M1-cold-preference
+    capability: M-judge-preference
+    shape: cold-start
+    user_msg: |
+      I prefer terse responses without trailing summaries — just show me the diff.
+    expect_write: true
+    expected_memory_type: feedback
+    pre_populated_files: {}
+    notes: |
+      Stable user preference, cold-start. Model should Write a new .md
+      with valid frontmatter + Write the empty MEMORY.md with one
+      pointer line (cold-start: Write OK; Edit on non-existent file
+      would fail). Type defensible as ``user`` OR ``feedback`` per
+      rubric (taxonomy overlap region).
+
+  # ===== M2 — Cold-start: project state =====
+  - case_id: M2-cold-project-state
+    capability: M-judge-project
+    shape: cold-start
+    user_msg: |
+      We're freezing all non-critical merges after 2026-06-11 (next Thursday) — mobile team is cutting a release branch.
+    expect_write: true
+    expected_memory_type: project
+    pre_populated_files: {}
+    notes: |
+      Project state with explicit absolute date + reason, cold-start.
+      Rubric: type MUST be ``project`` — user / feedback / reference
+      are category errors here. The absolute date is given inline so
+      the system prompt's "convert relative dates to absolute" rule
+      doesn't trigger a clarification request that masks the write
+      decision (v1 of this sample used "after Thursday" without the
+      absolute anchor; qwen3.7-max correctly asked for the date
+      instead of writing, which made the result unattributable
+      between dataset bug and model failure).
+
+  # ===== M3 — Warm-start: correction (Edit MEMORY.md required) =====
+  - case_id: M3-warm-correction
+    capability: M-judge-correction
+    shape: warm-start
+    user_msg: |
+      Actually we use Tavily for web search, not SerpAPI. SerpAPI is too expensive at our scale.
+    expect_write: true
+    expected_memory_type: feedback
+    pre_populated_files:
+      MEMORY.md: |
+        # Memory index
+
+        - [Code style 80 chars](code-style-line-width.md) — wrap code at 80 chars max
+        - [Test runner command](test-runner-command.md) — tests run via `uv run pytest -q`
+        - [Build dir Linear project](linear-build-tracking.md) — infra bugs in Linear project BUILD
+      code-style-line-width.md: |
+        ---
+        name: code-style-line-width
+        description: Wrap code at 80 characters
+        metadata:
+          type: feedback
+        ---
+
+        Wrap code at 80 characters max.
+      test-runner-command.md: |
+        ---
+        name: test-runner-command
+        description: Tests run via uv run pytest -q
+        metadata:
+          type: project
+        ---
+
+        Tests run via uv run pytest -q, not python -m pytest.
+      linear-build-tracking.md: |
+        ---
+        name: linear-build-tracking
+        description: Infra bugs in Linear project BUILD
+        metadata:
+          type: reference
+        ---
+
+        Infra bugs go in Linear project BUILD.
+    notes: |
+      Warm-start: 3 entries already in MEMORY.md. Canonical "Edit
+      MEMORY.md to append" scenario. If model Writes MEMORY.md without
+      preserving the 3 anchors, NoDestructiveOverwriteScorer catches
+      it. If model writes the .md but skips MEMORY.md entirely,
+      IndexUpdateScorer catches the drift.
+
+  # ===== M4 — Warm-start: reference (Edit MEMORY.md required) =====
+  - case_id: M4-warm-reference
+    capability: M-judge-reference
+    shape: warm-start
+    user_msg: |
+      Pipeline bugs go in the Linear project INGEST.
+    expect_write: true
+    expected_memory_type: reference
+    pre_populated_files:
+      MEMORY.md: |
+        # Memory index
+
+        - [Code style 80 chars](code-style-line-width.md) — wrap code at 80 chars max
+        - [Test runner command](test-runner-command.md) — tests run via `uv run pytest -q`
+        - [Build dir Linear project](linear-build-tracking.md) — infra bugs in Linear project BUILD
+      code-style-line-width.md: |
+        ---
+        name: code-style-line-width
+        description: Wrap code at 80 characters
+        metadata:
+          type: feedback
+        ---
+
+        Wrap code at 80 characters max.
+      test-runner-command.md: |
+        ---
+        name: test-runner-command
+        description: Tests run via uv run pytest -q
+        metadata:
+          type: project
+        ---
+
+        Tests run via uv run pytest -q, not python -m pytest.
+      linear-build-tracking.md: |
+        ---
+        name: linear-build-tracking
+        description: Infra bugs in Linear project BUILD
+        metadata:
+          type: reference
+        ---
+
+        Infra bugs go in Linear project BUILD.
+    notes: |
+      Warm-start, reference type. Note: a similarly-shaped reference
+      memory (Linear BUILD project) is ALREADY indexed. Model should
+      recognize the difference (INGEST ≠ BUILD) and add a new entry
+      rather than incorrectly assuming the existing one covers it.
+
+  # ===== M5 — Warm-start: preference (Edit MEMORY.md required) =====
+  - case_id: M5-warm-preference
+    capability: M-judge-preference
+    shape: warm-start
+    user_msg: |
+      I prefer code reviews that quote the exact diff instead of summarizing it.
+    expect_write: true
+    expected_memory_type: feedback
+    pre_populated_files:
+      MEMORY.md: |
+        # Memory index
+
+        - [Code style 80 chars](code-style-line-width.md) — wrap code at 80 chars max
+        - [Test runner command](test-runner-command.md) — tests run via `uv run pytest -q`
+        - [Build dir Linear project](linear-build-tracking.md) — infra bugs in Linear project BUILD
+      code-style-line-width.md: |
+        ---
+        name: code-style-line-width
+        description: Wrap code at 80 characters
+        metadata:
+          type: feedback
+        ---
+
+        Wrap code at 80 characters max.
+      test-runner-command.md: |
+        ---
+        name: test-runner-command
+        description: Tests run via uv run pytest -q
+        metadata:
+          type: project
+        ---
+
+        Tests run via uv run pytest -q, not python -m pytest.
+      linear-build-tracking.md: |
+        ---
+        name: linear-build-tracking
+        description: Infra bugs in Linear project BUILD
+        metadata:
+          type: reference
+        ---
+
+        Infra bugs go in Linear project BUILD.
+    notes: |
+      Warm-start preference. Cross-checks M1's cold-start preference
+      against the same shape under warm conditions. Phase 11/Phase 10
+      use_count would have differentiated these; the new contract
+      doesn't track use_count, so the test is purely about whether
+      the model handles the index-update step under warm conditions.
+
+  # ===== M6 — Trivial skip (no write expected) =====
+  - case_id: M6-trivial-skip
+    capability: M-trivial-skip
+    shape: trivial-skip
+    user_msg: |
+      What's 2 + 2?
+    expect_write: false
+    expected_memory_type: null
+    pre_populated_files:
+      MEMORY.md: |
+        # Memory index
+
+        - [Code style 80 chars](code-style-line-width.md) — wrap code at 80 chars max
+        - [Test runner command](test-runner-command.md) — tests run via `uv run pytest -q`
+        - [Build dir Linear project](linear-build-tracking.md) — infra bugs in Linear project BUILD
+      code-style-line-width.md: |
+        ---
+        name: code-style-line-width
+        description: Wrap code at 80 characters
+        metadata:
+          type: feedback
+        ---
+
+        Wrap code at 80 characters max.
+    notes: |
+      Trivial ephemeral question — should NOT trigger any Write/Edit.
+      Probes the "DO NOT save" discipline. Warm fixture (MEMORY.md
+      present) so the model could plausibly Edit it if confused; the
+      correct behavior is to answer the user's question (or decline
+      politely) without touching memory at all.

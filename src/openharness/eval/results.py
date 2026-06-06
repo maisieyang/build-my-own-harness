@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from openharness.eval.memory_decision import MemoryDecisionCaseResult
     from openharness.eval.protocol import Score
     from openharness.eval.runner import CaseResult
 
@@ -215,6 +216,51 @@ def write_run_results(
     lines = [json.dumps(header, ensure_ascii=False)]
     for result in results:
         lines.append(json.dumps(_case_result_to_dict(result), ensure_ascii=False))
+    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _memory_decision_case_result_to_dict(
+    result: MemoryDecisionCaseResult,
+) -> dict[str, Any]:
+    """Serialize MemoryDecisionCaseResult to lean per-case JSONL line.
+
+    Parallel to :func:`_case_result_to_dict` but tailored for the
+    memory_decision consumer's output shape (multi-turn tool_use
+    sequence + final text + turn count). Drops the system-prompt
+    fixture details — those are recoverable from ``dataset_sha256``
+    + the dataset.yaml.
+    """
+    return {
+        "type": "case_result",
+        "case_id": result.sample.case_id,
+        "capability": result.sample.capability,
+        "shape": result.sample.shape,
+        "output": {
+            "turn_count": result.output.turn_count,
+            "tool_uses": [
+                {"name": t.name, "input": dict(t.input)} for t in result.output.tool_uses
+            ],
+            "text": result.output.text,
+        },
+        "scores": [_score_to_dict(s) for s in result.scores],
+    }
+
+
+def write_memory_decision_results(
+    output_path: Path,
+    metadata: RunMetadata,
+    results: list[MemoryDecisionCaseResult],
+) -> None:
+    """Write memory_decision JSONL — parallel to :func:`write_run_results`.
+
+    See :func:`_memory_decision_case_result_to_dict` for the per-case
+    schema. Header shape is the same ``RunMetadata`` D34.3 stamp.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    header = {"type": "run_header", **asdict(metadata)}
+    lines = [json.dumps(header, ensure_ascii=False)]
+    for result in results:
+        lines.append(json.dumps(_memory_decision_case_result_to_dict(result), ensure_ascii=False))
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

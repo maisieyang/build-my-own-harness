@@ -1,0 +1,30 @@
+{
+  "case_id": "M3-warm-correction",
+  "model": "qwen3.7-max",
+  "kind": "memory_decision_infer",
+  "recorded_at": "2026-06-05T10:10:18.746545+00:00",
+  "request_summary": "[warm-start] Actually we use Tavily for web search, not SerpAPI. SerpAPI is too expensive at our scale. ",
+  "response": {
+    "tool_uses": [
+      {
+        "name": "Write",
+        "id": "call_09182c12e6c04344b66d4bd5",
+        "input": {
+          "file_path": "/tmp/oh_eval_memory_decision/M3-warm-correction/web-search-tool.md",
+          "content": "---\nname: web-search-tool\ndescription: Project uses Tavily (not SerpAPI) for web search due to cost at scale\nmetadata:\n  type: project\n---\n\nWeb search functionality uses Tavily as the search provider.\n\n**Why:** SerpAPI was evaluated but is too expensive at the project's scale.\n\n**How to apply:** When discussing, implementing, or debugging web search features, assume Tavily is the search backend. Don't suggest SerpAPI as an alternative.\n"
+        }
+      },
+      {
+        "name": "Edit",
+        "id": "call_274ceec0b8354e088bbdf6ed",
+        "input": {
+          "file_path": "/tmp/oh_eval_memory_decision/M3-warm-correction/MEMORY.md",
+          "old_string": "- [Build dir Linear project](linear-build-tracking.md) — infra bugs in Linear project BUILD",
+          "new_string": "- [Build dir Linear project](linear-build-tracking.md) — infra bugs in Linear project BUILD\n- [Web search tool](web-search-tool.md) — uses Tavily (not SerpAPI) for web search; cost reasons"
+        }
+      }
+    ],
+    "text": "Got it, thanks for the correction. I'll update my memory to reflect that you use Tavily for web search.\n\nDone. I've saved that you use Tavily for web search (not SerpAPI, which was too expensive at scale). Future conversations will have this context.",
+    "turn_count": 3
+  }
+}

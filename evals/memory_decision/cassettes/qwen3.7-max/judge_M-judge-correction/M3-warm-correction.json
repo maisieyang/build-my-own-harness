@@ -1,0 +1,8 @@
+{
+  "case_id": "M3-warm-correction",
+  "model": "qwen3.7-max",
+  "kind": "judge_M-judge-correction",
+  "recorded_at": "2026-06-05T10:10:24.549612+00:00",
+  "request_summary": "User message:\nActually we use Tavily for web search, not SerpAPI. SerpAPI is too expensive at our scale.\n\n\nExpected baseline type: 'feedback'\nModel's chosen type: 'project'\n\nApply the rubric. Output t",
+  "response": "{\"reason\": \"The correction conveys project state regarding the tooling used for web search and the reasoning behind it, making 'project' a defensible type according to the rubric.\", \"score\": 1}"
+}

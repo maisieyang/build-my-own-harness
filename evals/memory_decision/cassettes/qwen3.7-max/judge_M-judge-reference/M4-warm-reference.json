@@ -1,0 +1,8 @@
+{
+  "case_id": "M4-warm-reference",
+  "model": "qwen3.7-max",
+  "kind": "judge_M-judge-reference",
+  "recorded_at": "2026-06-05T10:10:44.011418+00:00",
+  "request_summary": "User message:\nPipeline bugs go in the Linear project INGEST.\n\n\nExpected baseline type: 'reference'\nModel's chosen type: 'reference'\n\nApply the rubric. Output the JSON object.",
+  "response": "{\"reason\": \"The model correctly classified the message as 'reference', which is the canonical and expected type for messages pointing to an external system as the source of truth.\", \"score\": 1}"
+}

@@ -1,0 +1,8 @@
+{
+  "case_id": "M1-cold-preference",
+  "model": "qwen3.7-max",
+  "kind": "judge_M-judge-preference",
+  "recorded_at": "2026-06-05T10:09:40.062400+00:00",
+  "request_summary": "User message:\nI prefer terse responses without trailing summaries — just show me the diff.\n\n\nExpected baseline type: 'feedback'\nModel's chosen type: 'feedback'\n\nApply the rubric. Output the JSON objec",
+  "response": "{\"reason\": \"The user message expresses a preference for response style, which is defensible as 'feedback' since it provides guidance on how the model should approach work.\", \"score\": 1}"
+}

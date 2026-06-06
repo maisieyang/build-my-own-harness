@@ -134,11 +134,152 @@ Output EXACTLY one JSON on a single line, no markdown fence:
 {"reason": "one sentence on what verification is proposed", "score": 0 or 1}"""
 
 
+# ---------------------------------------------------------------------------
+# Memory-decision rubrics — Phase 16 T3 (D35.5 P0)
+#
+# For the memory_decision eval (decision surface #4 inline decision).
+# Each rubric asks the judge: "did the LLM pick a defensible
+# frontmatter ``type`` for this user message under the Claude-Code
+# memory taxonomy?". The rubrics accept multiple valid readings — e.g.,
+# "I prefer terse responses" is defensible as ``user`` (preference about
+# communication) OR ``feedback`` (guidance on how to approach work).
+# This matches Claude Code's own taxonomy where the two type
+# definitions deliberately overlap in the preference region.
+# ---------------------------------------------------------------------------
+
+
+_M_JUDGE_PREFERENCE_RUBRIC = """You are an evaluation judge.
+
+Given:
+- A user message expressing a stable preference about how they want to be
+  worked with (response style, code conventions, communication tone, etc.).
+- The frontmatter ``type`` field the model wrote.
+
+Decide: is the type defensible under the Claude-Code memory taxonomy?
+
+Type definitions (verbatim from the system prompt):
+- user: information about the user's role, preferences, knowledge.
+- feedback: guidance the user has given you about how to approach work
+  (corrections, confirmed approaches).
+- project: ongoing work, goals, initiatives within the project.
+- reference: pointers to external systems.
+
+For preference-style messages, BOTH ``user`` and ``feedback`` are
+DEFENSIBLE — Claude Code's own taxonomy overlaps in this region.
+``project`` or ``reference`` are NOT defensible (they're about external
+state, not the user themselves).
+
+PASS examples (any of these types for a preference user message):
+- type=user (preference is user-facing info)
+- type=feedback (preference is guidance about behavior)
+
+FAIL examples:
+- type=project (preference is not project state)
+- type=reference (preference is not an external pointer)
+
+Length does NOT factor.
+
+Output EXACTLY one JSON on a single line, no markdown fence:
+{"reason": "one sentence justifying", "score": 0 or 1}"""
+
+
+_M_JUDGE_CORRECTION_RUBRIC = """You are an evaluation judge.
+
+Given:
+- A user message correcting an approach or stating a non-obvious fact
+  with reasoning (e.g., "actually we use X, not Y, because Z").
+- The frontmatter ``type`` field the model wrote.
+
+Decide: is the type defensible?
+
+Corrections / clarifications are most naturally ``feedback`` (guidance
+about how to approach work), but ``project`` is ALSO defensible when
+the correction conveys project state ("we use X tooling" = a project
+fact). ``user`` is defensible if the correction is about a personal
+working choice. ``reference`` is NOT defensible unless the correction
+is specifically pointing at an external system.
+
+PASS examples:
+- type=feedback (correction about approach)
+- type=project (correction conveys project state)
+- type=user (correction about personal style)
+
+FAIL examples:
+- type=reference (correction is not about external system unless
+  explicitly mentioning Linear/Slack/etc.)
+
+Length does NOT factor.
+
+Output EXACTLY one JSON on a single line, no markdown fence:
+{"reason": "one sentence justifying", "score": 0 or 1}"""
+
+
+_M_JUDGE_PROJECT_RUBRIC = """You are an evaluation judge.
+
+Given:
+- A user message conveying project state, decisions, deadlines, or
+  ongoing work context (e.g., "we're freezing merges Thursday for the
+  release branch").
+- The frontmatter ``type`` field the model wrote.
+
+Decide: is the type defensible?
+
+Project-state messages MUST be ``project``. Other types are wrong:
+- type=user would be a category error (not about the user)
+- type=feedback would conflate project state with behavioral guidance
+- type=reference would be wrong unless the message is purely a
+  pointer to an external resource
+
+PASS examples:
+- type=project
+
+FAIL examples:
+- type=user / type=feedback / type=reference for clear project state
+
+Length does NOT factor.
+
+Output EXACTLY one JSON on a single line, no markdown fence:
+{"reason": "one sentence justifying", "score": 0 or 1}"""
+
+
+_M_JUDGE_REFERENCE_RUBRIC = """You are an evaluation judge.
+
+Given:
+- A user message pointing at an external system as the source of
+  truth (Linear project, Slack channel, dashboard, etc.).
+- The frontmatter ``type`` field the model wrote.
+
+Decide: is the type defensible?
+
+Reference messages MUST be ``reference``. ``project`` is
+borderline-defensible if the external system IS the project's
+canonical tracker — but the cleaner choice is ``reference``. Other
+types are wrong.
+
+PASS examples:
+- type=reference (canonical)
+- type=project (borderline-defensible when the external system is
+  THE project tracker)
+
+FAIL examples:
+- type=user / type=feedback
+
+Length does NOT factor.
+
+Output EXACTLY one JSON on a single line, no markdown fence:
+{"reason": "one sentence justifying", "score": 0 or 1}"""
+
+
 CAPABILITY_RUBRICS: dict[str, str] = {
     "T4": _T4_RUBRIC,
     "T5": _T5_RUBRIC,
     "T6": _T6_RUBRIC,
     "T7": _T7_RUBRIC,
+    # Memory-decision capability families — Phase 16 T3 (D35.5 P0).
+    "M-judge-preference": _M_JUDGE_PREFERENCE_RUBRIC,
+    "M-judge-correction": _M_JUDGE_CORRECTION_RUBRIC,
+    "M-judge-project": _M_JUDGE_PROJECT_RUBRIC,
+    "M-judge-reference": _M_JUDGE_REFERENCE_RUBRIC,
 }
 """Capability ID → rubric prompt.
 

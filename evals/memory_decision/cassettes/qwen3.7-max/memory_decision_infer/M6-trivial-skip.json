@@ -1,0 +1,12 @@
+{
+  "case_id": "M6-trivial-skip",
+  "model": "qwen3.7-max",
+  "kind": "memory_decision_infer",
+  "recorded_at": "2026-06-05T10:11:03.271377+00:00",
+  "request_summary": "[trivial-skip] What's 2 + 2? ",
+  "response": {
+    "tool_uses": [],
+    "text": "2 + 2 = **4**.",
+    "turn_count": 1
+  }
+}
