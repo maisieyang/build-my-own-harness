@@ -193,10 +193,12 @@ _EXPECTED_NEW_SECTION_POPULATED_TAIL = """\
 
 class TestByteIdenticalNewSection:
     def test_empty_index_tail_matches(self, env: EnvironmentInfo) -> None:
+        """Fixture A (P16-T4 plan acceptance): empty memory_dir → placeholder."""
         prompt = build_system_prompt(tools=[], env=env, memory_dir=Path("/m"))
         assert prompt.endswith(_EXPECTED_NEW_SECTION_EMPTY_TAIL)
 
     def test_populated_index_tail_matches(self, env: EnvironmentInfo) -> None:
+        """Fixture B (P16-T4 plan acceptance): pre-populated MEMORY.md."""
         prompt = build_system_prompt(
             tools=[],
             env=env,
@@ -204,6 +206,39 @@ class TestByteIdenticalNewSection:
             memory_index_content="- [A](a.md) — first\n- [B](b.md) — second",
         )
         assert prompt.endswith(_EXPECTED_NEW_SECTION_POPULATED_TAIL)
+
+    def test_truncated_index_tail_byte_identical(
+        self, env: EnvironmentInfo, tmp_path: Path
+    ) -> None:
+        """Fixture C (P16-T4 plan acceptance): 300-line MEMORY.md → cut to
+        first-200 lines, prompt tail byte-identical.
+
+        End-to-end lock: drives the truncation through both the
+        ``_load_memory_index_for_injection`` reader (D36.8 200-line
+        cap) AND the ``build_system_prompt`` assembly (D36.10/D36.11
+        combined section). Subsequent edits to either side that drift
+        the byte output trip this test.
+        """
+        big = "\n".join(f"- line {i}" for i in range(300))
+        (tmp_path / "MEMORY.md").write_text(big, encoding="utf-8")
+
+        index_content = _load_memory_index_for_injection(tmp_path)
+        assert index_content is not None
+        assert len(index_content.splitlines()) == 200
+
+        prompt = build_system_prompt(
+            tools=[],
+            env=env,
+            memory_dir=tmp_path,
+            memory_index_content=index_content,
+        )
+
+        expected_first_200 = "\n".join(f"- line {i}" for i in range(200))
+        expected_tail = f"### Memory Index\n\n```md\n{expected_first_200}\n```"
+        assert prompt.endswith(expected_tail)
+        # Truncation boundary is sharp: line 199 in, line 200 out.
+        assert "- line 199" in prompt
+        assert "- line 200" not in prompt
 
 
 # ---------------------------------------------------------------------------
