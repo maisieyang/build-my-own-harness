@@ -55,3 +55,10 @@ Thumbs.db
 # Claude Code IDE — per-developer local config (template at .claude/settings.json.example)
 .claude/settings.json
 .claude/settings.local.json
+
+# Personal-utility drafts (resume, cover letter, interview prep) — not project narrative
+docs/ideas/resume-*.md
+
+# Private conversation transcripts dropped at repo root (e.g.,
+# personal-life reflections) — not project narrative
+/conversation_*.md

@@ -164,6 +164,77 @@ metadata:
 
 No warnings on startup. The Phase 16 retro's Gap B + Gap C are closed.
 
+### Addendum: emit-only-``user`` type observation (2026-06-06 dogfood)
+
+A second dogfood right after T5 closed surfaced a follow-on
+finding worth recording — it's not a Phase 17 regression, it's
+a *new* observation for whichever future phase reopens the
+memory-eval frontier.
+
+The user shared three distinct kinds of memorable content in a
+single ``oh chat`` session: project state ("my project is
+called build-my-own-harness, finishing in two days"), a
+correction ("I said 打气加油 — encouragement — not 打球, play
+ball"), and continued user-facts ("MIT-licensed open source,
+solo-built a commercial Python project"). qwen3.7-max wrote all
+three by *editing the existing* ``user_role_and_values.md`` three
+times in the same turn — never creating a new ``project-*.md``
+or ``feedback-*.md`` file, never branching the taxonomy.
+
+What this means at the contract layer:
+
+- D36.10 defines four memory types (user / feedback / project /
+  reference). The system prompt enumerates all four with
+  examples.
+- The Phase 16 ``memory_decision`` gating eval's M-judge-*
+  rubrics check that ``type=X`` is **defensible** given the user
+  input — they do NOT check that the model **chose** the right
+  type to begin with, or that the model **created a separate
+  file** when the new content belongs to a different type than
+  the existing memory.
+- So the model is contract-compliant ("wrote a memory, type was
+  ``user``, frontmatter valid, MEMORY.md indexed correctly") while
+  also producing a **single growing ``user_role_and_values.md``**
+  that absorbs everything because there's no rubric pressure to
+  separate.
+
+Three independent failure modes hide inside this same observation:
+
+1. **Type bias** — qwen3.7-max may have a prior that ``user`` is
+   the safe default. Could test by giving a clearly-project-only
+   user message and checking whether type=user still wins.
+2. **File hygiene** — the model treats "memory exists for this
+   user" as license to extend that file rather than spawning a
+   new one per topic. Could test by checking whether new
+   content with different ``type`` than the existing file
+   creates a new ``.md`` or grows the old one.
+3. **Topic coupling** — even within ``user`` type, three
+   thematically different topics (engineer role / fever / project
+   completion) ended up in one file. Could test by checking the
+   per-file topical cohesion.
+
+Phase 18+ memory-eval iteration candidates this surfaces:
+
+- A new sample family ``M-type-discrimination`` where the user
+  message is unambiguously ``project`` or ``reference``; rubric
+  scores whether the chosen ``type`` matches the unambiguous
+  ground truth.
+- A new programmatic scorer
+  ``MemoryFileSeparationScorer`` that compares the post-write
+  state against the pre-write fixture and verifies that
+  topic-distinct content lands in a new file rather than
+  extending an existing one.
+- A "memory hygiene" rubric for warm scenarios where the model
+  must decide between editing an existing file and creating a
+  new one.
+
+This is **not actionable inside Phase 17** — Phase 17's
+acceptance was "the parser accepts CC files and the CLI shows
+them"; the hygiene of the model's *writing* behavior is upstream
+of Phase 17 scope. Recording here so the deferred frontier picks
+it up if Phase 18+ reopens the eval coverage map at decision
+surface #4.
+
 ---
 
 ## Closing the phase
