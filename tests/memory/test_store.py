@@ -125,6 +125,35 @@ class TestFilesystemMemoryStoreHappy:
         catalog = store.discover()
         assert set(catalog.keys()) == {"alpha", "beta", "gamma"}
 
+    def test_memory_md_index_silently_skipped(self, tmp_path: Path) -> None:
+        """P17-T3 (D37.5): MEMORY.md is reserved as the LLM-visible
+        index file (D36.10), never a memory body. discover() must
+        skip it without firing a ``memory_missing_frontmatter`` or
+        any other warning, regardless of the MEMORY.md content shape.
+        Dogfood (2026-06-06) showed Phase 16 left this warning on
+        every session startup; T3 closes it.
+        """
+        d = tmp_path / "memdir"
+        _write_memory(d, "a.md", name="alpha", id_="01HA000000")
+        d.mkdir(exist_ok=True)
+        # Index-shaped content — no frontmatter, just pointer lines.
+        (d / "MEMORY.md").write_text("- [Alpha](a.md) — first entry\n", encoding="utf-8")
+        store = FilesystemMemoryStore(project_dir=d)
+        catalog = store.discover()
+        assert set(catalog.keys()) == {"alpha"}, (
+            "MEMORY.md should not appear as a discovered memory"
+        )
+
+    def test_memory_md_only_yields_empty_store(self, tmp_path: Path) -> None:
+        """P17-T3 (D37.5): a fresh project that has only seeded the
+        MEMORY.md index file but no memory bodies yet → discover
+        returns an empty dict cleanly, without warnings."""
+        d = tmp_path / "memdir"
+        d.mkdir()
+        (d / "MEMORY.md").write_text("# Memory index\n\n(empty)\n", encoding="utf-8")
+        store = FilesystemMemoryStore(project_dir=d)
+        assert store.discover() == {}
+
 
 class TestFilesystemMemoryStoreFaultTolerance:
     def test_malformed_mixed_with_valid_only_valid_loaded(self, tmp_path: Path) -> None:

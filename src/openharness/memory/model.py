@@ -348,6 +348,13 @@ def parse_memory(path: Path) -> Memory | None:
     truly required fields with wrong type → skip entirely (None + warn).
     Same skip-not-fail discipline as :func:`parse_skill` / :func:`parse_command`.
     """
+    # P17-T3 (D37.5): MEMORY.md is reserved as the LLM-visible index
+    # file (D36.10), never a memory body. Skip silently — the file
+    # isn't malformed, it's just not what we're looking for. The
+    # store's ``_merge_dir`` loop continues past a ``None`` return,
+    # same as for any other parse-rejected file.
+    if path.name == "MEMORY.md":
+        return None
     parsed, body = read_frontmatter_dict(path, logger_name="memory")
     if parsed is None:
         return None
