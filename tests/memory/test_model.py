@@ -152,13 +152,25 @@ class TestMemoryDataclass:
         with pytest.raises(ValueError, match="invalid memory name"):
             _build_memory(name=name)
 
-    def test_empty_id_rejected(self) -> None:
-        with pytest.raises(ValueError, match="id must be non-empty"):
+    def test_empty_id_still_rejected(self) -> None:
+        """Phase 17 D37.1: id is Optional[str] = None at dataclass level
+        (so CC-style frontmatter can omit it), but an EMPTY id is still
+        a frontmatter bug worth catching. ``__post_init__`` accepts
+        None but rejects empty / whitespace-only strings."""
+        with pytest.raises(ValueError, match="id, when provided, must be non-empty"):
             _build_memory(id="")
 
-    def test_whitespace_only_id_rejected(self) -> None:
-        with pytest.raises(ValueError, match="id must be non-empty"):
+    def test_whitespace_only_id_still_rejected(self) -> None:
+        with pytest.raises(ValueError, match="id, when provided, must be non-empty"):
             _build_memory(id="   ")
+
+    def test_none_id_accepted(self) -> None:
+        """Phase 17 D37.1: Memory(id=None, ...) is valid construction.
+        parse_memory always provides a non-None id (auto-generated when
+        the frontmatter omits the field), but direct callers may
+        construct with id=None for test/spike purposes."""
+        m = _build_memory(id=None)
+        assert m.id is None
 
     def test_empty_description_rejected(self) -> None:
         with pytest.raises(ValueError, match="description must be non-empty"):
@@ -410,17 +422,78 @@ class TestParseMemoryErrors:
 
     @pytest.mark.parametrize(
         "field",
-        ["id", "name", "description", "type", "scope", "created_at", "updated_at"],
+        ["name", "description", "type"],
     )
     def test_missing_required_field(self, tmp_path: Path, field: str) -> None:
-        # Drop the named field from valid frontmatter → parser rejects.
-        # We rebuild the frontmatter without that field rather than text-
-        # replacing, so we catch each missing-field path independently.
+        """Phase 17 D37.1/D37.2 narrowed the strict-required set to
+        name + description + type (matching the D36.10 CC contract).
+        The other Phase 10 fields (id, scope, created_at, updated_at)
+        now auto-fill — see test_missing_optional_field_auto_fills."""
         content_lines = _VALID_FRONTMATTER.splitlines()
         filtered = [ln for ln in content_lines if not ln.startswith(f"{field}:")]
         path = tmp_path / "x.md"
         path.write_text("\n".join(filtered) + "\n")
         assert parse_memory(path) is None
+
+    @pytest.mark.parametrize(
+        "field",
+        ["id", "scope", "created_at", "updated_at"],
+    )
+    def test_missing_optional_field_auto_fills(self, tmp_path: Path, field: str) -> None:
+        """Phase 17 D37.1/D37.2: id / scope / created_at / updated_at
+        all auto-fill when frontmatter omits them. Parser produces a
+        valid Memory rather than warning-skipping."""
+        content_lines = _VALID_FRONTMATTER.splitlines()
+        filtered = [ln for ln in content_lines if not ln.startswith(f"{field}:")]
+        path = tmp_path / "x.md"
+        path.write_text("\n".join(filtered) + "\n")
+        memory = parse_memory(path)
+        assert memory is not None, f"omitting optional field {field!r} should auto-fill, not skip"
+        # Verify the field has a sensible auto-fill value (truthy in each case).
+        assert getattr(memory, field) is not None
+
+    def test_missing_id_produces_deterministic_hash(self, tmp_path: Path) -> None:
+        """D37.1 auto-generated id is sha1(name + resolved path)[:16] and
+        stable across reparses of the same file."""
+        content_lines = _VALID_FRONTMATTER.splitlines()
+        filtered = [ln for ln in content_lines if not ln.startswith("id:")]
+        path = tmp_path / "x.md"
+        path.write_text("\n".join(filtered) + "\n")
+        m1 = parse_memory(path)
+        m2 = parse_memory(path)
+        assert m1 is not None and m2 is not None
+        assert m1.id == m2.id
+        # 16 hex chars (the sha1[:16] slice).
+        assert m1.id is not None and len(m1.id) == 16
+        assert all(c in "0123456789abcdef" for c in m1.id)
+
+    def test_cc_style_frontmatter_parses_cleanly(self, tmp_path: Path) -> None:
+        """D36.10 mandated frontmatter (name + description +
+        metadata.type only) is the canonical CC schema. Parser must
+        accept it without warning-skipping any required field.
+        The 2026-06-06 dogfood was the regression case that motivated
+        D37.1/D37.2."""
+        cc_content = (
+            "---\n"
+            "name: user-role-and-values\n"
+            "description: Engineer between jobs, solo-building with AI\n"
+            "metadata:\n"
+            "  type: user\n"
+            "---\n"
+            "\n"
+            "Body text here.\n"
+        )
+        path = tmp_path / "user_role_and_values.md"
+        path.write_text(cc_content)
+        memory = parse_memory(path)
+        assert memory is not None
+        assert memory.name == "user-role-and-values"
+        assert memory.type.value == "user"
+        # Auto-filled fields all present + valid.
+        assert memory.id is not None
+        assert memory.scope.value == "private"
+        assert memory.created_at is not None
+        assert memory.updated_at is not None
 
     def test_invalid_name_regex(self, tmp_path: Path) -> None:
         path = tmp_path / "x.md"

@@ -110,10 +110,16 @@ class Memory:
     ``field(default_factory=list)`` boilerplate, and prevents accidental
     mutation that would silently change a shared default across
     instances.
+
+    **Phase 17 D37.1**: ``id`` moved to the optional section as
+    ``str | None = None``. ``parse_memory`` always provides an id —
+    either from frontmatter or auto-generated via
+    ``sha1(name + path)`` — so loaded memories still have a stable id.
+    Allowing None at the dataclass level lets the Claude-Code memory
+    write contract (D36.10) ship frontmatter without an id field.
     """
 
-    # Identity — required, immutable across rewrites
-    id: str
+    # Identity — required (name + description) immutable across rewrites
     name: str
     description: str
 
@@ -135,6 +141,10 @@ class Memory:
     # (P10-T2 will read ``.name`` + ``.source_path``)
     source_path: Path
 
+    # Identity — Phase 17 D37.1: optional. parse_memory generates from
+    # ``sha1(name + str(path.resolve()))[:16]`` when frontmatter omits it.
+    id: str | None = None
+
     # Lifecycle — defaults
     ttl_days: int | None = None
     disabled: bool = False
@@ -155,11 +165,11 @@ class Memory:
                 f"{NAME_PATTERN.pattern}"
                 " (alphanumeric + ``_-``, starts with letter)"
             )
-        # id: Phase 10 is loose — Phase 11 writer enforces ULID format
-        # at creation. Here we just require non-empty so hand-written
-        # files don't accidentally omit the field.
-        if not self.id or not self.id.strip():
-            raise ValueError(f"memory {self.name!r}: id must be non-empty")
+        # id: Phase 17 D37.1 — optional at the dataclass level. If
+        # provided, must be non-empty (catches ``id: ''`` frontmatter
+        # bugs without rejecting CC-style files that omit the field).
+        if self.id is not None and not self.id.strip():
+            raise ValueError(f"memory {self.name!r}: id, when provided, must be non-empty")
         # description: non-empty after strip (matches Command / Skill)
         if not self.description.strip():
             raise ValueError(f"memory {self.name!r}: description must be non-empty")
@@ -310,31 +320,39 @@ def _coerce_string_tuple(
 def parse_memory(path: Path) -> Memory | None:
     """Read a memory markdown file and build a :class:`Memory`.
 
-    Returns ``None`` and emits a warning log on any error (file read
-    failure, malformed YAML, missing required field, invalid enum value,
-    unparseable timestamp, scope rejection per D28.5). The store's
-    discovery loop treats ``None`` as "skip" so one bad memory never
-    prevents others from loading.
+    Returns ``None`` and emits a warning log on **required-field**
+    errors (file read failure, malformed YAML, missing ``name`` /
+    ``description`` / ``type``, invalid enum value, name regex
+    violation). The store's discovery loop treats ``None`` as "skip"
+    so one bad memory never prevents others from loading.
 
-    **Phase 10 D28.5 contract**: ``scope`` MUST be ``"private"``. Any
-    other value (including the future ``"team"``) → warning + skip. The
-    field exists in the schema so we don't need a frontmatter migration
-    when team scope arrives in Phase 11.
+    **Phase 17 D37.1 + D37.2 schema acceptance**: the parser accepts
+    both the legacy Phase 10/11 frontmatter (14 fields) AND the
+    Claude-Code-style frontmatter mandated by D36.10 (name +
+    description + metadata.type only, all other Phase 10 fields
+    omitted). When a Phase 10 field is missing:
 
-    **Signature handling**: if the frontmatter omits ``signature``, we
-    compute it via :func:`compute_memory_signature` so the
-    :class:`Memory` invariant (signature always present) holds without
-    asking hand-writers to compute SHA-256.
+    - ``id`` → auto-generated as ``sha1(name + str(path.resolve()))[:16]``.
+      Deterministic across reparses of the same file. Phase 11-written
+      memories that DID carry an id keep theirs (frontmatter wins).
+    - ``scope`` → defaults to ``MemoryScope.PRIVATE``.
+    - ``created_at`` → defaults to ``datetime.now(timezone.utc)``.
+    - ``updated_at`` → defaults to ``created_at`` value.
+    - ``signature`` → computed via :func:`compute_memory_signature`
+      (unchanged from Phase 10 behavior).
+    - ``type`` is read from either the top-level ``type:`` field (Phase 10)
+      OR the nested ``metadata.type`` (D36.10 CC schema); top-level
+      wins when both are present.
 
     Optional fields with wrong type → graceful degrade (default + warn);
-    required fields with wrong type → skip entirely (None + warn). Same
-    skip-not-fail discipline as :func:`parse_skill` / :func:`parse_command`.
+    truly required fields with wrong type → skip entirely (None + warn).
+    Same skip-not-fail discipline as :func:`parse_skill` / :func:`parse_command`.
     """
     parsed, body = read_frontmatter_dict(path, logger_name="memory")
     if parsed is None:
         return None
 
-    # ---- Required fields ----
+    # ---- Required fields (no auto-fill — D36.10 contract) ----
 
     name_raw = parsed.get("name")
     if not isinstance(name_raw, str) or not name_raw:
@@ -342,17 +360,19 @@ def parse_memory(path: Path) -> Memory | None:
         return None
     name: str = name_raw  # locked for downstream log labels
 
-    id_raw = parsed.get("id")
-    if not isinstance(id_raw, str) or not id_raw.strip():
-        _logger.warning("memory_missing_id", source_path=str(path), name=name)
-        return None
-
     description_raw = parsed.get("description")
     if not isinstance(description_raw, str) or not description_raw.strip():
         _logger.warning("memory_missing_description", source_path=str(path), name=name)
         return None
 
+    # ``type`` accepted from both Phase 10 top-level and D36.10
+    # ``metadata.type`` nested location. Top-level wins when both
+    # exist (Phase 10 legacy files take precedence over migration).
     type_raw = parsed.get("type")
+    if type_raw is None:
+        metadata_raw = parsed.get("metadata")
+        if isinstance(metadata_raw, dict):
+            type_raw = metadata_raw.get("type")
     if not isinstance(type_raw, str):
         _logger.warning("memory_missing_type", source_path=str(path), name=name)
         return None
@@ -368,16 +388,24 @@ def parse_memory(path: Path) -> Memory | None:
         )
         return None
 
+    # ---- Phase 17 D37.2 auto-fill: optional Phase 10/11 fields ----
+    # ``id``: frontmatter wins; else sha1(name + resolved path)[:16].
+    id_raw = parsed.get("id")
+    if isinstance(id_raw, str) and id_raw.strip():
+        memory_id: str = id_raw
+    else:
+        memory_id = hashlib.sha1(
+            (name + str(path.resolve())).encode("utf-8"),
+            usedforsecurity=False,
+        ).hexdigest()[:16]
+
+    # ``scope``: default PRIVATE if missing. Phase 10/11 files that
+    # carry ``scope: team`` still resolve correctly via the enum
+    # constructor.
     scope_raw = parsed.get("scope")
-    if not isinstance(scope_raw, str):
-        _logger.warning("memory_missing_scope", source_path=str(path), name=name)
-        return None
-    try:
-        scope = MemoryScope(scope_raw)
-    except ValueError:
-        # D28.5: ``team`` lands here in Phase 10 with an explicit warning
-        # naming the supported set so users debugging "why isn't my memory
-        # loading?" see the answer.
+    if scope_raw is None:
+        scope = MemoryScope.PRIVATE
+    elif not isinstance(scope_raw, str):
         _logger.warning(
             "memory_invalid_scope",
             source_path=str(path),
@@ -386,32 +414,44 @@ def parse_memory(path: Path) -> Memory | None:
             phase_10_supported=[s.value for s in MemoryScope],
         )
         return None
+    else:
+        try:
+            scope = MemoryScope(scope_raw)
+        except ValueError:
+            _logger.warning(
+                "memory_invalid_scope",
+                source_path=str(path),
+                name=name,
+                value=scope_raw,
+                phase_10_supported=[s.value for s in MemoryScope],
+            )
+            return None
 
+    # ``created_at`` / ``updated_at``: default to now() / created_at
+    # when frontmatter omits them. Wrong-type values that won't parse
+    # still skip (existing strict path).
+    now = datetime.now(timezone.utc)
     created_raw = parsed.get("created_at")
     if created_raw is None:
-        _logger.warning(
-            "memory_missing_field",
-            source_path=str(path),
-            name=name,
-            field="created_at",
+        created_at = now
+    else:
+        parsed_created = _parse_datetime_value(
+            created_raw, field_name="created_at", name=name, path=path
         )
-        return None
-    created_at = _parse_datetime_value(created_raw, field_name="created_at", name=name, path=path)
-    if created_at is None:
-        return None
+        if parsed_created is None:
+            return None
+        created_at = parsed_created
 
     updated_raw = parsed.get("updated_at")
     if updated_raw is None:
-        _logger.warning(
-            "memory_missing_field",
-            source_path=str(path),
-            name=name,
-            field="updated_at",
+        updated_at = created_at
+    else:
+        parsed_updated = _parse_datetime_value(
+            updated_raw, field_name="updated_at", name=name, path=path
         )
-        return None
-    updated_at = _parse_datetime_value(updated_raw, field_name="updated_at", name=name, path=path)
-    if updated_at is None:
-        return None
+        if parsed_updated is None:
+            return None
+        updated_at = parsed_updated
 
     # ---- Optional fields (wrong type → log + use default) ----
 
@@ -509,7 +549,7 @@ def parse_memory(path: Path) -> Memory | None:
 
     try:
         return Memory(
-            id=id_raw,
+            id=memory_id,
             name=name,
             description=description_raw,
             type=memory_type,
