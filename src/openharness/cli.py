@@ -950,19 +950,29 @@ def _emit_skill_catalog(skill_store: SkillStore) -> None:
         typer.echo(f"  {name.ljust(width)}  {skill.description}")
 
 
-def _emit_memory_catalog(memory_store: MemoryStore | None) -> None:
+def _emit_memory_catalog(memory_store: MemoryStore | None, memory_dir: Path | None) -> None:
     """Render ``/memory`` output — alphabetical 3-column
     ``<name> <type> <description>``, matching the ``oh memory list``
     text format exactly so users see the same data whether they query
     from outside or inside the REPL.
 
-    Missing memory subsystem (``--no-memory`` or memory disabled) →
-    ``(memory subsystem disabled)``. Empty store → ``(no memories yet)``
-    (matches ``oh memory list`` empty branch). D37.4 column widths.
+    First line is a ``(memory dir: <path>)`` header — surfaces the
+    per-cwd hashed dir name (``get_project_memory_dir`` produces
+    ``<basename>-<sha1(resolved_cwd)[:12]>``) so a wrong-cwd run shows
+    immediately rather than rendering an unrelated project's memories
+    without explanation. Skipped when the subsystem is off (no dir to
+    show).
+
+    Missing memory subsystem (``--no-enable-memory`` or
+    ``settings.enable_memory=False``) → ``(memory subsystem disabled)``.
+    Empty store → ``(no memories yet)`` (matches ``oh memory list``
+    empty branch). D37.4 column widths.
     """
     if memory_store is None:
         typer.echo("(memory subsystem disabled)")
         return
+    if memory_dir is not None:
+        typer.echo(f"(memory dir: {memory_dir})")
     memories = list(memory_store.discover().values())
     if not memories:
         typer.echo("(no memories yet)")
@@ -1298,9 +1308,11 @@ async def _run_chat(
             # ``/memory`` in REPL — mirrors ``oh memory list`` text format so
             # users don't have to leave the chat to inspect the memory store
             # the LLM is reading from. Read-only; identical 3-column layout
-            # (name / type / description) as ``oh memory list``.
+            # (name / type / description) as ``oh memory list``. First line
+            # is the ``(memory dir: ...)`` header so wrong-cwd runs surface
+            # immediately rather than rendering an unrelated project's data.
             if user_input == "/memory":
-                _emit_memory_catalog(memory_store)
+                _emit_memory_catalog(memory_store, memory_dir)
                 continue
             # P11-T5 (D29.6): force full LLM-based compaction. Same
             # primitive as auto-compact L4, but invoked unconditionally

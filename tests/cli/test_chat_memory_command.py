@@ -92,12 +92,16 @@ class TestMemoryBuiltinEmpty:
 
         result = CliRunner().invoke(cli_module.app, ["chat"])
         assert result.exit_code == 0
+        # Header line shows the per-cwd memory dir even when empty.
+        assert "(memory dir:" in result.stdout
+        assert str(_project_memory_dir()) in result.stdout
         assert "(no memories yet)" in result.stdout
 
     def test_memory_subsystem_disabled_message(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # --no-memory flips the memory_store wiring off → /memory should
-        # tell the user the subsystem isn't running, not silently echo
-        # "(no memories yet)" which would be misleading.
+        # --no-enable-memory flips the memory_store wiring off → /memory
+        # should tell the user the subsystem isn't running, not silently
+        # echo "(no memories yet)" which would be misleading. No dir header
+        # in this branch because there's no resolved dir to show.
         _set_minimum_env(monkeypatch)
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
         _stub_input_sequence(monkeypatch, ["/memory", "/exit"])
@@ -105,6 +109,7 @@ class TestMemoryBuiltinEmpty:
         result = CliRunner().invoke(cli_module.app, ["chat", "--no-enable-memory"])
         assert result.exit_code == 0
         assert "(memory subsystem disabled)" in result.stdout
+        assert "(memory dir:" not in result.stdout
 
 
 # --------------------------------------------------------------------------- #
@@ -122,9 +127,15 @@ class TestMemoryBuiltinRendering:
 
         result = CliRunner().invoke(cli_module.app, ["chat"])
         assert result.exit_code == 0
-        # Alphabetical: alpha appears before zebra.
+        # Memory dir header sits ABOVE both entries — wrong-cwd would be
+        # immediately visible from this header.
+        header_idx = result.stdout.find("(memory dir:")
         alpha_idx = result.stdout.find("alpha-pref")
         zebra_idx = result.stdout.find("zebra-pref")
+        assert header_idx != -1
+        assert header_idx < alpha_idx
+        assert str(_project_memory_dir()) in result.stdout
+        # Alphabetical: alpha appears before zebra.
         assert alpha_idx != -1
         assert zebra_idx != -1
         assert alpha_idx < zebra_idx
