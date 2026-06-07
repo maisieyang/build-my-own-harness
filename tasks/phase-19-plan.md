@@ -455,6 +455,21 @@ plugins/credit-bureau-connectors ~/.openharness/plugins/credit-bureau-connectors
     拆两份提交：(10a) resolver-level alias、(10b) REPL substrate
     替换 + tab completion + multi-line paste
 
+11. **`oh memory gc` 子命令**: 扫 `~/.openharness/memory/` 下的
+    per-project memory 目录，识别 (a) cwd 不再存在的 / (b) 长时间
+    未更新的 / (c) 跟 Phase 17 D36.10 schema 不一致的，列表 + 交互
+    式确认删除。Driver = 2026-06-07 用户撞到 Phase 11 extraction
+    残留化石（`prefer-websearch-and-short-summary`, `test-directory-absent`
+    等，时间戳 Jun 1-3，Phase 17 T2 commit 5454975 删掉了 extraction
+    代码但没删存量文件）。**单次 driver 已被 mitigate**：`/memory`
+    输出顶部加了 `(memory dir: <path>)` header（commit `6b583d4`），
+    wrong-cwd 一眼可见。短期手动清化石 = `rm -rf
+    ~/.openharness/memory/<basename>-<sha1>/`，一次性。GC 子命令
+    需要 ratify (3+ open questions)：扫描条件优先级、自动删 vs 交互
+    确认、全局 vs 仅当前 cwd 同源、"schema 不一致"如何严格定义。
+    **第二次 driver 出现再做**——按 [[feedback-stop-at-marginal-decline]]
+    原则不预先打造防御性工具
+
 这些 deferred 项待真有 driver 时各自独立 phase 处理。Phase 19 收尾
 应该产生一个干净 baseline：CCPluginLoader 透明集成进 Phase 9
 PluginLoader 框架 + `engine/slash_skill.py` 零 diff 兑现作为 M3 的
