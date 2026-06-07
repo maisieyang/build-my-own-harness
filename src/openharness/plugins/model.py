@@ -57,6 +57,7 @@ commands/skills/bundles markdown files via the existing
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -543,3 +544,184 @@ def _parse_mcp_servers(
             continue
 
     return tuple(servers)
+
+
+# ---------------------------------------------------------------------------
+# Phase 19 — CC plugin format parser (D39.1 / D39.2 / D39.9)
+# ---------------------------------------------------------------------------
+
+
+_CC_PLUGIN_MANIFEST_RELPATH = (".claude-plugin", "plugin.json")
+
+
+def parse_cc_plugin(plugin_dir: Path) -> PluginManifest | None:
+    """Parse a CC-format plugin directory into a :class:`PluginManifest`.
+
+    CC plugin shape (per
+    ``finance-skills/.../plugins/<name>/.claude-plugin/plugin.json``):
+
+    .. code-block:: json
+
+        {
+          "name": "credit-report-reviewer",
+          "version": "0.1.0",
+          "description": "...",
+          "author": {"name": "Risk Engineering @ MyBank"}
+        }
+
+    Plus optional ``<plugin_dir>/skills/<skill-name>/SKILL.md`` directory
+    tree — discovered automatically by :func:`_scan_cc_skills_dir`.
+
+    Per D39.2 the output reuses the same :class:`PluginManifest` dataclass
+    as OH-format plugins; downstream :class:`PluginLoader.fan_out` does
+    not distinguish source format.
+
+    Per D39.9 (reversed D39.5): CC ``.mcp.json`` is **silently ignored**
+    in M2 — the returned manifest's ``mcp_servers`` is always ``()``.
+    OH's MCP layer is stdio-only (D15.1) and CC ``.mcp.json`` uses
+    HTTP + OAuth2 transport; mapping requires extending the MCP layer
+    in a separate phase.
+
+    Returns ``None`` on any unrecoverable error (manifest missing,
+    JSON malformed, required field missing). One bad plugin must not
+    block the discovery loop — same fault-tolerance model as
+    :func:`parse_manifest`.
+    """
+    manifest_path = plugin_dir.joinpath(*_CC_PLUGIN_MANIFEST_RELPATH)
+    if not manifest_path.is_file():
+        # Caller (PluginLoader) is responsible for routing; if we land here
+        # it's because the discover() dispatch saw a marker but the file
+        # disappeared between probe and read.
+        _logger.warning("plugin_cc_manifest_not_a_file", source_path=str(manifest_path))
+        return None
+
+    try:
+        text = manifest_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        _logger.warning(
+            "plugin_cc_manifest_read_failed",
+            source_path=str(manifest_path),
+            error=str(exc),
+        )
+        return None
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        _logger.warning(
+            "plugin_cc_manifest_json_parse_failed",
+            source_path=str(manifest_path),
+            error=str(exc),
+        )
+        return None
+
+    if not isinstance(parsed, dict):
+        _logger.warning(
+            "plugin_cc_manifest_not_a_mapping",
+            source_path=str(manifest_path),
+            actual_type=type(parsed).__name__,
+        )
+        return None
+
+    name = parsed.get("name")
+    raw_version = parsed.get("version")
+    description = parsed.get("description")
+
+    if not isinstance(name, str) or not name:
+        _logger.warning("plugin_cc_manifest_missing_name", source_path=str(manifest_path))
+        return None
+    if not isinstance(raw_version, (str, int, float)):
+        _logger.warning(
+            "plugin_cc_manifest_missing_version",
+            source_path=str(manifest_path),
+            name=name,
+        )
+        return None
+    version_str = str(raw_version)
+    if not version_str.strip():
+        _logger.warning(
+            "plugin_cc_manifest_empty_version",
+            source_path=str(manifest_path),
+            name=name,
+        )
+        return None
+    if not isinstance(description, str) or not description.strip():
+        _logger.warning(
+            "plugin_cc_manifest_missing_description",
+            source_path=str(manifest_path),
+            name=name,
+        )
+        return None
+
+    # CC's ``author`` field is a nested ``{"name": "..."}`` object. OH's
+    # ``PluginManifest.author`` is a flat ``str | None``. Extract
+    # ``author.name`` when both the outer field is a dict and the inner
+    # name is a non-empty string; everything else collapses to None.
+    # (Non-dict ``author`` — e.g. a bare string — is treated as "absent"
+    # rather than mapped to itself, to keep the projection rule explicit
+    # and reversible if CC ever extends author to additional fields.)
+    raw_author = parsed.get("author")
+    author: str | None = None
+    if isinstance(raw_author, dict):
+        author_name = raw_author.get("name")
+        if isinstance(author_name, str) and author_name.strip():
+            author = author_name
+
+    skills = _scan_cc_skills_dir(plugin_dir)
+
+    try:
+        return PluginManifest(
+            name=name,
+            version=version_str,
+            description=description,
+            source_path=plugin_dir,
+            author=author,
+            license=None,
+            homepage=None,
+            keywords=(),
+            openharness_version_min=None,
+            dependencies=(),
+            commands=(),  # CC has no commands concept
+            skills=skills,
+            bundles=(),  # CC has no bundles concept
+            hooks=(),  # CC hooks live in settings.json shell-command form (not M2)
+            mcp_servers=(),  # D39.9: silently ignored regardless of .mcp.json presence
+        )
+    except ValueError as exc:
+        # ``__post_init__`` rejected name regex / empty description / etc.
+        # Log + skip, mirroring parse_manifest's late-validation path.
+        _logger.warning(
+            "plugin_cc_manifest_validation_failed",
+            source_path=str(manifest_path),
+            name=name,
+            error=str(exc),
+        )
+        return None
+
+
+def _scan_cc_skills_dir(plugin_dir: Path) -> tuple[ComponentRef, ...]:
+    """Discover ``<plugin_dir>/skills/<skill-name>/SKILL.md`` files.
+
+    Returns ``ComponentRef(file="skills/<name>/SKILL.md")`` tuples in
+    alphabetical order by ``<name>``. ``skills/`` missing or empty →
+    ``()``. Subdirectories without a ``SKILL.md`` are skipped silently
+    (matches D39.4 "user's plugin dir may contain unrelated content"
+    fault tolerance).
+
+    The returned refs flow into Phase 9 ``PluginLoader._fan_out_skills``
+    which calls ``parse_skill`` per ref — Phase 17 T1's parser already
+    accepts CC frontmatter (multi-line ``description:`` block scalar).
+    """
+    skills_root = plugin_dir / "skills"
+    if not skills_root.is_dir():
+        return ()
+
+    refs: list[ComponentRef] = []
+    for entry in sorted(skills_root.iterdir()):
+        if not entry.is_dir():
+            continue
+        skill_md = entry / "SKILL.md"
+        if not skill_md.is_file():
+            continue
+        refs.append(ComponentRef(file=f"skills/{entry.name}/SKILL.md"))
+    return tuple(refs)
