@@ -2499,6 +2499,116 @@ def memory_path() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# P19-T3 (D39.7): oh plugins list                                             #
+# --------------------------------------------------------------------------- #
+#
+# Read-only discovery — calls PluginLoader.discover_with_format() only;
+# no fan_out so Python-hook modules don't get imported as a side effect
+# of asking "what plugins do I have installed?". Same role as
+# ``oh memory list`` / ``oh snapshot list``: a fast, side-effect-free
+# introspection entry point that confirms a freshly-dropped plugin dir
+# was actually discovered.
+
+plugins_app = typer.Typer(
+    name="plugins",
+    help="Inspect installed plugins (read-only).",
+)
+app.add_typer(plugins_app, name="plugins")
+
+
+@plugins_app.command("list", help="List installed plugins under ~/.openharness/plugins/.")
+def plugins_list(
+    format: str = typer.Option(
+        "text",
+        "--format",
+        "-f",
+        help="Output format: text (default) or json.",
+    ),
+    log_level: LogLevel | None = typer.Option(
+        None,
+        "--log-level",
+        help=(
+            "Logging level for discovery side events. Default WARNING — "
+            "use INFO to see plugin_discovered for each plugin, or DEBUG "
+            "for full discovery noise."
+        ),
+    ),
+) -> None:
+    """List discovered plugins with format / version / component counts.
+
+    Text format columns (alphabetical by plugin name):
+
+        NAME                          FORMAT  VERSION  SKILLS  MCP_SERVERS
+
+    Empty plugins root or no plugins discovered → ``(no plugins installed)``
+    text or ``[]`` JSON. CC plugins always report ``MCP_SERVERS=0`` per
+    D39.9 (``.mcp.json`` is silently ignored in M2 — HTTP MCP transport
+    support is a future phase). Plugins whose manifest fails to parse
+    do not appear in the output; re-run with ``--log-level INFO`` to see
+    the discovery events (``plugin_discovered``, ``plugin_dual_manifest``).
+    """
+    import json
+
+    # Configure structlog once so per-discovery INFO events stay out of
+    # stdout in the default (WARNING) case but become visible behind
+    # ``--log-level INFO``. Without this call structlog's default
+    # PrintLoggerFactory writes every level to stdout regardless.
+    configure_logging(level=log_level or "WARNING", format="console")
+
+    plugins_dir = Path.home() / ".openharness" / "plugins"
+    loader = PluginLoader(plugins_dir)
+    results = loader.discover_with_format()
+
+    if not results:
+        if format == "json":
+            typer.echo("[]")
+            return
+        typer.echo("(no plugins installed)")
+        return
+
+    # D39.7 alphabetical-by-name. tuple() unpacking + sort separately.
+    ordered = sorted(results.items(), key=lambda kv: kv[0])
+
+    if format == "json":
+        data = [
+            {
+                "name": name,
+                "format": fmt,
+                "version": manifest.version,
+                "skills_count": len(manifest.skills),
+                "mcp_servers_count": len(manifest.mcp_servers),
+                "source_path": str(manifest.source_path),
+            }
+            for name, (manifest, fmt) in ordered
+        ]
+        typer.echo(json.dumps(data, indent=2))
+        return
+
+    # Text format: 5 columns. Widths sized to data + minimum header width.
+    name_width = max(len(name) for name, _ in ordered)
+    name_width = max(name_width, len("NAME")) + 2
+    fmt_width = max(len("FORMAT"), 2) + 2
+    version_width = max(len(manifest.version) for _, (manifest, _) in ordered)
+    version_width = max(version_width, len("VERSION")) + 2
+    skills_col_width = len("SKILLS") + 2
+    typer.echo(
+        f"{'NAME':<{name_width}}"
+        f"{'FORMAT':<{fmt_width}}"
+        f"{'VERSION':<{version_width}}"
+        f"{'SKILLS':<{skills_col_width}}"
+        "MCP_SERVERS"
+    )
+    for name, (manifest, fmt) in ordered:
+        typer.echo(
+            f"{name:<{name_width}}"
+            f"{fmt:<{fmt_width}}"
+            f"{manifest.version:<{version_width}}"
+            f"{len(manifest.skills):<{skills_col_width}}"
+            f"{len(manifest.mcp_servers)}"
+        )
+
+
+# --------------------------------------------------------------------------- #
 # P13-T2 (D31.6): oh snapshot list / show / gc                                #
 # --------------------------------------------------------------------------- #
 #
