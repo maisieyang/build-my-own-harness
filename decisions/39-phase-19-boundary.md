@@ -44,7 +44,7 @@ cp -r /path/to/finance-skills/mybank-credit-risk/plugins/credit-report-reviewer 
 |---|---|---|---|
 | G1.1 manifest | `.claude-plugin/plugin.json` (JSON, 4 字段: name/version/description/author) | `manifest.yaml` (YAML, name/version/description/components/hooks/mcp_servers) | loader 扩展：检测 `.claude-plugin/plugin.json` → 走 CC 解析；不存在则回退 `manifest.yaml` |
 | G1.2 skill 文件位置 | `skills/<n>/SKILL.md` (目录形态 + 文件名固定) | `<n>.md` (平铺 + 文件名 = skill 名) | loader 扫描 plugin 目录的 `skills/*/SKILL.md`，合成 `PluginManifest.skills` 列表 |
-| G1.3 内嵌 MCP | `.mcp.json` (`{"mcpServers": {...}}` 标准 MCP schema) | `manifest.yaml` 顶级 `mcp_servers:` | loader 读 `.mcp.json` 注入 `PluginManifest.mcp_servers`，schema 已等价 |
+| G1.3 内嵌 MCP | `.mcp.json` (`{"mcpServers": {...}}` 标准 MCP schema) | `manifest.yaml` 顶级 `mcp_servers:` | ~~loader 读 `.mcp.json` 注入 `PluginManifest.mcp_servers`，schema 已等价~~ **REVERSED by D39.9** — `.mcp.json` 退出 M2 scope（OH MCP layer 是 stdio-only，CC `.mcp.json` 全部 HTTP+OAuth2，transport 不匹配）。**M2 静默忽略 `.mcp.json`**；HTTP MCP transport 扩展归独立 phase |
 
 **M3 (Phase 20) 范围内（本 phase 不做）**：`agents/<n>.md`
 declarative sub-agent（含 `tools:` 白名单 — 跟 OH permission Tier 映射
@@ -73,7 +73,8 @@ declarative sub-agent（含 `tools:` 白名单 — 跟 OH permission Tier 映射
 
 - `~/.openharness/plugins/<plugin-name>/` **同时识别** 两种 plugin 形态：
   - **CC 形态**：含 `.claude-plugin/plugin.json` + 可选 `skills/<n>/SKILL.md`
-    目录树 + 可选 `.mcp.json`
+    目录树。~~+ 可选 `.mcp.json`~~ **D39.9 撤回** — `.mcp.json`
+    M2 静默忽略
   - **OH 形态**：含 `manifest.yaml`（Phase 9 既有契约）
 - CC plugin 的 skill 经 `oh chat` `/<plugin-name>__<skill-name>`
   触发，复用 Phase 18 的 synth envelope helper（**helper 本身零改动**，
@@ -112,6 +113,8 @@ declarative sub-agent（含 `tools:` 白名单 — 跟 OH permission Tier 映射
 
 **不在 phase 范围（M3 / 后续 phase）**：
 
+- ❌ CC `.mcp.json` 解析（D39.9 反转 D39.5 — OH MCP layer stdio-only
+  vs CC HTTP+OAuth2，独立 phase 处理）
 - ❌ CC `agents/<n>.md` declarative sub-agent（M3 / Phase 20）
 - ❌ CC `agents:` 中 `tools:` 白名单到 OH permission Tier 的映射
 - ❌ CC `marketplace.json` 多 plugin 聚合（fan-out 入口）
@@ -244,7 +247,7 @@ Phase 9 行为）。
 **Rationale**：
 - 用户的 plugins 目录可能 cp 进了无关内容（草稿、README、`.git`）；
   warning spam 没有意义
-- 真出问题（写错 plugin 但目录不被发现），D39.5 的 `oh plugins list`
+- 真出问题（写错 plugin 但目录不被发现），D39.7 的 `oh plugins list`
   会立即暴露 — 不是 silent failure
 - 与 OH `manifest.yaml` 缺失行为一致 — 一条 fault tolerance 规则
   覆盖两种格式
@@ -253,13 +256,17 @@ Phase 9 行为）。
 （CC 顶级 SKILL.md 不被认作 plugin — 用户继续走 D38.7 单文件路径放
 `~/.openharness/skills/<n>.md`）
 
-### D39.5 — `.mcp.json` 在 M2 中**包含**（不分 M2.5 sub-phase）
+### D39.5 — ~~`.mcp.json` 在 M2 中**包含**~~ — **REVERSED by D39.9** (2026-06-07)
 
-**Recommended**：M2 解析 `<plugin>/.mcp.json` 并合成
+> ⚠️ **此决策已于 T1.1 实施开始前被撤回。** 原始 Recommended 文本保留
+> 作为方法论审计记录（"我们考虑过、ratify 过、然后在实施前发现 schema
+> 假设错误而撤回"）。新生效决策见 **D39.9 — `.mcp.json` 退出 M2 scope**。
+
+**Recommended（已撤回）**：M2 解析 `<plugin>/.mcp.json` 并合成
 `PluginManifest.mcp_servers`。Schema 等价 — `{"mcpServers": {server_id:
 {...}}}` 直接映射到 OH 既有 `McpServerConfig` dataclass。
 
-**Rationale**：
+**Rationale（已撤回）**：
 - finance-skills 实物里 `credit-bureau-connectors` plugin 就是
   `.mcp.json` only（4 个字段 plugin.json + 3 MCP servers）；不支持等
   于 M2 dogfood 范围只能覆盖一半实际 plugin 形态
@@ -267,11 +274,12 @@ Phase 9 行为）。
   helper，~20 LoC，scope 增量小
 - 推迟到 M2.5 等于多一次 ratify ceremony — 单一 phase 拿掉就好
 
-**Alternatives 不选**：
-- 推迟到 M2.5：意味着 M2 收尾时 `credit-bureau-connectors` 仍要 cp
-  `.mcp.json` 出去手动配，回到 G1 起点
-- 引入新 `CCMcpConfig` schema：现有 `McpServerConfig` 已经覆盖
-  http/stdio/auth — 无差异
+**为什么撤回（D39.9 详述）**：boundary doc 起草时未审 OH MCP 层实际
+transport 覆盖。OH 的 `McpServerConfig` + `McpClientPool` 严格 stdio-only
+（D15.1, Phase 5）；finance-skills `.mcp.json` 全用 HTTP + OAuth2。
+schema **不**等价 — 是不同 transport。强行映射要么需要扩展 OH MCP 层
+（独立 phase 的体量），要么需要 partial-skip HTTP 条目（破 "schema 等价"
+本意）。
 
 ### D39.6 — 双 manifest 共存 = CC 优先 + warn
 
@@ -325,6 +333,67 @@ my-old-plugin                 oh      1.0.0    2       1
 **Anti-scope**：本 phase **不**实装 `oh plugins show <name>`、
 `oh plugins enable/disable`、`oh plugins refresh`。仅 list。
 
+### D39.9 — `.mcp.json` 退出 M2 scope（撤回 D39.5，2026-06-07 T1.1 开始前）
+
+**Chosen**：M2 **不**解析 `.mcp.json`。`parse_cc_plugin` 始终返回
+`PluginManifest.mcp_servers=()`。当 plugin 目录含 `.mcp.json` 时：
+
+- M2 **静默忽略**（不 emit WARN — 类比 D39.4 plugin dir 缺 manifest =
+  silent skip 哲学：用户的 plugin 目录本来就可能有 M2 不识别的副产物）
+- `oh plugins list` 的 `MCP_SERVERS` 列对该 plugin 显示 `0`
+- 用户若需 HTTP MCP server，仍可走 OH 既有 `OPENHARNESS_MCP_SERVERS_*`
+  env 配置（stdio-only），或等 `.mcp.json` HTTP 支持单独 phase 落地
+
+**Rationale**（撤回根因 + 处理路径）：
+
+1. **撤回根因**：D39.5 起草时声称 ".mcp.json schema 等价于 OH
+   `mcp_servers:`"。T1.1 开始前 grep `src/openharness/mcp/` 才发现：
+   - OH `McpServerConfig.__post_init__` 严格要求 `command` 非空 tuple
+     → HTTP `.mcp.json` 条目（`{type: http, url, auth}`，无 command）
+     直接 `ValueError`
+   - OH `McpClientPool` 唯一 transport 路径是
+     `mcp.client.stdio.stdio_client`（client.py:50/132）
+   - D15.1 (Phase 5) 明文锁死 stdio-only 范围
+   - finance-skills `credit-bureau-connectors/.mcp.json` 3 个 server
+     全部 HTTP + OAuth2 — 与 OH 当前 transport 覆盖完全不交
+
+2. **D39 §六 audit 漏审**：原表把 mcp 列为 `unchanged` —— 实际是
+   "M2 *尝试* 扩展，但 transport 不匹配会硬碰 `McpServerConfig` 的
+   contract"。这是 boundary-doc-time 的具体缺失：审 layer 时只看了
+   是否有 import 路径，没看 transport 覆盖矩阵。教训记入 retro §2。
+
+3. **为什么 silent ignore 而不是 partial parse + WARN**：
+   - WARN spam 对每个有 `.mcp.json` 的 plugin 都发一次，包括以后
+     M3 / M4 引入 HTTP 支持后还没升级的旧 OH 版本 — 不合 D39.4 哲学
+   - 用户的预期是"M2 不识别 .mcp.json"（M2 boundary doc 这么写了）；
+     silent 是 honest，partial 是 misleading
+   - 真正想用 HTTP MCP 的用户会在 `oh plugins list` 看到 0 servers
+     + 决定走 env 配置或等后续 phase
+
+**M2 dogfood 范围变化**：
+
+- ✅ `credit-report-reviewer` plugin（4 个 skill，0 个 MCP）— 完整跑通
+  T4 dogfood
+- ⚠️ `credit-bureau-connectors` plugin（0 个 skill，3 个 HTTP MCP）—
+  **不**进 T4 dogfood：plugin 本身会被 discover（plugin.json 解析成功），
+  `oh plugins list` 显示 `MCP_SERVERS=0`；这是 honest reporting，但不
+  是端到端 .mcp.json 验证。dogfood retro §1 显式标注此 plugin 的
+  partial loading 状态
+
+**Anti-scope（D39.9 加严）**：
+- 本 phase **不**加 `_parse_mcp_json` helper
+- 本 phase **不**扩 `McpServerConfig` 加 HTTP type
+- 本 phase **不**改 `McpClientPool` / `client.py`
+- 本 phase **不** emit `mcp_http_transport_unsupported` 类型 WARN
+
+**未来 phase**（deferred）：
+- 独立 phase（提案 D40 / Phase 20+）扩展 OH MCP 层支持 HTTP + OAuth2
+  + 等价 transport；该 phase 完成后才有意义再加 `_parse_mcp_json`
+- Open frontier 第 9 项（`.mcp.json` 处理）以此 D39.9 reversal 为
+  reference 锚定
+
+---
+
 ### D39.8 — Observability：`plugin_discovered` 加 `format` 字段（不引入新事件）
 
 **Recommended**：复用 Phase 9 既有事件（如不存在则在 T1 同步加），
@@ -363,14 +432,17 @@ Phase 19 GA 需要满足：
 rm ~/.openharness/skills/parse-credit-report.md  # 清掉 Phase 18 M1 dogfood 单文件
 cp -r /Users/yangxiyue/2026/aa/harness/finance-skills/mybank-credit-risk/\
 plugins/credit-report-reviewer ~/.openharness/plugins/credit-report-reviewer
+# 可选 — cp credit-bureau-connectors 验证 D39.9 静默忽略 .mcp.json：
 cp -r /Users/yangxiyue/2026/aa/harness/finance-skills/mybank-credit-risk/\
 plugins/credit-bureau-connectors ~/.openharness/plugins/credit-bureau-connectors
 
 # 验证
 oh plugins list
-# 期望输出：
+# 期望输出（D39.9 撤回 .mcp.json 解析后）：
 #   credit-report-reviewer        cc  0.1.0  4 skills  0 mcp
-#   credit-bureau-connectors      cc  0.1.0  0 skills  3 mcp
+#   credit-bureau-connectors      cc  0.1.0  0 skills  0 mcp   ← 0 mcp 是
+#                                                                D39.9 honest
+#                                                                reporting
 
 oh chat
 >>> /skills
@@ -401,8 +473,11 @@ oh chat
     bundles/hooks 默认空）
   - D39.4 silent skip 行为对 invalid plugin dir（README 文件、`.git`
     目录、空目录）
-  - D39.5 `.mcp.json` 解析成 `McpServerConfig` tuple（含 http +
-    auth.oauth2 + stdio 三种 server type）
+  - **D39.9 negative test**: plugin 目录含 `.mcp.json` → `parse_cc_plugin`
+    返回 `mcp_servers=()`；不 emit WARN；不 import / 不依赖
+    `McpServerConfig` 任何 HTTP-shape 字段。Test 同时 grep
+    `plugins/model.py` 源码确认无 `.mcp.json` 字面量引用（forcing
+    function — 跟 D38 §六 `compact.py` 的 `synth_` 检查同款思路）
   - D39.6 双 manifest WARN 事件 emit + ignored manifest 不进 fan_out
   - D39.7 `oh plugins list` 输出 4 columns text + `--format json`
   - D39.8 `plugin_discovered` INFO 事件 payload 含 `format`
@@ -443,7 +518,11 @@ oh chat
 9. ❌ `{args}` substitution into skill body
 10. ❌ `oh plugins show / enable / disable / refresh` — 仅 `list`
 11. ❌ 改 `engine/slash_skill.py`（一行 diff 都不允许 — 改 = 失败 → 回
-    boundary doc 加 D39.9）
+    boundary doc 加 D39.10+）
+18. ❌ **`.mcp.json` 解析任何 entry**（D39.9 撤回 D39.5；M2 静默忽略）
+19. ❌ **扩 `McpServerConfig` / `McpClientPool` / `client.py`**（D39.9）
+20. ❌ emit `mcp_http_transport_unsupported` 或其它 .mcp.json 相关
+    WARN/INFO 事件（D39.9 选 silent ignore 而非 partial parse + WARN）
 12. ❌ 改 `skills/store.py` / `skills/model.py`
 13. ❌ 改 `commands/expand.py` / `commands/store.py`
 14. ❌ 改 `bundles/` 任何文件
@@ -459,8 +538,8 @@ oh chat
 
 - `tests/plugins/test_cc_loader.py`（~120 LoC，D39.1/D39.4/D39.6 路由
   + 双格式冲突）
-- `tests/plugins/test_cc_model.py`（~80 LoC，D39.2 字段映射 + D39.5
-  `.mcp.json`）
+- `tests/plugins/test_cc_model.py`（~70 LoC，D39.2 字段映射 + D39.9
+  `.mcp.json` silent-ignore negative test）
 - `tests/cli/test_plugins_list.py`（~60 LoC，D39.7 子命令）
 
 **改造文件**：
@@ -468,7 +547,9 @@ oh chat
 - `src/openharness/plugins/model.py`：
   - 新增 `parse_cc_plugin(plugin_dir: Path) -> PluginManifest | None`
   - 新增内部 `_scan_cc_skills_dir(plugin_dir: Path) -> tuple[ComponentRef, ...]`
-  - 新增内部 `_parse_mcp_json(path: Path) -> tuple[McpServerConfig, ...]`
+  - ~~新增内部 `_parse_mcp_json(path: Path) -> tuple[McpServerConfig, ...]`~~
+    **D39.9 撤回** — 不加 `_parse_mcp_json` helper；`parse_cc_plugin`
+    始终设 `mcp_servers=()`
 - `src/openharness/plugins/loader.py`：
   - `PluginLoader.discover()` 加双格式 dispatch（D39.1） + D39.6
     WARN
@@ -503,7 +584,8 @@ Phase 19 M2 contract 跨以下 runtime layer。每层 verdict 必须 explicit：
 | Layer | Verdict | Reasoning |
 |---|---|---|
 | **plugins/loader** | **requires extension** | D39.1 双格式 dispatch + D39.6 dual-manifest WARN。最大变更点；本 phase 主要工作 |
-| **plugins/model** | **requires extension** | D39.2 复用 `PluginManifest` + 三个新 parser helper (CC plugin.json / skills 目录扫描 / `.mcp.json`) |
+| **plugins/model** | **requires extension** | D39.2 复用 `PluginManifest` + 两个新 parser helper (CC plugin.json / skills 目录扫描)。~~原有 `.mcp.json` helper~~ **D39.9 撤回** |
+| **mcp/config + client** | **unchanged** (D39.9 enforced) | OH MCP layer 严格 stdio-only（D15.1 Phase 5 锁定）。CC `.mcp.json` HTTP+OAuth2 transport 不匹配 `McpServerConfig` 当前 schema；M2 静默忽略 `.mcp.json`，不读、不映射、不 WARN。HTTP transport 扩展归独立 phase |
 | **observability** | **requires extension** | `plugin_discovered` payload 加 `format` 字段 + `plugin_dual_manifest` WARN 事件 |
 | **CLI subcommand surface** | **requires extension** | D39.7 新增 `oh plugins list` 子命令；现有命令 + typer flags **不变** |
 | **engine/slash_skill** | **unchanged** (load-bearing prediction) | Phase 18 retro §3 高置信预测 — CC plugin 经 `parse_skill` 进 SkillStore 后，slash trigger 路径**完全透明**。T1 加 `openharness.plugins` 到 forbidden imports list 作为 proactive guard |

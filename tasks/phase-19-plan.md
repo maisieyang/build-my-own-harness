@@ -3,6 +3,11 @@
 > Boundary contract: [`decisions/39-phase-19-boundary.md`](../decisions/39-phase-19-boundary.md).
 > Phase 18 retro 高置信预测背书: [`learnings/phase-18.md`](../learnings/phase-18.md) §3.
 > All 8 D39.x ratified 2026-06-07 (all Recommended defaults accepted).
+> **D39.9 added 2026-06-07** (T1.0 → T1.1 transition): D39.5 reversed
+> after pre-T1.1 audit revealed CC `.mcp.json` HTTP+OAuth2 transport
+> does not fit OH's stdio-only `McpServerConfig` (D15.1). `.mcp.json`
+> now silently ignored in M2; HTTP MCP support is a separate future
+> phase. See boundary doc D39.9 for full rationale.
 
 ## Overview
 
@@ -32,19 +37,21 @@
 - typer flag / settings schema — 零 diff（D39.7 只**新增** `plugins list`
   子命令，不改任何既有 flag）
 
-Expected net diff：约 **+120 LoC src + +260 LoC tests**:
+Expected net diff（**D39.9 调整后**）：约 **+100 LoC src + +220 LoC tests**:
 
-- T1 plugins/model.py: ~70 LoC (CC plugin.json + skills scan + .mcp.json)
-  + ~80 LoC tests
+- T1 plugins/model.py: ~50 LoC (CC plugin.json + skills scan;
+  ~~_parse_mcp_json removed by D39.9~~)
+  + ~70 LoC tests (含 D39.9 silent-ignore + source-leak forcing-function
+  negative tests)
 - T2 plugins/loader.py: ~50 LoC (双格式 dispatch + dual-manifest WARN)
-  + ~120 LoC tests + 1 LoC proactive guard
+  + ~120 LoC tests
 - T3 oh plugins list: ~30 LoC CLI + ~60 LoC tests
 - T4 dogfood: 0 src，retro §1 evidence only
 - T5 retro / CHANGELOG: docs only
 
-Total predicted: **~370 LoC** vs Phase 18 实测 ~1200 LoC（含 boundary
-+ plan + retro 三大块 doc 350 LoC）。M2 比 M1 小是因为 boundary 已建
-立，T1/T2 没有"新概念"工作量，只是格式翻译。
+Total predicted: **~320 LoC**（D39.9 让 T1 减重 ~30 LoC）vs Phase 18 实
+测 ~1200 LoC（含 boundary + plan + retro 三大块 doc 350 LoC）。M2 比
+M1 小是因为 boundary 已建立，T1/T2 没有"新概念"工作量，只是格式翻译。
 
 ## Architecture decisions (locked 2026-06-07)
 
@@ -61,22 +68,24 @@ Total predicted: **~370 LoC** vs Phase 18 实测 ~1200 LoC（含 boundary
 
 ### P19-T1: CC plugin format parser — `plugins/model.py`
 
-**Description**: 在 `plugins/model.py` 新增三个 helper 把 CC 形态
-plugin 目录翻译成既有 `PluginManifest`：
+**Description**: 在 `plugins/model.py` 新增两个 helper 把 CC 形态
+plugin 目录翻译成既有 `PluginManifest`（D39.9 撤回原计划的第三个
+`_parse_mcp_json` helper）：
 
 ```python
 def parse_cc_plugin(plugin_dir: Path) -> PluginManifest | None:
-    """Read .claude-plugin/plugin.json + scan skills/*/SKILL.md
-    + optional .mcp.json. Returns same PluginManifest as Phase 9
-    OH-format parser. None + warning on any error (same fault
-    tolerance model as parse_manifest)."""
+    """Read .claude-plugin/plugin.json + scan skills/*/SKILL.md.
+    Returns same PluginManifest as Phase 9 OH-format parser.
+    None + warning on any error (same fault tolerance model as
+    parse_manifest).
+
+    D39.9: ``.mcp.json`` is silently ignored — ``mcp_servers``
+    on the returned manifest is always ``()``. HTTP MCP transport
+    extension is a separate future phase.
+    """
 
 def _scan_cc_skills_dir(plugin_dir: Path) -> tuple[ComponentRef, ...]:
     """Glob plugin_dir/skills/*/SKILL.md → ComponentRef tuples."""
-
-def _parse_mcp_json(path: Path) -> tuple[McpServerConfig, ...]:
-    """Read .mcp.json -> McpServerConfig tuple via existing
-    _parse_mcp_servers logic (Phase 9)."""
 ```
 
 D39.2 字段映射（CC plugin.json → `PluginManifest`）：
@@ -90,7 +99,7 @@ D39.2 字段映射（CC plugin.json → `PluginManifest`）：
 | (CC has no field) | `license` / `homepage` / `keywords` / `dependencies` / `openharness_version_min` | None / `()` |
 | (CC has no field) | `commands` / `bundles` / `hooks` | `()` |
 | `skills/<n>/SKILL.md` (scan) | `skills: tuple[ComponentRef, ...]` | `()` (empty plugin OK) |
-| `.mcp.json -> mcpServers` | `mcp_servers: tuple[McpServerConfig, ...]` | `()` (no .mcp.json OK) |
+| ~~`.mcp.json -> mcpServers`~~ | `mcp_servers: tuple[McpServerConfig, ...]` | `()` **always** (D39.9 — `.mcp.json` silently ignored regardless of presence) |
 
 **T1.0 — Proactive guard FIRST** (per Phase 18 retro §3): 在
 **任何 T1 source code 之前**，先扩展 Phase 18 architecture isolation
@@ -115,8 +124,9 @@ FORBIDDEN_MODULE_PREFIXES = (
 **Acceptance**:
 
 - [ ] T1.0 proactive guard 已 commit 在任何 plugin parser 代码之前
-- [ ] `plugins/model.py` 新增 `parse_cc_plugin` 公共函数 + 两个
-  internal helper
+  （已完成 — commit `68c41a0`）
+- [ ] `plugins/model.py` 新增 `parse_cc_plugin` 公共函数 + 一个
+  internal helper `_scan_cc_skills_dir`
 - [ ] `parse_cc_plugin` 返回 `PluginManifest | None`；None 时已
   emit 至少一个 WARN 事件（与 `parse_manifest` 同 fault tolerance
   模型）
@@ -126,21 +136,29 @@ FORBIDDEN_MODULE_PREFIXES = (
   `PluginManifest.author` 顶层 str；缺失或非 dict → `None`
 - [ ] `_scan_cc_skills_dir` 按字母序返回 `ComponentRef`，路径形态
   严格 `skills/<n>/SKILL.md`；`skills/` 不存在或为空 → 返回 `()`
-- [ ] `_parse_mcp_json` 复用 Phase 9 `_parse_mcp_servers` 的 schema
-  + env interpolation；`.mcp.json` 不存在 → 返回 `()`；JSON 解析
-  失败 → 返回 `()` + WARN（不让 1 个坏 plugin 的 .mcp.json 干扰整
-  个 fan_out）
+- [ ] **D39.9 silent ignore**: plugin 目录含 `.mcp.json` →
+  `parse_cc_plugin` 返回 `mcp_servers=()`；**不** emit WARN；**不**
+  import `McpServerConfig` 或 mcp 模块任何符号
+- [ ] **D39.9 forcing function (source-leak guard)**: `plugins/model.py`
+  源码不含字面量 `.mcp.json` / `mcp.json` / `mcpServers` 字符串 —
+  与 D38 §六 closing rule 的 `compact.py` × `synth_` 同款思路。任
+  何 import `from openharness.mcp` 也由 D39.9 anti-scope 第 19 条
+  禁止
 - [ ] 单测覆盖：
   - 完整 fixture：`name + version + description + author.name +
-    skills/*/SKILL.md (3 个) + .mcp.json (2 server)` → 字段全对
+    skills/*/SKILL.md (3 个)` → 字段全对
   - minimal fixture：仅 `name + version + description` → `skills=()`
     `mcp_servers=()` `author=None`
-  - `.mcp.json` only fixture (credit-bureau-connectors 模型)：
-    `skills=()` `mcp_servers=(3,)`
+  - D39.9 negative test：plugin 目录加 dummy `.mcp.json`（任意 JSON
+    内容）→ `parse_cc_plugin` 仍返回 `mcp_servers=()`；caplog 无任何
+    `mcp_*` event；plugin 其它字段正常 load
   - 嵌套 `author` 非 dict（JSON 错写成 `"author": "string"`）→
     `author=None`，不 crash
   - JSON 解析失败 → None + WARN
   - 必需字段缺失 → None + 对应 WARN（每个字段一个 test）
+  - D39.9 source-leak forcing function：grep plugins/model.py for
+    `.mcp.json` / `mcpServers` / `mcp.json` 字面量 + `from
+    openharness.mcp` import → 必须 0 命中
 - [ ] **`engine/slash_skill.py` 零 diff**；T1.0 的 forbidden-imports
   test 持续绿
 - [ ] 全仓 regression 绿
@@ -260,12 +278,14 @@ tuple，让 `oh plugins list` 消费这个。`PluginManifest` 保持 D39.2
 - [ ] `PluginManifest` 无新增字段（D39.2 复用契约严守）
 - [ ] `engine/slash_skill.py` 零 diff
 
-### P19-T4: Dogfood — finance-skills `credit-report-reviewer` + `credit-bureau-connectors` 端到端
+### P19-T4: Dogfood — finance-skills `credit-report-reviewer` 端到端 (+ `credit-bureau-connectors` D39.9 negative)
 
 **Description**: Phase 18 T4 的演进版 — 不再 cp 单 .md 文件，而是
-cp 整个 plugin 目录树，验证 4 个 namespaced skill + 3 个 MCP server
-全部活过来。Forcing function：不通过 dogfood，T1-T3 单测全绿也不能
-算 Phase 19 done。
+cp 整个 plugin 目录树，验证 4 个 namespaced skill 全部活过来。
+**D39.9 调整**：MCP server 部分**不**端到端验证 —
+`credit-bureau-connectors` 改作 D39.9 silent-ignore negative
+dogfood（plugin 本身被发现，`.mcp.json` 静默忽略）。Forcing
+function：不通过 dogfood，T1-T3 单测全绿也不能算 Phase 19 done。
 
 **Acceptance**:
 
@@ -279,11 +299,13 @@ plugins/credit-report-reviewer ~/.openharness/plugins/credit-report-reviewer
 plugins/credit-bureau-connectors ~/.openharness/plugins/credit-bureau-connectors
   ```
 
-- [ ] `oh plugins list` 输出（INFO log 不开）应严格匹配：
+- [ ] `oh plugins list` 输出（INFO log 不开）应严格匹配（D39.9 — MCP
+  列两个 plugin 都是 0；`credit-bureau-connectors` 的 `.mcp.json`
+  silently ignored）：
 
   ```
   NAME                          FORMAT  VERSION  SKILLS  MCP_SERVERS
-  credit-bureau-connectors      cc      0.1.0    0       3
+  credit-bureau-connectors      cc      0.1.0    0       0   ← D39.9
   credit-report-reviewer        cc      0.1.0    4       0
   ```
 
@@ -334,10 +356,14 @@ plugins/credit-bureau-connectors ~/.openharness/plugins/credit-bureau-connectors
 2. **`PluginManifest` 复用 vs 新 dataclass**：实施中是否有任何字段
    需要 source_format / format-specific 字段？如果纯通过中间 tuple
    解决 → D39.2 决策正确
-3. **D39 §六 wiring audit 兑现**：4 个 extension + 11 unchanged + 0
-   bypass + 0 verification — 是否 13+ 层全部 verbatim 兑现？是否有新
-   `requires extension` 层 surfaced？
-4. **跟 M3 (Phase 20) 的衔接预测**：M2 解析 `author.name` 嵌套时摸到
+3. **D39 §六 wiring audit 兑现**：4 个 extension + 12 unchanged
+   （含 mcp/config + client per D39.9）+ 0 bypass + 0 verification —
+   是否全部 verbatim 兑现？是否有新 `requires extension` 层 surfaced？
+4. **D39.9 反转的方法论教训**：boundary doc §六 audit 起草时为什么没
+   抓到 OH MCP transport stdio-only 这个限制？补充检查项给下一个
+   phase（M3 / Phase 20）的 §六 audit 模板：跨 module 扩展时，不光检
+   查 import 路径，还检查目标 module 的 transport / 协议覆盖矩阵
+5. **跟 M3 (Phase 20) 的衔接预测**：M2 解析 `author.name` 嵌套时摸到
    的字段映射模式（嵌套 dict → 顶层 str），M3 解析 `agents/<n>.md`
    时的 `tools:` 白名单字段映射是否能复用同一模式？
 
@@ -366,10 +392,12 @@ plugins/credit-bureau-connectors ~/.openharness/plugins/credit-bureau-connectors
   无反例 = 抽象有效
 - [ ] retro 实测 LoC delta 与 boundary doc 预测 (+120 src / +260
   tests = +380) 的偏差记录
-- [ ] retro §六 verdict 对照：15 个预测层 verdict 是否全部如期；
-  有否新层 surfaced（按 Phase 17 → 18 的 100% 兑现节奏，Phase 19
-  是第 3 次验证 §六 audit methodology — 如果 13+ 层 verdict 全部
-  verbatim 兑现，可以谨慎宣称"methodology 成立"而非"巧合"）
+- [ ] retro §六 verdict 对照：16 个预测层 verdict（含 D39.9 新加
+  mcp/config + client 层）是否全部如期；有否新层 surfaced。**特别
+  说明**：D39.9 反转 D39.5 揭示 Phase 17 / 18 的 100% 兑现节奏在
+  Phase 19 起草阶段就已经断了一次（mcp 层漏审）—— Phase 19 §六
+  audit methodology 报告需 honest 标注这一"在 boundary doc 起草而非
+  实施期被抓"的失误位置（非 forgiving）
 
 ---
 
