@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 from openharness.engine.slash_skill import (
+    DEFAULT_EMPTY_ARGS_PLACEHOLDER,
     SYNTH_ID_PREFIX,
     synthesize_skill_envelope,
 )
@@ -47,20 +48,37 @@ def _make_skill(name: str = "parse-credit-report", body: str = "skill body") -> 
 
 
 class TestEnvelopeShape:
-    def test_args_empty_yields_two_messages(self) -> None:
+    """D38.8 (2026-06-07 user-time hotfix): envelope is ALWAYS 3 messages.
+
+    The original D38.3 had "args empty → 2 messages, end on tool_result"
+    intent — reversed because thinking-mode LLM providers (qwen3.7-max
+    observed) reject the 2-message shape ("reasoning_content must be
+    passed back" since the synth assistant tool_use has no real
+    reasoning content). When ``args`` is empty / whitespace, the trailing
+    user TextBlock carries :data:`DEFAULT_EMPTY_ARGS_PLACEHOLDER`.
+    """
+
+    def test_args_empty_yields_three_messages_with_placeholder(self) -> None:
         skill = _make_skill()
         envelope = synthesize_skill_envelope(skill, args="")
 
-        assert len(envelope) == 2
+        assert len(envelope) == 3
         assert envelope[0].role == "assistant"
         assert envelope[1].role == "user"
+        assert envelope[2].role == "user"
+        trailing = envelope[2].content[0]
+        assert isinstance(trailing, TextBlock)
+        assert trailing.text == DEFAULT_EMPTY_ARGS_PLACEHOLDER
 
-    def test_args_whitespace_only_yields_two_messages(self) -> None:
-        # D38.3: args.strip() decides — pure whitespace counts as empty,
-        # mirroring "user pressed enter without typing".
+    def test_args_whitespace_only_yields_three_with_placeholder(self) -> None:
+        # D38.8: args.strip() empty → placeholder, not the whitespace
+        # verbatim. Pre-D38.8 this was 2 messages.
         skill = _make_skill()
         envelope = synthesize_skill_envelope(skill, args="   \n\t")
-        assert len(envelope) == 2
+        assert len(envelope) == 3
+        trailing = envelope[2].content[0]
+        assert isinstance(trailing, TextBlock)
+        assert trailing.text == DEFAULT_EMPTY_ARGS_PLACEHOLDER
 
     def test_args_nonempty_yields_three_messages(self) -> None:
         skill = _make_skill()
@@ -243,5 +261,5 @@ def test_envelope_messages_are_fresh_list(args: str) -> None:
     env1 = synthesize_skill_envelope(skill, args=args)
     env2 = synthesize_skill_envelope(skill, args=args)
     env1.append("poison")  # type: ignore[arg-type]
-    expected_len = 3 if args.strip() else 2
-    assert len(env2) == expected_len
+    # D38.8: always 3 messages regardless of args content.
+    assert len(env2) == 3

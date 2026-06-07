@@ -329,6 +329,31 @@ tests by default? Probably yes, and the +220 prediction was
 based on Phase 9's old test density rather than the post-Phase-18
 forcing-function-heavy norm.
 
+**(e) User-time hotfix D38.8 (post-close-out)** — added after Phase
+19 was already pushed to origin. User tried
+`/credit-report-reviewer__parse-credit-report` with **no args** during
+post-phase exploration; qwen3.7-max returned 400
+`"reasoning_content in thinking mode must be passed back"`. The
+2-message envelope shape D38.3 originally specified for empty-args
+ends on a synthesized assistant `tool_use` that has no
+`reasoning_content` field — thinking-mode providers reject it.
+
+Both Phase 18 T4 and Phase 19 T4 dogfoods used **non-empty args**
+(`申请号12345`), exercising the 3-message path that provider tolerates.
+The 2-message path had unit-test cover (shape assertions) but never
+ran through a real LLM. **The methodology lesson is sharp**: boundary
+doc acceptance criteria phrased as code-shape assertions are NOT the
+same as end-to-end dogfood; D38.8 retro mandates that dogfood
+acceptance must enumerate every envelope-shape path the user can
+trigger, not just the "convenient" ones. Phase 20 (M3) boundary doc
+will carry this as an explicit pre-flight check.
+
+D38.8 chose protocol-level fix over provider-specific patch: always
+3 messages, with `DEFAULT_EMPTY_ARGS_PLACEHOLDER = "Please apply this
+skill now."` filling the trailing TextBlock when args are empty. The
+envelope is byte-shape-identical to the args-present case, which all
+known providers accept. Fix is in commit on the next push.
+
 ### Things that did not miss
 
 - D39.1 single PluginLoader vs separate CCPluginLoader: the

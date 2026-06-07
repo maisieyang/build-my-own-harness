@@ -214,9 +214,15 @@ class TestResolverOrder:
         assert isinstance(args_block, TextBlock)
         assert args_block.text == "task arg"
 
-    def test_skill_hit_without_args_yields_two_message_envelope(
+    def test_skill_hit_without_args_yields_three_message_envelope(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # D38.8 (2026-06-07 user-time hotfix): no-args envelope is now
+        # 3 messages including a placeholder trailing TextBlock. The
+        # pre-D38.8 2-message shape provoked "reasoning_content must be
+        # passed back" 400s from thinking-mode providers.
+        from openharness.engine.slash_skill import DEFAULT_EMPTY_ARGS_PLACEHOLDER
+
         _set_minimum_env(monkeypatch)
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
         home = _home(monkeypatch)
@@ -229,10 +235,12 @@ class TestResolverOrder:
         result = CliRunner().invoke(cli_module.app, ["chat"])
         assert result.exit_code == 0
         history = captured[0]
-        # D38.2 envelope = 2 messages (args empty) — no trailing TextBlock
-        assert len(history) == 2
+        assert len(history) == 3
         assert isinstance(history[0].content[0], ToolUseBlock)
         assert isinstance(history[1].content[0], ToolResultBlock)
+        trailing = history[2].content[0]
+        assert isinstance(trailing, TextBlock)
+        assert trailing.text == DEFAULT_EMPTY_ARGS_PLACEHOLDER
 
     def test_command_hit_uses_phase_5b_path_not_synth(
         self, monkeypatch: pytest.MonkeyPatch

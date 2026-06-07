@@ -101,6 +101,25 @@ Phase 18 (M1) entry preserved below.
   `~/.openharness/skills/` (the Phase 18 M1 path) don't need this
   flag — only plugin-installed skills do.
 
+### Fixed — D38.8 hotfix (post-Phase-19, user-time)
+
+- **Synth envelope is now always 3 messages.** Phase 18 D38.3's
+  empty-args branch (`/<skill>` typed with no args → 2-message
+  envelope ending on `tool_result`) provoked HTTP 400 from
+  thinking-mode providers (qwen3.7-max observed) with
+  `"reasoning_content in thinking mode must be passed back"`. The
+  synthesized assistant `tool_use` has no real thinking trace, and
+  the 2-message shape gave no structural break to satisfy the
+  provider's check. D38.8 reverses D38.3 for the empty-args clause
+  only: a trailing user `TextBlock` carrying
+  `DEFAULT_EMPTY_ARGS_PLACEHOLDER = "Please apply this skill now."`
+  is always appended. Envelope is now byte-shape-identical to the
+  args-present case; all known providers accept. The fix is
+  protocol-level (no provider-specific patches). Phase 18 T4 and
+  Phase 19 T4 dogfoods both used non-empty args so the empty path
+  was never exercised end-to-end — the methodology lesson is in
+  `learnings/phase-19.md` §2 (e).
+
 ### Documentation — Phase 19
 
 - [`decisions/39-phase-19-boundary.md`](./decisions/39-phase-19-boundary.md) —

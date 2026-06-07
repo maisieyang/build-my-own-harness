@@ -137,12 +137,18 @@ class TestL0SynthTransparency:
 
     def test_estimate_synth_matches_real_tool_envelope(self) -> None:
         """Synth and real-id tool envelopes must produce *identical* token
-        counts — proves no ID-prefix discrimination in the L0 path.
+        counts — proves no ID-prefix discrimination in the L0 path. Post-
+        D38.8 the synth envelope is always 3 messages (placeholder trailing
+        TextBlock when args empty); the hand-built reference mirrors that
+        shape exactly so token-count parity is testable.
         """
-        body = "X" * 5_000
-        synth = _synth_envelope(body)
+        from openharness.engine.slash_skill import DEFAULT_EMPTY_ARGS_PLACEHOLDER
 
-        # Hand-build a structurally identical envelope with a non-synth id.
+        body = "X" * 5_000
+        synth = _synth_envelope(body)  # args="" defaults the placeholder
+
+        # Hand-build a structurally identical 3-message envelope with a
+        # non-synth id and the same placeholder trailing TextBlock.
         real_id = "toolu_real_001"
         real = [
             ConversationMessage(
@@ -159,6 +165,10 @@ class TestL0SynthTransparency:
             ConversationMessage(
                 role="user",
                 content=[ToolResultBlock(type="tool_result", tool_use_id=real_id, content=body)],
+            ),
+            ConversationMessage(
+                role="user",
+                content=[TextBlock(text=DEFAULT_EMPTY_ARGS_PLACEHOLDER)],
             ),
         ]
         assert estimate_message_tokens(synth, model="qwen-plus") == estimate_message_tokens(

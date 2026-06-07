@@ -129,15 +129,21 @@ ID 用 `synth_` 前缀以便 observability / snapshot 后期识别"非真实 too
 - system_prompt 拼接：跟 Phase 5d Bundle 的 `system_prompt` override
   路径冲突；compact L4 不保留
 
-### D38.3 — Args 放在 user message 尾部，不 substitute 进 skill body
+### D38.3 — Args 放在 user message 尾部，不 substitute 进 skill body — **partially REVERSED by D38.8** (2026-06-07)
 
-**Chosen**：
+> ⚠️ **"args 为空 → 不追加 user message" clause** was reversed at
+> user-time after Phase 19 close-out. See **D38.8** below. The
+> "args 非空 → 追加 user TextBlock，内容 = args 原文" half holds
+> unchanged. Original text retained as audit trail.
 
-- args 非空 → 追加一条 user TextBlock，内容 = args 原文
-- args 为空 → 不追加 user message；信封停在 tool_result，等 LLM 自主
-  对 skill body 作出反应
+**Chosen（half reversed）**：
 
-**Rationale**：
+- args 非空 → 追加一条 user TextBlock，内容 = args 原文 ✅ **still
+  holds**
+- ~~args 为空 → 不追加 user message；信封停在 tool_result，等 LLM
+  自主对 skill body 作出反应~~ **REVERSED by D38.8** — see below
+
+**Rationale (un-reversed clauses)**：
 - CC 的 `SKILL.md` 格式**没有 `{args}` 占位符**（看 mybank 那批
   SKILL.md 验证）——substitute 进 body 需要扩展 schema 才合理，
   M1 不动 schema
@@ -146,8 +152,81 @@ ID 用 `synth_` 前缀以便 observability / snapshot 后期识别"非真实 too
 - 用户日后若想要 args 替换进 body 的语义，可以在 SKILL.md 加 `{args}`
   并在 M2/M3 引入支持——不破 M1 接口
 
-**Anti-scope**：M1 **不** 实现 `{args}` substitution；**不** 把 args
-塞进信封的 tool_result（保 tool_result == skill.body 原文）。
+**Anti-scope (un-reversed)**：M1 **不** 实现 `{args}` substitution；
+**不** 把 args 塞进信封的 tool_result（保 tool_result == skill.body
+原文）。
+
+### D38.8 — Empty-args 信封追加 placeholder TextBlock（撤回 D38.3 该 clause）
+
+**User-time bug surfaced 2026-06-07**：Phase 19 close-out 后，用户
+跑 `/credit-report-reviewer__parse-credit-report` （不带 args），
+qwen3.7-max 返回 400：
+
+```
+{"error": {"message": "The `reasoning_content` in the thinking mode
+ must be passed back to the API.",
+ "type": "invalid_request_error"}}
+```
+
+**根因**：D38.3 的 "args 为空 → 2 条消息" 信封以 assistant 的
+`tool_use` 开头 + user 的 `tool_result` 结尾，没有 trailing user
+content。Thinking-mode provider 看到这个形状会要求 assistant 的
+`tool_use` 必须带 `reasoning_content` 字段（thinking trace 回传）—— 但
+synth envelope 是我们合成的，没有 thinking turn，所以这个字段从未
+存在。3 条消息（args 非空）路径里，trailing user TextBlock 提供
+"new turn boundary"，provider 不再要求 reasoning_content。
+
+**Phase 18/19 dogfood 漏检测**：D38.3 acceptance 的 2-消息路径在
+单元测试里有 cover（`test_args_empty_yields_two_messages`），但**只
+是单测对 envelope shape 的断言** —— **从未端到端真发到 LLM**。Phase
+18 T4 dogfood 用 `申请号12345`，Phase 19 T4 dogfood 用同一 args，
+两次都走的 3 条消息路径。
+
+**Chosen**：当 `args.strip()` 为空时，envelope 仍追加一条 user
+TextBlock，内容是一个固定的 placeholder（`DEFAULT_EMPTY_ARGS_PLACEHOLDER
+= "Please apply this skill now."`）。整个 helper 退化为**恒返回 3 条
+消息**的简单契约。
+
+**Rationale**：
+
+- **协议级修法 vs provider-specific patch**：另一条路是检测
+  thinking-mode 时补 `reasoning_content` 字段；但这是 provider-
+  specific 补丁，每加一个 thinking provider 都得改一次。
+  Always-3-message envelope 是 protocol-level 修法 —— provider
+  接收的形状跟"LLM 自决调 LoadSkill 后用户回了一条" 字节级一致，
+  天然兼容所有支持 tool_use 的 provider
+- **保 Phase 18 既有不变量**：tool_result 仍含 skill.body 原文（D38.3
+  un-reversed clause）；synth_ID 前缀仍是 audit marker；hook /
+  permission 仍 bypass (D38.5)；observability `slash_skill_invoked`
+  事件不变 (D38.5)
+- **Placeholder 内容的选择**：英文短祈使句，中性，跟 skill body 的
+  "apply this guidance" 隐含框架兼容。**不**用 `args` 字段含义（如
+  `"(empty args)"`），那样 LLM 会把这一个 placeholder 当成 task
+  subject
+
+**Anti-scope (D38.8)**：
+- **不**动 provider 侧 request 结构 / `reasoning_content` 字段
+- **不**动 `LoadSkillTool` / hook / permission / observability 任何
+  路径
+- **不**改 D38.5 synthetic envelope bypass 哲学
+- **不**改 D38.4 `/skills` built-in
+
+**Test surface 变化**：
+- 删 `test_args_empty_yields_two_messages` / 类似 2 消息断言
+- 加 `test_args_empty_yields_three_messages_with_placeholder` 校验
+  placeholder 文字
+- L0 transparency `test_estimate_synth_matches_real_tool_envelope`
+  的 hand-built reference envelope 同步加 placeholder trailing
+  TextBlock
+- T2 chat integration `test_skill_hit_without_args_*` 改 expect 3 条
+  消息
+
+**Methodology lesson** (将进 Phase 19 retro §2 第 5 项 + Phase 20
+boundary doc 检查项)：boundary doc 的 acceptance 单测**不等于** end-
+to-end dogfood。Phase 18 acceptance §3.1 dogfood 写了"无 args 触发"
+的步骤但没有真做（T4 实际 args 总是非空）。教训是：**dogfood
+acceptance 要枚举 envelope schema 的所有路径**，不能跳过"用户最容易
+按的那条"。Phase 20 (M3) boundary 起草时显式加这条检查。
 
 ### D38.4 — `/skills` 内置命令：列出 catalog（dogfood 入口）
 
