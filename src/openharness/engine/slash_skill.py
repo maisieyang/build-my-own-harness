@@ -90,14 +90,22 @@ __all__ = [
 
 SYNTH_ID_PREFIX = "synth_"
 
-DEFAULT_EMPTY_ARGS_PLACEHOLDER = "Please apply this skill now."
+DEFAULT_EMPTY_ARGS_PLACEHOLDER = (
+    "What input do you need to apply this skill? "
+    "Wait for me to provide it — do not explore the filesystem to find it yourself."
+)
 """Trailing user-message text used when ``args`` is empty / whitespace.
 
-Plain English short imperative — neutral enough to slot into any
-skill body's "apply this guidance" framing, short enough not to
-distort the LLM's reading of the skill body itself. Per D38.8, the
-constant is exported so tests + audit code can grep it without
-hard-coding the literal."""
+Reads to the LLM as the **user asking what input the skill needs** —
+interrogative + restrictive. Earlier iterations used the imperative
+``"Please apply this skill now."`` which read as "go act", and LLM
+agents observed (qwen3.7-max, 2026-06-07 user-time) responded by
+fanning out 10+ Read/Bash/Find calls hunting for mock data instead
+of asking the user. The interrogative + explicit "wait, don't
+explore" framing pivots the LLM from "act" to "ask back".
+
+Constant is exported so tests + audit code grep it without
+hard-coding the literal (per D38.8)."""
 
 
 def _default_synth_id() -> str:

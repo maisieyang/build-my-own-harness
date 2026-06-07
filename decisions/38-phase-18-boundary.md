@@ -183,9 +183,8 @@ synth envelope 是我们合成的，没有 thinking turn，所以这个字段从
 两次都走的 3 条消息路径。
 
 **Chosen**：当 `args.strip()` 为空时，envelope 仍追加一条 user
-TextBlock，内容是一个固定的 placeholder（`DEFAULT_EMPTY_ARGS_PLACEHOLDER
-= "Please apply this skill now."`）。整个 helper 退化为**恒返回 3 条
-消息**的简单契约。
+TextBlock，内容是一个固定的 placeholder（`DEFAULT_EMPTY_ARGS_PLACEHOLDER`）。
+整个 helper 退化为**恒返回 3 条消息**的简单契约。
 
 **Rationale**：
 
@@ -199,10 +198,19 @@ TextBlock，内容是一个固定的 placeholder（`DEFAULT_EMPTY_ARGS_PLACEHOLD
   un-reversed clause）；synth_ID 前缀仍是 audit marker；hook /
   permission 仍 bypass (D38.5)；observability `slash_skill_invoked`
   事件不变 (D38.5)
-- **Placeholder 内容的选择**：英文短祈使句，中性，跟 skill body 的
-  "apply this guidance" 隐含框架兼容。**不**用 `args` 字段含义（如
-  `"(empty args)"`），那样 LLM 会把这一个 placeholder 当成 task
-  subject
+- **Placeholder 内容的选择 — 经过一次迭代**：
+  - **初版（已废弃）**：`"Please apply this skill now."`（短祈使句）
+    —— 2026-06-07 用户实测发现 qwen3.7-max 把它读成"立即去找 input
+    并应用"，对 parse-credit-report 触发了 10+ 次 Read/Bash/Find
+    探索 cwd + finance-skills 仓 + 甚至误读了用户的
+    `.claude/settings.local.json` 个人配置。最终结论是对的（"我没数据，
+    告诉我去哪找"），但过程发出了**0 工具调用本该解决问题**的浪费
+  - **当前（D38.8 二阶段）**：`"What input do you need to apply this
+    skill? Wait for me to provide it — do not explore the filesystem
+    to find it yourself."` —— 疑问句 + 显式禁止 filesystem 探索。
+    把 LLM 从"act"模式扳到"ask back"模式
+- **不**用 `args` 字段含义（如 `"(empty args)"`），那样 LLM 会把
+  placeholder 当成 task subject
 
 **Anti-scope (D38.8)**：
 - **不**动 provider 侧 request 结构 / `reasoning_content` 字段
