@@ -189,6 +189,14 @@ class TestArchitectureIsolation:
     (per P18-T1 acceptance + D38 §六 wiring audit). If a future maintainer
     introduces a cross-layer import, this test fails loudly so the leak
     surfaces at code-review time rather than dogfood time.
+
+    Phase 19 T1.0 proactive guard (per learnings/phase-18.md §3 high-
+    confidence prediction): ``openharness.plugins`` joins the forbidden
+    list **before** the Phase 19 CC plugin parser lands. Phase 19 is the
+    first compounding test of D38.2's synth envelope substrate — the
+    prediction was "M2 (CCPluginLoader) reuses synthesize_skill_envelope
+    with zero diff." Adding the guard here makes that prediction
+    physically enforced, not just observed.
     """
 
     FORBIDDEN_MODULE_PREFIXES = (
@@ -197,6 +205,7 @@ class TestArchitectureIsolation:
         "openharness.hooks",
         "openharness.observability",
         "openharness.cli",
+        "openharness.plugins",
     )
 
     def _imports_in(self, path: Path) -> set[str]:

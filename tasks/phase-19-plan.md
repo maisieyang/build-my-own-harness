@@ -1,0 +1,406 @@
+# Phase 19 Implementation Plan — CCPluginLoader (M2 of CC Skill 接入)
+
+> Boundary contract: [`decisions/39-phase-19-boundary.md`](../decisions/39-phase-19-boundary.md).
+> Phase 18 retro 高置信预测背书: [`learnings/phase-18.md`](../learnings/phase-18.md) §3.
+> All 8 D39.x ratified 2026-06-07 (all Recommended defaults accepted).
+
+## Overview
+
+**Phase 19 goal**：让用户 `cp -r /path/to/cc-plugin-dir
+~/.openharness/plugins/<name>` 一次完成 plugin 安装；CC format
+（`.claude-plugin/plugin.json` + `skills/<n>/SKILL.md` + 可选
+`.mcp.json`）和 OH format（`manifest.yaml`）在同一发现根并行存在；
+下游 `SkillStore` / `_run_chat` slash resolver / 既有 `LoadSkillTool`
+全部不知道 plugin 来自 CC 还是 OH。
+
+**Cross-cutting invariant** (per D39 §六 Wiring audit)：
+
+- `engine/slash_skill.py` — **零 diff（load-bearing prediction）**。
+  Phase 18 retro §3 高置信预测：CC plugin 解析完进 SkillStore 后，
+  Phase 18 的 synth envelope helper 不需要改任何字节。如果实施中发
+  现要改，**立即回 boundary doc**，不 patch helper
+- `skills/store.py` / `skills/model.py` — 零 diff
+- `commands/` — 零 diff（CC plugin.json 无 commands）
+- `bundles/` — 零 diff（CC 无 bundles）
+- `hooks/` — 零 diff（CC hook 是 settings.json shell command，不映射）
+- `permissions/` — 零 diff（M3 才需要 Tier 映射）
+- `services/snapshot|session_memory|compact` — 零 diff
+- `engine/query.py` — 零 diff
+- `prompts/` — 零 diff
+- `memory/` — 零 diff
+- `eval/` — 零 diff
+- typer flag / settings schema — 零 diff（D39.7 只**新增** `plugins list`
+  子命令，不改任何既有 flag）
+
+Expected net diff：约 **+120 LoC src + +260 LoC tests**:
+
+- T1 plugins/model.py: ~70 LoC (CC plugin.json + skills scan + .mcp.json)
+  + ~80 LoC tests
+- T2 plugins/loader.py: ~50 LoC (双格式 dispatch + dual-manifest WARN)
+  + ~120 LoC tests + 1 LoC proactive guard
+- T3 oh plugins list: ~30 LoC CLI + ~60 LoC tests
+- T4 dogfood: 0 src，retro §1 evidence only
+- T5 retro / CHANGELOG: docs only
+
+Total predicted: **~370 LoC** vs Phase 18 实测 ~1200 LoC（含 boundary
++ plan + retro 三大块 doc 350 LoC）。M2 比 M1 小是因为 boundary 已建
+立，T1/T2 没有"新概念"工作量，只是格式翻译。
+
+## Architecture decisions (locked 2026-06-07)
+
+| Doc | What it locks |
+|---|---|
+| [`decisions/39-phase-19-boundary.md`](../decisions/39-phase-19-boundary.md) | D39.1 单 PluginLoader 双格式 dispatch; D39.2 复用 `PluginManifest` dataclass; D39.3 `~/.openharness/plugins/` 单发现根; D39.4 plugin dir 缺 manifest = silent skip; D39.5 `.mcp.json` 在 M2 内（非 M2.5 split）; D39.6 双 manifest 共存 = CC 优先 + WARN `plugin_dual_manifest`; D39.7 `oh plugins list` ship now; D39.8 `plugin_discovered` payload 加 `format` 字段 |
+| [`decisions/24`](../decisions/24) | Phase 9 PluginLoader 既有契约（namespace `<plugin>__<component>`、fault tolerance 模型、单根扫描），M2 在其上 strict 扩展，不替换 |
+| [`decisions/12`](../decisions/12) | Phase 5c `parse_skill` SKILL.md 解析契约（含 Phase 17 T1 多行 description 支持），M2 复用不动 |
+| [`learnings/phase-18.md`](../learnings/phase-18.md) §3 | M2 zero-diff prediction on `engine/slash_skill.py` → T1 第一步 forbidden imports proactive guard 是 P19 retro 的预测验证 |
+
+---
+
+## Task list
+
+### P19-T1: CC plugin format parser — `plugins/model.py`
+
+**Description**: 在 `plugins/model.py` 新增三个 helper 把 CC 形态
+plugin 目录翻译成既有 `PluginManifest`：
+
+```python
+def parse_cc_plugin(plugin_dir: Path) -> PluginManifest | None:
+    """Read .claude-plugin/plugin.json + scan skills/*/SKILL.md
+    + optional .mcp.json. Returns same PluginManifest as Phase 9
+    OH-format parser. None + warning on any error (same fault
+    tolerance model as parse_manifest)."""
+
+def _scan_cc_skills_dir(plugin_dir: Path) -> tuple[ComponentRef, ...]:
+    """Glob plugin_dir/skills/*/SKILL.md → ComponentRef tuples."""
+
+def _parse_mcp_json(path: Path) -> tuple[McpServerConfig, ...]:
+    """Read .mcp.json -> McpServerConfig tuple via existing
+    _parse_mcp_servers logic (Phase 9)."""
+```
+
+D39.2 字段映射（CC plugin.json → `PluginManifest`）：
+
+| CC field | OH PluginManifest field | Default if missing |
+|---|---|---|
+| `name` (str, required) | `name` | parse fails (WARN + None) |
+| `version` (str, required) | `version` | parse fails |
+| `description` (str, required) | `description` | parse fails |
+| `author.name` (nested object) | `author` (top-level str) | None |
+| (CC has no field) | `license` / `homepage` / `keywords` / `dependencies` / `openharness_version_min` | None / `()` |
+| (CC has no field) | `commands` / `bundles` / `hooks` | `()` |
+| `skills/<n>/SKILL.md` (scan) | `skills: tuple[ComponentRef, ...]` | `()` (empty plugin OK) |
+| `.mcp.json -> mcpServers` | `mcp_servers: tuple[McpServerConfig, ...]` | `()` (no .mcp.json OK) |
+
+**T1.0 — Proactive guard FIRST** (per Phase 18 retro §3): 在
+**任何 T1 source code 之前**，先扩展 Phase 18 architecture isolation
+test 的 forbidden list：
+
+```python
+# tests/engine/test_slash_skill_envelope.py
+FORBIDDEN_MODULE_PREFIXES = (
+    "openharness.tools.load_skill",
+    "openharness.permissions",
+    "openharness.hooks",
+    "openharness.observability",
+    "openharness.cli",
+    "openharness.plugins",  # ← NEW in Phase 19 (proactive guard)
+)
+```
+
+这一行先 commit，确保整个 T1 实施过程中**不可能**让
+`engine/slash_skill.py` 误引入 plugins 依赖。Phase 18 retro §3 的预
+测验证就靠这一行。
+
+**Acceptance**:
+
+- [ ] T1.0 proactive guard 已 commit 在任何 plugin parser 代码之前
+- [ ] `plugins/model.py` 新增 `parse_cc_plugin` 公共函数 + 两个
+  internal helper
+- [ ] `parse_cc_plugin` 返回 `PluginManifest | None`；None 时已
+  emit 至少一个 WARN 事件（与 `parse_manifest` 同 fault tolerance
+  模型）
+- [ ] CC plugin.json 缺 `name` / `version` / `description` 任一 →
+  WARN + None
+- [ ] CC plugin.json 含 `author` 嵌套 `{"name": "..."}` → 提取到
+  `PluginManifest.author` 顶层 str；缺失或非 dict → `None`
+- [ ] `_scan_cc_skills_dir` 按字母序返回 `ComponentRef`，路径形态
+  严格 `skills/<n>/SKILL.md`；`skills/` 不存在或为空 → 返回 `()`
+- [ ] `_parse_mcp_json` 复用 Phase 9 `_parse_mcp_servers` 的 schema
+  + env interpolation；`.mcp.json` 不存在 → 返回 `()`；JSON 解析
+  失败 → 返回 `()` + WARN（不让 1 个坏 plugin 的 .mcp.json 干扰整
+  个 fan_out）
+- [ ] 单测覆盖：
+  - 完整 fixture：`name + version + description + author.name +
+    skills/*/SKILL.md (3 个) + .mcp.json (2 server)` → 字段全对
+  - minimal fixture：仅 `name + version + description` → `skills=()`
+    `mcp_servers=()` `author=None`
+  - `.mcp.json` only fixture (credit-bureau-connectors 模型)：
+    `skills=()` `mcp_servers=(3,)`
+  - 嵌套 `author` 非 dict（JSON 错写成 `"author": "string"`）→
+    `author=None`，不 crash
+  - JSON 解析失败 → None + WARN
+  - 必需字段缺失 → None + 对应 WARN（每个字段一个 test）
+- [ ] **`engine/slash_skill.py` 零 diff**；T1.0 的 forbidden-imports
+  test 持续绿
+- [ ] 全仓 regression 绿
+
+### P19-T2: PluginLoader dual-format dispatch — `plugins/loader.py`
+
+**Description**: 扩展 `PluginLoader.discover()` 按文件存在性路由到 CC
+或 OH 解析路径（D39.1）；双 manifest 共存时 CC 优先 + emit WARN
+`plugin_dual_manifest`（D39.6）。`fan_out` 完全不动 — 两条路径返回
+同一 `PluginManifest`。
+
+Dispatch 伪代码（实际在 `discover` 里）：
+
+```python
+for entry in <plugins_dir>.iterdir():
+    if not entry.is_dir():
+        continue
+    cc_marker = entry / ".claude-plugin" / "plugin.json"
+    oh_marker = entry / "manifest.yaml"
+    if cc_marker.is_file() and oh_marker.is_file():
+        _logger.warning(
+            "plugin_dual_manifest",
+            plugin_dir=str(entry),
+            picked="cc",
+            ignored="manifest.yaml",
+        )
+        manifest = parse_cc_plugin(entry)
+    elif cc_marker.is_file():
+        manifest = parse_cc_plugin(entry)
+    elif oh_marker.is_file():
+        manifest = parse_manifest(oh_marker)
+    else:
+        continue  # D39.4 silent skip
+    if manifest is None:
+        continue
+    if manifest.name in manifests:
+        raise PluginConflictError(...)
+    manifests[manifest.name] = manifest
+```
+
+`PluginConflictError`（Phase 9 既有）仍按相同语义抛出 — 不区分两个
+plugin 来自相同格式还是混合格式。
+
+**Acceptance**:
+
+- [ ] `PluginLoader.discover` 按文件标记路由到正确的 parser
+- [ ] CC plugin 命中后下游 `fan_out` 调用 `_fan_out_skills` 复用既有
+  路径（namespacing `<plugin>__<skill>` 保持）；CC plugin
+  `_fan_out_commands / _fan_out_bundles / _fan_out_hooks` 都 no-op
+  （空 tuple）；`_fan_out_mcp_servers` 处理 `.mcp.json` 来源同 OH 来源
+- [ ] D39.6 dual-manifest：两文件共存 → emit WARN `plugin_dual_manifest`
+  payload `{plugin_dir, picked: "cc", ignored: "manifest.yaml"}` →
+  走 CC 路径 → OH manifest.yaml 整体跳过（不在 manifests dict 里出现
+  两次）
+- [ ] D39.4 silent skip：plugin dir 既无 `.claude-plugin/plugin.json`
+  也无 `manifest.yaml` → 跳过，无 WARN（包括 `<plugin>` 本身就是
+  README.md / .git / 空目录的情况）
+- [ ] 跨格式 plugin name conflict：CC plugin A 名 `x` + OH plugin B
+  名 `x` 在不同目录 → 仍触发 `PluginConflictError`（错误信息含两
+  目录路径）
+- [ ] 单测覆盖：
+  - 双格式 dispatch 4 路径（CC only / OH only / 双有 → CC 优先 /
+    都没 → silent skip）
+  - dual-manifest WARN 事件 emit + payload
+  - CC + OH 跨格式同名冲突仍 raise `PluginConflictError`
+  - 一个 CC plugin 解析失败不阻断其他 plugin（fault tolerance）
+- [ ] 整合测试：用 finance-skills 真实 fixture（cp 到 tmp
+  `plugins_dir`）跑 `discover + fan_out`，验证：
+  - `credit-report-reviewer` 4 个 skill 全部以
+    `credit-report-reviewer__<n>` 形态进 SkillStore catalog
+  - `credit-bureau-connectors` 3 个 MCP server 全部进 mcp_servers
+    catalog
+- [ ] `engine/slash_skill.py` 零 diff；T1.0 forbidden guard 持续绿
+
+### P19-T3: `oh plugins list` subcommand — `cli.py`
+
+**Description**: 实装 `oh plugins list`（D39.7）。新增 `plugins_app =
+typer.Typer()`，挂在 `app` 上；`list` 子命令显示发现的 plugin 一行
+一个：
+
+```
+NAME                          FORMAT  VERSION  SKILLS  MCP_SERVERS
+credit-report-reviewer        cc      0.1.0    4       0
+credit-bureau-connectors      cc      0.1.0    0       3
+my-legacy-plugin              oh      1.0.0    2       1
+```
+
+`--format json` 输出 `[{name, format, version, skills_count,
+mcp_servers_count, source_path}, ...]`。
+
+实现：`PluginLoader.discover()` + 对每个 manifest 算 skills 数 + mcp
+数。**不**调 `fan_out`（避免不必要的 hook import 副作用）。
+
+为支持 D39.7，`PluginManifest` 需要新字段 `source_format: Literal["cc",
+"oh"]` —— 或者通过 `source_path` 重新探测。**Recommended**：在
+`PluginLoader.discover` 返回的中间结构（不是 PluginManifest dataclass
+本身，per D39.2）里加 `_DiscoveredPlugin(manifest, source_format)`
+tuple，让 `oh plugins list` 消费这个。`PluginManifest` 保持 D39.2
+契约（无 source_format 字段）。
+
+**Acceptance**:
+
+- [ ] `oh plugins list` 命令存在并被 `oh --help` 列出
+- [ ] 输出 5 列对齐 text format：NAME / FORMAT / VERSION / SKILLS /
+  MCP_SERVERS（按 plugin name 字母序）
+- [ ] 空 plugin dir 或 `~/.openharness/plugins/` 不存在 → 输出
+  `(no plugins installed)` 一行
+- [ ] `--format json` 输出 list of dict，含上述 5 个字段 + `source_path`
+- [ ] `oh plugins list` 不会触发任何 hook import 副作用（`fan_out`
+  内部 Python hook loading 是 enable-plugins-on 才走的）
+- [ ] 单测覆盖：
+  - 空 catalog 输出
+  - 多 plugin 输出对齐 + 字母序
+  - `--format json` 输出 schema
+  - CC + OH 混合 plugin 在同一输出里 FORMAT 列正确
+  - dual-manifest plugin 标 `cc`（picked）
+- [ ] `PluginManifest` 无新增字段（D39.2 复用契约严守）
+- [ ] `engine/slash_skill.py` 零 diff
+
+### P19-T4: Dogfood — finance-skills `credit-report-reviewer` + `credit-bureau-connectors` 端到端
+
+**Description**: Phase 18 T4 的演进版 — 不再 cp 单 .md 文件，而是
+cp 整个 plugin 目录树，验证 4 个 namespaced skill + 3 个 MCP server
+全部活过来。Forcing function：不通过 dogfood，T1-T3 单测全绿也不能
+算 Phase 19 done。
+
+**Acceptance**:
+
+- [ ] 准备步骤可重现：
+
+  ```bash
+  rm -f ~/.openharness/skills/parse-credit-report.md  # Phase 18 M1 单文件清掉
+  cp -r /Users/yangxiyue/2026/aa/harness/finance-skills/mybank-credit-risk/\
+plugins/credit-report-reviewer ~/.openharness/plugins/credit-report-reviewer
+  cp -r /Users/yangxiyue/2026/aa/harness/finance-skills/mybank-credit-risk/\
+plugins/credit-bureau-connectors ~/.openharness/plugins/credit-bureau-connectors
+  ```
+
+- [ ] `oh plugins list` 输出（INFO log 不开）应严格匹配：
+
+  ```
+  NAME                          FORMAT  VERSION  SKILLS  MCP_SERVERS
+  credit-bureau-connectors      cc      0.1.0    0       3
+  credit-report-reviewer        cc      0.1.0    4       0
+  ```
+
+- [ ] `oh chat` 启动后 `/skills` 输出包含 4 个 namespaced 名（字母序）：
+  - `credit-report-reviewer__apply-credit-rules`
+  - `credit-report-reviewer__cross-verify-application`
+  - `credit-report-reviewer__draft-credit-finding`
+  - `credit-report-reviewer__parse-credit-report`
+
+  每个名后面跟 SKILL.md description 首行（**Phase 18 §2 已知 nit**：
+  当前 `/skills` 渲染未做多行折叠 → 4 个 skill 各自的 multi-line
+  description 都会铺开；本 phase 不修，retro §2 标注）
+
+- [ ] `/credit-report-reviewer__parse-credit-report 申请号12345`
+  触发：
+  - LLM 回应反映 Phase 18 dogfood 同款 skill body 内容（4 of 5 anchor
+    至少出现）—— 证明 namespaced skill 走 synth envelope 路径
+    完全等价
+  - INFO 事件 `slash_skill_invoked` payload `skill_name=
+    "credit-report-reviewer__parse-credit-report"`, `synthetic=true`,
+    `args_length=8`
+
+- [ ] 启动 log 含 `plugin_discovered` × 2 INFO 事件，每个 payload
+  含 `format="cc"`（D39.8）；无 `plugin_dual_manifest` WARN；无
+  `skill_validation_failed` / `skill_missing_description`
+
+- [ ] dual-manifest negative test：在 `~/.openharness/plugins/
+  credit-report-reviewer/` 加一个 dummy `manifest.yaml`（任何最小
+  合法内容）→ 重启 `oh chat` → 启动 log 必有 `plugin_dual_manifest`
+  WARN payload `picked=cc, ignored=manifest.yaml` → `/skills` 输出
+  与不加 manifest.yaml 时**完全相同**（CC 优先）→ 清理 `manifest.yaml`
+
+- [ ] dogfood 步骤 + 关键证据（`oh plugins list` 输出 +
+  `plugin_discovered` event JSON + `slash_skill_invoked` event JSON
+  + LLM 回应 4-of-5 anchor 表格 + dual-manifest WARN payload）记录
+  到 `learnings/phase-19.md` retro §1
+
+### P19-T5: CHANGELOG + Phase 19 retro
+
+**Description**: T1-T4 全部 land + dogfood pass 后写
+`learnings/phase-19.md` retro。CHANGELOG 加 Phase 19 entry 链回 D39
+和本 plan。retro 重点回答：
+
+1. **`engine/slash_skill.py` 零 diff 兑现验证**：T1.0 proactive guard
+   一次都没触发吗？这是 Phase 18 retro §3 高置信预测的实证 ——
+   兑现 = 第三次连续验证 abstraction-first compounds (Phase 17 §3.1
+   有类似 7a/7b/7c 演示)
+2. **`PluginManifest` 复用 vs 新 dataclass**：实施中是否有任何字段
+   需要 source_format / format-specific 字段？如果纯通过中间 tuple
+   解决 → D39.2 决策正确
+3. **D39 §六 wiring audit 兑现**：4 个 extension + 11 unchanged + 0
+   bypass + 0 verification — 是否 13+ 层全部 verbatim 兑现？是否有新
+   `requires extension` 层 surfaced？
+4. **跟 M3 (Phase 20) 的衔接预测**：M2 解析 `author.name` 嵌套时摸到
+   的字段映射模式（嵌套 dict → 顶层 str），M3 解析 `agents/<n>.md`
+   时的 `tools:` 白名单字段映射是否能复用同一模式？
+
+**Acceptance**:
+
+- [ ] `CHANGELOG.md` 加 Phase 19 entry：日期 / 标题 / 1-2 句 summary /
+  链回 D39 + 本 plan + dogfood 报告位置
+- [ ] `learnings/phase-19.md` 按 §1 What worked / §2 What missed / §3
+  Predictions for M3 (Phase 20) / §4 Abstractions tested / §六
+  verdict mapping table 五段结构写
+- [ ] §1 What worked 含 T4 dogfood 关键证据 + `oh plugins list`
+  输出 + 4-of-5 anchor 表
+- [ ] §1 必须显式声明 `engine/slash_skill.py` 零 diff 兑现（grep
+  `git diff main..HEAD -- src/openharness/engine/slash_skill.py`
+  结果空字符串）
+- [ ] §3 Predictions 至少列出：
+  - M3 (DeclarativeAgent) 解析 `agents/<n>.md` 时，`tools:` 白名单
+    字段是否能复用 D39.2 的"嵌套 dict → 顶层 str 投射"模式
+  - M3 触发路径预测仍是 D38.5 synth envelope 变种（`name="Agent"`），
+    Phase 19 完成后 `synthesize_skill_envelope` 是否到了应该泛化为
+    `synthesize_tool_use_envelope` 的拐点（Phase 7a 派生 substrate
+    Protocol 的同款 forcing function）
+- [ ] §4 Abstractions tested 含一条："PluginManifest 作为 cross-format
+  共同地基" 的论证 —— CC 和 OH 翻译进同一 dataclass，下游 fan_out 不
+  区分；是否在实施中有反例（某个下游消费者需要知道来源 format）？
+  无反例 = 抽象有效
+- [ ] retro 实测 LoC delta 与 boundary doc 预测 (+120 src / +260
+  tests = +380) 的偏差记录
+- [ ] retro §六 verdict 对照：15 个预测层 verdict 是否全部如期；
+  有否新层 surfaced（按 Phase 17 → 18 的 100% 兑现节奏，Phase 19
+  是第 3 次验证 §六 audit methodology — 如果 13+ 层 verdict 全部
+  verbatim 兑现，可以谨慎宣称"methodology 成立"而非"巧合"）
+
+---
+
+## Open frontier (deferred past Phase 19)
+
+按 D39 §一 "不在 phase 范围" + 本 phase 实施中新发现项：
+
+1. **M3 (Phase 20)**: DeclarativeAgent — `agents/<n>.md` 含 `tools:`
+   白名单的声明式 sub-agent。需要新 §六 wiring audit 决定 `tools`
+   白名单跟 OH permission Tier 怎么映射；触发路径预测是 synth
+   envelope 的 `tool_use(Agent)` 变种 (Phase 18 retro §3 + Phase 19
+   retro §3 双重 referenced)
+2. **`marketplace.json`**: 多 plugin 聚合元数据；待真有用户需要"一次
+   cp 整个 marketplace"时再处理（M2 dogfood 验证后再判断 driver
+   是否充分）
+3. **`~/.claude/plugins/<n>/` 双根扫描**: D39.3 deferred；
+   `Settings.plugin_dirs: list[Path] = [...]` 形态预留好
+4. **`oh ask "/<skill>"`**: D38.6 仍 deferred；M3 触发路径定下来后
+   一并 ratify
+5. **`/skills` 多行 description 渲染 polish**: Phase 18 §2 nit；M2
+   实测后如果 dogfood UX 难以忍受可独立 phase（D39.5 ratify "defer"，
+   是 cleanup-sized 而非 M2 内）
+6. **`{args}` substitution into skill body**: D38.3 仍 deferred
+7. **`oh plugins show <name> / enable / disable / refresh`**: D39.7
+   严控 scope，仅 `list`；refresh 在 hot-reload 需求出现前不做
+8. **CC settings.json hooks (shell command)** → OH HookSpec 映射：M2
+   显式不处理；如果有用户 driver 再独立 phase
+9. **CC partner-plugin matrix (spglobal/lseg)**: 真有 partner-build
+   分发需求再单独 phase
+
+这些 deferred 项待真有 driver 时各自独立 phase 处理。Phase 19 收尾
+应该产生一个干净 baseline：CCPluginLoader 透明集成进 Phase 9
+PluginLoader 框架 + `engine/slash_skill.py` 零 diff 兑现作为 M3 的
+稳定地基。
