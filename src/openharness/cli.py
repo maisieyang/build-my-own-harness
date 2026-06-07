@@ -950,6 +950,36 @@ def _emit_skill_catalog(skill_store: SkillStore) -> None:
         typer.echo(f"  {name.ljust(width)}  {skill.description}")
 
 
+def _emit_memory_catalog(memory_store: MemoryStore | None) -> None:
+    """Render ``/memory`` output — alphabetical 3-column
+    ``<name> <type> <description>``, matching the ``oh memory list``
+    text format exactly so users see the same data whether they query
+    from outside or inside the REPL.
+
+    Missing memory subsystem (``--no-memory`` or memory disabled) →
+    ``(memory subsystem disabled)``. Empty store → ``(no memories yet)``
+    (matches ``oh memory list`` empty branch). D37.4 column widths.
+    """
+    if memory_store is None:
+        typer.echo("(memory subsystem disabled)")
+        return
+    memories = list(memory_store.discover().values())
+    if not memories:
+        typer.echo("(no memories yet)")
+        return
+    memories.sort(key=lambda m: m.name.lower())
+    name_width = min(_LIST_NAME_MAX, max(len(m.name) for m in memories)) + 2
+    type_width = max(len(m.type.value) for m in memories) + 2
+    for m in memories:
+        name_field = _truncate(m.name, _LIST_NAME_MAX)
+        type_field = m.type.value if m.type is not None else "(unknown)"
+        if m.description and m.description.strip():
+            desc_field = _truncate(m.description, _LIST_DESCRIPTION_MAX)
+        else:
+            desc_field = "(no description)"
+        typer.echo(f"{name_field:<{name_width}}{type_field:<{type_width}}{desc_field}")
+
+
 _CHAT_HELP_TEXT = """\
 oh chat — multi-turn REPL commands:
   /exit, /quit       leave the REPL
@@ -958,6 +988,7 @@ oh chat — multi-turn REPL commands:
                      (Phase 11 D29.6) — replaces history with a 9-slot
                      summary regardless of token threshold
   /skills            list available skills (Phase 18 D38.4)
+  /memory            list memories in this project's memory store
   /help              show this message
 
 User-authored slash commands (Phase 5b) work too — type ``/name args``
@@ -1263,6 +1294,13 @@ async def _run_chat(
             # users can confirm a freshly dropped SKILL.md was discovered.
             if user_input == "/skills":
                 _emit_skill_catalog(skill_store)
+                continue
+            # ``/memory`` in REPL — mirrors ``oh memory list`` text format so
+            # users don't have to leave the chat to inspect the memory store
+            # the LLM is reading from. Read-only; identical 3-column layout
+            # (name / type / description) as ``oh memory list``.
+            if user_input == "/memory":
+                _emit_memory_catalog(memory_store)
                 continue
             # P11-T5 (D29.6): force full LLM-based compaction. Same
             # primitive as auto-compact L4, but invoked unconditionally
