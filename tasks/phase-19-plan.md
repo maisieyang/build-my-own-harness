@@ -427,6 +427,23 @@ plugins/credit-bureau-connectors ~/.openharness/plugins/credit-bureau-connectors
    显式不处理；如果有用户 driver 再独立 phase
 9. **CC partner-plugin matrix (spglobal/lseg)**: 真有 partner-build
    分发需求再单独 phase
+10. **Namespaced skill name UX — alias + tab completion**: Phase 18
+    `/parse-credit-report` 单文件路径 vs Phase 19
+    `/credit-report-reviewer__parse-credit-report` plugin 路径在敲键
+    成本上有明显差距（前者 21 字，后者 44 字）。Driver = 2026-06-07
+    用户 post-D38.8 hotfix 立即问 "为什么是这样的格式"。两种解法都
+    deferred：
+    - **alias 机制**：当 namespaced 名在所有已装 plugin 中**全局
+      唯一**时，允许敲短名（D38.1 resolver 加 fuzzy fallback；如有
+      冲突则提示用户 disambiguate）。需 ratify "全局唯一"的检测时机
+      （bootstrap vs 每次 resolver 调用）+ 冲突时的 UX
+    - **REPL tab 完成**：`prompt_toolkit` 替代 `input()`；接 catalog
+      作为 completer。改 REPL substrate 是单独 phase 体量
+    两者**互补**而非冲突 —— alias 解短名能用，tab 解长名记不住。
+    可能拆成两个独立 phase 推进。建议 Phase 20 (M3) **不**碰这个
+    UX 议题（M3 已经在 declarative agent / tools whitelist 上做大
+    体量决策，加 UX scope 会破 cleanup-sized phase 形态），单列
+    Phase 21 候选
 
 这些 deferred 项待真有 driver 时各自独立 phase 处理。Phase 19 收尾
 应该产生一个干净 baseline：CCPluginLoader 透明集成进 Phase 9
