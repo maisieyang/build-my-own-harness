@@ -58,6 +58,7 @@ from openharness.plugins.errors import PluginConflictError
 from openharness.plugins.model import (
     HookRef,
     PluginManifest,
+    parse_cc_plugin,
     parse_manifest,
 )
 from openharness.skills.model import Skill, parse_skill
@@ -261,6 +262,20 @@ def _load_plugin_module(path: Path, plugin_name: str) -> object | None:
     return module
 
 
+def _manifest_source_path_for_format(manifest: PluginManifest, source_format: str) -> Path:
+    """Return the filesystem path of the manifest file that defined
+    ``manifest``, given its source format.
+
+    Used by :meth:`PluginLoader.discover_with_format` to build a
+    cross-format-aware conflict error message: CC plugins live at
+    ``<dir>/.claude-plugin/plugin.json``, OH plugins at
+    ``<dir>/manifest.yaml``.
+    """
+    if source_format == "cc":
+        return manifest.source_path / ".claude-plugin" / "plugin.json"
+    return manifest.source_path / "manifest.yaml"
+
+
 def _module_path_for_hook(plugin: PluginManifest, hook: HookRef) -> Path:
     """Resolve ``module: my_pkg.hooks`` against the plugin's directory.
 
@@ -299,34 +314,101 @@ class PluginLoader:
         self.plugins_dir = plugins_dir
 
     def discover(self) -> dict[str, PluginManifest]:
-        """Scan ``<plugins_dir>/*/manifest.yaml``;return name → manifest.
+        """Scan ``<plugins_dir>/`` and return name → manifest.
 
-        Raises :class:`PluginConflictError` if two directories declare
-        the same plugin name in their manifests.
+        Per Phase 19 D39.1, each subdirectory is dispatched to either
+        the CC parser (``.claude-plugin/plugin.json`` present) or the
+        Phase 9 OH parser (``manifest.yaml`` present). When both markers
+        exist the CC parser wins and a ``plugin_dual_manifest`` WARN is
+        emitted (D39.6). Subdirectories with neither marker are
+        silently skipped (D39.4).
+
+        Raises :class:`PluginConflictError` if two directories — of
+        either format — declare the same plugin name.
+
+        Thin wrapper around :meth:`discover_with_format`; drops the
+        format tag so callers that only need ``PluginManifest`` (the
+        bulk of Phase 9 + CLI fan-out paths) stay byte-identical.
+        ``oh plugins list`` (P19-T3) consumes the with-format variant.
+        """
+        return {name: manifest for name, (manifest, _fmt) in self.discover_with_format().items()}
+
+    def discover_with_format(
+        self,
+    ) -> dict[str, tuple[PluginManifest, str]]:
+        """Same scan as :meth:`discover` but also returns the source
+        format (``"cc"`` or ``"oh"``) per plugin.
+
+        Emits one ``plugin_discovered`` INFO event (D39.8) per
+        successful parse and one ``plugin_dual_manifest`` WARN
+        (D39.6) per subdirectory containing both marker files.
         """
         if not self.plugins_dir.is_dir():
             return {}
 
-        manifests: dict[str, PluginManifest] = {}
+        results: dict[str, tuple[PluginManifest, str]] = {}
         for entry in sorted(self.plugins_dir.iterdir()):
             if not entry.is_dir():
                 continue
-            manifest_path = entry / "manifest.yaml"
-            if not manifest_path.is_file():
-                # Silent skip — directory may just be unrelated content.
+
+            cc_marker = entry / ".claude-plugin" / "plugin.json"
+            oh_marker = entry / "manifest.yaml"
+            has_cc = cc_marker.is_file()
+            has_oh = oh_marker.is_file()
+
+            if not has_cc and not has_oh:
+                # D39.4: user's plugin dir may contain unrelated content
+                # (README, .git, drafts). Silent skip.
                 continue
-            manifest = parse_manifest(manifest_path)
+
+            if has_cc and has_oh:
+                # D39.6: dual marker collision — CC wins. WARN identifies
+                # which file got picked + which was ignored so a user
+                # who happens to maintain both during a migration can
+                # decide whether to delete one.
+                _logger.warning(
+                    "plugin_dual_manifest",
+                    plugin_dir=str(entry),
+                    picked="cc",
+                    ignored="manifest.yaml",
+                )
+
+            if has_cc:
+                manifest = parse_cc_plugin(entry)
+                source_format = "cc"
+                manifest_source = cc_marker
+            else:
+                manifest = parse_manifest(oh_marker)
+                source_format = "oh"
+                manifest_source = oh_marker
+
             if manifest is None:
-                # parse_manifest already logged the specific failure.
+                # parse_* already logged the specific failure (missing
+                # field / malformed JSON-or-YAML / invalid name regex).
                 continue
-            if manifest.name in manifests:
-                existing = manifests[manifest.name].source_path / "manifest.yaml"
+
+            if manifest.name in results:
+                existing_manifest, existing_format = results[manifest.name]
+                existing_source = _manifest_source_path_for_format(
+                    existing_manifest, existing_format
+                )
                 raise PluginConflictError(
                     f"two plugins claim the same name {manifest.name!r}: "
-                    f"{existing} and {manifest_path}"
+                    f"{existing_source} and {manifest_source}"
                 )
-            manifests[manifest.name] = manifest
-        return manifests
+            results[manifest.name] = (manifest, source_format)
+
+            _logger.info(
+                "plugin_discovered",
+                plugin_name=manifest.name,
+                version=manifest.version,
+                format=source_format,
+                source_path=str(manifest.source_path),
+                skills_count=len(manifest.skills),
+                mcp_servers_count=len(manifest.mcp_servers),
+            )
+
+        return results
 
     def fan_out(
         self,
