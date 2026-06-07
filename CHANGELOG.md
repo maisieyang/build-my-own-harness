@@ -15,6 +15,110 @@ records + framework-level lessons), see
 
 ## [Unreleased]
 
+Phase 19 (M2 of CC Skill 接入) closes G1 — the per-file `cp`
+friction Phase 18 M1 left behind. CC plugin directories
+(`.claude-plugin/plugin.json` + `skills/<n>/SKILL.md` tree) are now
+recognized alongside OH plugin manifests (`manifest.yaml`) under
+the existing `~/.openharness/plugins/` root. One `cp -r` per CC
+plugin gives you the namespaced skills triggerable via Phase 18 M1's
+slash interface. `oh plugins list` adds the introspection entry
+point so users can confirm a freshly-dropped plugin tree was picked up.
+
+Phase 18 (M1) entry preserved below.
+
+### Added — CC plugin loader (Phase 19 / M2)
+
+- **Dual-format plugin discovery.** `PluginLoader.discover()` now
+  routes per subdirectory by marker-file presence: CC plugins
+  identified by `.claude-plugin/plugin.json`, OH plugins by
+  `manifest.yaml`. When both markers exist, CC wins and a
+  `plugin_dual_manifest` WARN event surfaces the picked/ignored
+  pair (D39.6). Subdirectories with neither marker are silently
+  skipped (D39.4) — `README.md` / `.git` / drafts don't generate
+  log noise.
+- **`parse_cc_plugin`.** CC plugin.json fields project into the
+  existing `PluginManifest` dataclass (D39.2 — no parallel CC
+  dataclass): `name` / `version` / `description` required;
+  `author.name` (nested object) flattens to `PluginManifest.author`
+  (str). License / homepage / keywords / dependencies / commands /
+  bundles / hooks all collapse to `None` / `()` because CC's
+  manifest schema doesn't carry them.
+- **CC SKILL.md directory tree.** `<plugin>/skills/<n>/SKILL.md`
+  files are discovered alphabetically into `PluginManifest.skills`,
+  flow through Phase 9's `_fan_out_skills` namespacing path
+  (`<plugin>__<skill>` storage keys), and reach `SkillStore` /
+  Phase 18's slash resolver byte-identically.
+- **`oh plugins list` subcommand.** Read-only 5-column view:
+  `NAME / FORMAT / VERSION / SKILLS / MCP_SERVERS`, alphabetical by
+  plugin name. `--format json` for jq pipelines.
+  `--log-level INFO` surfaces the `plugin_discovered` events that
+  fire during discovery (D39.8 observability marker for
+  `format=cc|oh`).
+- **`plugin_discovered` payload extension.** The bootstrap-time
+  discovery event now carries `format` (`cc` or `oh`) +
+  `skills_count` + `mcp_servers_count` alongside the existing
+  plugin identity fields (D39.8). Auditors can grep
+  `format=cc` to confirm CC plugins are loading, or
+  `mcp_servers_count=0` on a `.mcp.json`-bearing plugin to verify
+  D39.9 silent-ignore is firing as designed.
+
+### Reversed mid-phase — D39.5 → D39.9
+
+- **`.mcp.json` is silently ignored in M2.** D39.5 originally
+  ratified parsing CC `.mcp.json` into `PluginManifest.mcp_servers`,
+  claiming "schema 等价" to OH's `mcp_servers:` block. Pre-T1.1
+  audit caught the gap: OH's MCP layer is **stdio-only** (D15.1,
+  Phase 5), but CC `.mcp.json` examples in finance-skills are
+  uniformly HTTP+OAuth2. D39.9 reversed the decision before any
+  parser code shipped. CC plugins with `.mcp.json` on disk discover
+  cleanly but report `MCP_SERVERS=0` in `oh plugins list` — honest
+  reporting that the M2 boundary does not include MCP transport
+  extension. HTTP MCP support gets its own future phase.
+
+### Notes — what M2 does NOT include
+
+- **CC `agents/<n>.md` declarative sub-agents** — M3 / Phase 20.
+  `tools:` whitelist semantics map to OH's tier-based permission
+  model in a non-trivial way; Phase 20 boundary doc will need a
+  dedicated sub-decision for that mapping.
+- **`marketplace.json`** — multi-plugin aggregation manifests
+  remain `cp -r` per plugin in M2.
+- **`~/.claude/plugins/` second discovery root** — D39.3
+  consciously kept M2 single-root; a `Settings.plugin_dirs` list
+  is the natural extension when a driver appears.
+- **`.mcp.json` parsing** — per D39.9; the file presence on disk
+  does not influence the parsed manifest.
+- **`oh plugins show / enable / disable / refresh`** — D39.7
+  ratified ship-now scope as `list` only; the other introspection
+  + control verbs follow when a driver appears.
+
+### Friction surfaced at dogfood
+
+- **`--enable-plugins` flag.** Phase 9 D24.x defaults plugins off
+  (security — Python hook modules ship arbitrary code). To trigger
+  `/<plugin>__<skill>` in `oh chat` or `oh ask`, pass
+  `--enable-plugins`. Single-file skills in
+  `~/.openharness/skills/` (the Phase 18 M1 path) don't need this
+  flag — only plugin-installed skills do.
+
+### Documentation — Phase 19
+
+- [`decisions/39-phase-19-boundary.md`](./decisions/39-phase-19-boundary.md) —
+  scope, the 9 D39 sub-decisions (D39.5 marked REVERSED with
+  audit trail preserved), and the §六 wiring audit (16 layers
+  predicted).
+- [`tasks/phase-19-plan.md`](./tasks/phase-19-plan.md) — T1–T5
+  capability-level plan including the T1.0 proactive guard
+  (`openharness.plugins` added to `engine/slash_skill.py`'s
+  forbidden-imports test before any parser code landed).
+- [`learnings/phase-19.md`](./learnings/phase-19.md) — close-out
+  retro with dogfood evidence (4-skill workflow surfaced from a
+  single trigger via Phase 5c catalog injection), §六 verdict
+  mapping (15 of 16 verbatim + the D39.9 self-correction
+  discussed honestly), and M3 / Phase 20 predictions.
+
+---
+
 Phase 18 (M1 of CC Skill 接入) — `oh chat` REPL now triggers user-
 installed skills via `/<skill-name> [args]` directly, matching the
 Claude Code UX. SkillStore lookup is wired as the second resolver
