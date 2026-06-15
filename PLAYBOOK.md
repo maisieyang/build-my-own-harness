@@ -1,43 +1,109 @@
-# PLAYBOOK — Rebuilding a Production System Solo, with AI
+# PLAYBOOK — A Harness, a Finance Plugin, and the Method Behind Both
 
-> The operating model behind [OpenHarness](./README.md): one developer + Claude Code, an
-> LLM agent harness built from scratch to production-grade standards and still iterating —
-> `mypy --strict`, `ruff` clean, ≥95% coverage on CI. This is not a prompting guide. It's the working model
-> that made that pace sustainable instead of reckless: **the human owns the contract, the
-> agent drives the implementation, and a few hard disciplines keep the speed honest.**
->
-> The code is specific to a harness. The model below is not — it transfers to any domain
-> where you'd otherwise be tempted to "vibe-code" a serious system.
+> One developer + Claude Code, seven weeks, three repos: a production agent **harness** built
+> from scratch, a **methodology** codified into reusable skills, and a **vertical-industry
+> plugin** taken into finance. This is the operating model and the convictions behind all
+> three — not a prompting guide. **The human owns the contract, the agent drives the
+> implementation, and a few hard disciplines keep the speed honest.**
 
 ---
 
-## 1. The thesis: learn by rebuilding
+## 1. What I actually believe
 
-*What I cannot create, I do not understand.*
+I don't learn by reading. I learn by rebuilding — and I turned that into a method, not a
+habit. Over seven weeks I ran the same move at two altitudes: I rebuilt a production agent
+**harness** from scratch, and I rebuilt a **vertical-industry plugin** from scratch.
 
-The fastest way I've found to actually understand a domain is to rebuild a strong reference
-implementation of it — not read a tutorial, not skim the docs, but reconstruct the thing
-and own every trade-off along the way. Reading teaches you *what* a system does. Rebuilding
-forces you to confront *why* every part exists, because you have to make it work.
+Here's the conviction that came out of doing both. There's really **one thing — a capability
+the model can call — wearing three packagings:**
 
-Picking the reference target is most of the bet. Three criteria:
+> **tool · skill · plugin**
+> - a **tool** is that capability **always resident** — the LLM's syscall (in this harness, `BaseTool`).
+> - a **skill** is that capability **lazy-loaded** — expert context whose body is summoned on demand (here, *through* a tool: `LoadSkill`), not a tool itself.
+> - a **plugin** is that capability **packaged to ship** — a skill bundled with a manifest, a version, a permission surface, and a marketplace entry: the packaging where it can be versioned, gated, and sold.
 
-1. **It sets or tracks the industry bar.** OpenHarness here mirrors the vocabulary of
-   [HKUDS/OpenHarness](https://github.com/HKUDS/OpenHarness), which itself targets Claude
-   Code. You learn the real shape of the problem, not a toy's.
-2. **You have a user's feel for it.** You've used it (or its peer) enough to sense what good
-   looks like. Taste is what stops you from accepting a plausible-but-wrong design.
-3. **It's a living project.** Learn from something still evolving, not a corpse.
+Same capability, three packagings — and the third is where engineering becomes *product*. That
+packaging is how a horizontal LLM platform reaches a high-ACV vertical; it's what I read as the
+bet behind Anthropic's `model + harness + plugin` push. I didn't read about it — I built all
+three packagings, and ran the shipping one on top of the resident one.
 
-The discipline that keeps a rebuild from ballooning: **only encode what the substrate
-lacks.** Everything the foundation already gives you — language, framework, tooling, an
-existing skill library — you assemble and reuse; you do not rewrite it. That's the same
-conviction the harness itself is built on ("the harness should be thin"), applied one level
-up to how the project gets built.
+Most people can describe a plugin as "a way to extend the agent." Few can name what it really
+is: the packaging where a capability stops being just code and becomes something you can
+version, gate, and sell. I can name it because I built the loader **and** the plugin, and saw
+exactly where the technical artifact ends and the product wrapper begins.
+
+Three things I'll defend, each with the repo that earns it:
+
+- **Master a domain by rebuilding its best reference.** — ran twice (harness, finance).
+- **The harness should be thin; the model is the product.** — [build-my-own-harness](https://github.com/maisieyang/build-my-own-harness).
+- **In a vertical, the moat isn't the model — it's the plugin as the unit you version, gate, and sell.** — [finance-skills](https://github.com/maisieyang/finance-skills).
 
 ---
 
-## 2. The operating model: human owns the contract, AI drives the implementation
+## 2. The arc — one method, two altitudes, three repos
+
+```
+   study                      build                     distill
+     │                          │                          │
+ platform  OpenHarness    →  build-my-own-harness   →  this PLAYBOOK
+ vertical  Anthropic       →  mybank-credit-risk     →  finance-skills/PLAYBOOK
+           financial-services
+```
+
+Same shape, two altitudes: study the best reference, rebuild it from scratch, distill the
+principles. Picking the reference is most of the bet — it has to set the industry bar, be
+something you've used enough to have *taste* about, and still be alive. Three repos came out
+of it, and they map onto the three packagings:
+
+- **tool** → [build-my-own-harness](https://github.com/maisieyang/build-my-own-harness) — the
+  base: a production harness rebuilt from scratch (reference: [HKUDS/OpenHarness](https://github.com/HKUDS/OpenHarness)).
+- **skill** → [my-skills](https://github.com/maisieyang/my-skills) — the method itself, codified
+  into reusable skills (a fork of agent-skills; I only encode what the base lacks). This is what
+  makes the loop *repeatable*, not lucky.
+- **plugin** → [finance-skills](https://github.com/maisieyang/finance-skills) — the vertical: the
+  same move run into finance (reference: Anthropic's open-source `financial-services`; my
+  from-scratch build: [`mybank-credit-risk`](https://github.com/maisieyang/finance-skills/tree/main/mybank-credit-risk)).
+
+---
+
+## 3. The vertical chapter — verifying the plugin thesis
+
+The harness answered "how is a horizontal platform built." It left a question open: **how does
+that platform get *into* an industry — and what, exactly, is a plugin?** Anthropic's play, as
+I read it, is `model + harness + plugin`, aimed at high-ACV verticals (finance, legal,
+healthcare). I wanted to verify it the only way I trust — by building one.
+
+So I ran the same move one altitude up. I studied Anthropic's open-source `financial-services`
+design, then built [`mybank-credit-risk`](https://github.com/maisieyang/finance-skills/tree/main/mybank-credit-risk)
+from scratch — a China-bank consumer-credit-risk plugin: an agent, one `SKILL.md` written
+*deep* (the judgment a ten-year underwriter never writes down) alongside thinner ones, a shared
+connectors plugin, explicit trade-offs. The full vertical playbook lives in
+[finance-skills](https://github.com/maisieyang/finance-skills); I'm not repeating it here.
+
+What I *earned* by building it is the third packaging: **a plugin is, underneath, still the same
+capability** — its value isn't the mechanism, it's the wrapper. The plugin is the packaging
+where a capability becomes **versioned, gated, and sellable**: where engineering turns into
+product, and why a horizontal platform can reach a vertical without rewriting its core.
+
+And I closed the loop where it counts — at the seam. I taught my own harness to load
+Claude-Code-format plugins (a dual-format `PluginLoader`), dropped the finance plugin into
+`~/.openharness/plugins/`, and triggered `/credit-report-reviewer__parse-credit-report` on my
+own runtime. The plugin loaded, the skill fired, and the model did the *right* thing: it asked
+for the credit data source instead of inventing one (no bureau MCP was wired up). So **layer 1
+genuinely loads and dispatches a layer-3 plugin** — the hosting path runs end-to-end on my own
+harness. (Honest scope: that proves the plugin *mechanism*, not a finished credit review; the
+gaps are written up in [`learnings/phase-19.md`](./learnings/phase-19.md).)
+
+*(An accidental finding, but honest to say: doing the vertical also showed me the FDE day-job —
+eliciting methodology out of domain experts — isn't where my center is. I'm a platform builder.
+I only know that because I did the other thing.)*
+
+---
+
+> The rest of this PLAYBOOK is that method in detail — *how* I actually build, shown on the
+> harness (the resident layer, where the discipline is strictest).
+
+## 4. The operating model: human owns the contract, AI drives the implementation
 
 The split that makes AI-first development work is a clean line of ownership:
 
@@ -62,7 +128,7 @@ The failure mode on each side:
 
 ---
 
-## 3. The module loop
+## 5. The module loop
 
 A rebuild is too large to design up front. It runs as a loop, once per module, in
 dependency order:
@@ -76,7 +142,7 @@ dependency order:
   ┌──────────────┐      ┌───────────────────────┐
   │    DESIGN     │ ──►  │      IMPLEMENT        │ ──► commit
   │ interview-me  │      │  the solo coding loop  │
-  │   + plan      │      │  (§4: TDD to green)    │
+  │   + plan      │      │  (§6: TDD to green)    │
   └──────────────┘      └───────────────────────┘
 ```
 
@@ -98,11 +164,11 @@ altitude: the agent decomposes better than a plan document can, because it sees 
 it is. The plan file is kept, not deleted — on a long, exploratory rebuild it's the anchor
 that lets you wander into a tangent and still find your way back.
 
-**Implement** via the coding loop in §4.
+**Implement** via the coding loop in §6.
 
 ---
 
-## 4. The disciplines that keep the speed honest
+## 6. The disciplines that keep the speed honest
 
 Speed without these is just debt accrual. Each one is here because it catches a failure that
 nothing downstream — not CI, not a coverage gate — can catch.
@@ -123,6 +189,8 @@ you're praying.
 **Reuse over rebuild — the thin-layer line.** Every workaround you write for something the
 substrate can't yet do becomes dead weight the moment it can. Before encoding anything, ask
 whether the foundation already provides it. Assemble what exists; only build what's missing.
+(This is the same conviction as "the harness should be thin," applied to how the project
+itself gets built — and it's exactly what `my-skills` encodes.)
 
 **The trail is the memory.** On a solo project the real risk isn't lack of help — it's that
 the *past you* stops helping. Decisions made three weeks ago are forgotten today. Append-only
@@ -132,24 +200,28 @@ goes — and that zero-friction filing is what lets a solo project sustain its p
 
 ---
 
-## 5. Evidence it worked
+## 7. Evidence it holds up
 
-The model above produced OpenHarness — and is still producing it. This wasn't a sprint that
+The method produced all three rungs — and is still producing them. This wasn't a sprint that
 shipped once and stopped; it's been weeks of sustained, self-looping iteration by one person,
-with code, methodology, and documentation evolving together. Version numbers are incidental
-here — the real milestone isn't a tag, it's that all three came together. What's checkable:
+with code, methodology, and documentation evolving together. Version numbers are incidental —
+the real milestone isn't a tag, it's that the whole arc came together. What's checkable:
 
-- **Sustained solo iteration** — ~7 weeks, 20 subsystems (engine, tools, hooks, permissions,
-  observability, MCP, skills, sub-agents, sandbox, compaction, memory, an eval substrate…),
-  300+ commits. The numbers are a rough impression, not the point; the point is that it kept
-  going under its own loop, by one person's will.
-- **Quality bars held throughout**, enforced on CI, not locally: `mypy --strict` across
-  `src/`, `ruff` lint + format clean, **≥95% coverage gate**, on Python 3.10 and 3.11.
+- **The arc is real, not narrated** — three shipped repos (harness / skills / vertical), and the
+  vertical plugin actually *loaded and dispatched* on the harness (§3 — the hosting path, not a
+  finished credit review). The method generalized across two very different altitudes; that's
+  the strongest evidence it's a method and not a one-off.
+- **Sustained solo iteration** — ~7 weeks, 20 subsystems in the harness alone (engine, tools,
+  hooks, permissions, observability, MCP, skills, sub-agents, sandbox, compaction, memory…),
+  300+ commits. The numbers are a rough impression; the point is it kept going under its own
+  loop, by one person's will.
+- **Quality bars held throughout**, enforced on CI, not locally: `mypy --strict` across `src/`,
+  `ruff` lint + format clean, **≥95% coverage gate**, on Python 3.10 and 3.11.
 - **The full reasoning trail is preserved** — every trade-off in [`decisions/`](./decisions),
   every retrospective in [`learnings/`](./learnings), the plan/execute trail in
   [`tasks/`](./tasks). Not just *what* was built, but *why each trade-off was made*.
 
-Why the disciplines in §4 are not optional — the industry learned this the expensive way.
+Why the disciplines in §6 are not optional — the industry learned this the expensive way.
 Anthropic's [April 2026 Claude Code postmortem](https://www.anthropic.com/engineering/april-23-postmortem)
 documents three pure *harness-layer* changes (no model change) silently degrading quality
 for ~6 weeks; heavy dogfooding didn't catch it. The remediation was to run a full evaluation
@@ -161,11 +233,11 @@ made things worse. The lesson that generalizes: when a system's behavior is part
 part probabilistic model, "it looks fine" and "it still passes" are not the same as "it
 hasn't regressed." Verification has to be deliberate. (This project ships an eval substrate
 with two consumers; turning it into a disciplined regression baseline for *every*
-probabilistic change is still in progress — see §6.)
+probabilistic change is still in progress — see §8.)
 
 ---
 
-## 6. Honest limits
+## 8. Honest limits
 
 Where this model does **not** apply, stated plainly:
 
@@ -176,13 +248,21 @@ Where this model does **not** apply, stated plainly:
   reverse. For genuinely greenfield problems with no peer to study, the `reverse-spec` step
   has nothing to bite on — you're doing real R&D, not a rebuild.
 - **The probabilistic-behavior layer is still forming.** Deterministic tests can't prove a
-  prompt or memory change didn't degrade emergent behavior (§5). A disciplined regression
+  prompt or memory change didn't degrade emergent behavior (§7). A disciplined regression
   baseline for that is something I'm still working out through practice rather than something
   I'd hand you as settled method.
 
 ---
 
 ## Pointers
+
+The arc, in three repos:
+
+- **tool** → [build-my-own-harness](https://github.com/maisieyang/build-my-own-harness) (you are here) — the base harness
+- **skill** → [my-skills](https://github.com/maisieyang/my-skills) — the method codified into reusable skills
+- **plugin** → [finance-skills](https://github.com/maisieyang/finance-skills) — the same move run into a finance vertical
+
+Inside this repo:
 
 - [`README.md`](./README.md) — project entry point and architecture
 - [`REFERENCE.md`](./REFERENCE.md) — the frozen cognition map of the study target

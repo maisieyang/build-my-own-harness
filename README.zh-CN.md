@@ -24,7 +24,7 @@
 1. **Harness 要薄。** 它只编码模型还做不到的事——而每一个这样的 workaround，都会在模型变强时变成 dead weight。设计目标是**半年后的模型**：契约绝不为了迁就弱模型而削弱；要么换更强的模型，要么强化 prompt。
 2. **Provider 无关是不变量，不是 feature。** 同一个循环、工具、权限模型跑任何 OpenAI 兼容端。这还把 harness 变成一台受控对比仪器：固定 harness、换模型，行为差异就归因于模型。
 3. **最小脚手架优先于编排。** 没有 graph builder、没有 workflow DSL。一个流式工具循环 + 递归子 agent + 动态 skill 加载，就覆盖了编排框架用大量机械才做到的事——而那些机械会随模型长程规划能力变强而加速过时。
-4. **Skill 是可执行的 spec，不是文档。** 模型是逐条执行它，不是扫一眼找感觉。配套仓库 [finance-skills](https://github.com/maisieyang/finance-skills) 演示了一个非 Anthropic 模型逐条遵守 16 条编号硬拒绝规则、并在输出里逐字引用规则 ID。
+4. **Skill 是可执行的 spec，不是文档。** 模型是逐条执行它，不是扫一眼找感觉。配套仓库 [finance-skills](https://github.com/maisieyang/finance-skills) 正是这么编码的：一份征信核查 `SKILL.md`，把编号硬拒绝规则写成"拿来执行"的、不是拿来读的——可执行 spec，不是散文。
 
 ---
 
@@ -120,6 +120,18 @@ uv run oh chat                                       #    或多轮 REPL
 
 - 方法论提炼 → [**PLAYBOOK.zh-CN.md**](./PLAYBOOK.zh-CN.md)（工作模型：靠重建来学、人守契约、让速度诚实的几条纪律）
 - 项目级 meta-retro → [`learnings/phase-7.md`](./learnings/phase-7.md)
+
+---
+
+## 它是一条三-repo 弧线里的一环
+
+这个 harness 是基座层。同一个动作——研究最好的参照、从零重建、蒸馏原则——在同样的 ~7 周里跑了两个高度。三个 repo 其实是**一份能力的三种封装**：**tool** 是这份能力常驻（LLM 的 syscall）；**skill** 是它懒加载（按需调出的专家上下文，通过一个 tool 交付）；**plugin** 是它打包待发（一个 skill 裹上 manifest、版本、权限面、marketplace 条目——它能被版本化、授权、售卖的那层封装）。
+
+- **tool** → **build-my-own-harness**（你在这）—— 生产级 harness。
+- **skill** → [**my-skills**](https://github.com/maisieyang/my-skills) —— 方法本身，被编码成可复用 skill（fork 自 agent-skills，只编码基石没有的）。
+- **plugin** → [**finance-skills**](https://github.com/maisieyang/finance-skills) —— 同一个动作跑进垂直：研究 Anthropic 开源的 `financial-services`，再从零造 [`mybank-credit-risk`](https://github.com/maisieyang/finance-skills/tree/main/mybank-credit-risk)。
+
+这条弧线不只是讲出来的——它在接缝处真的跑了：一个双格式 `PluginLoader` 让这个 harness **加载并 dispatch** 了那个 Claude-Code 格式的金融插件，在这个 runtime 上触发 `/credit-report-reviewer__parse-credit-report` 把 skill 点了起来（模型随后正确地去要征信数据源、没有凭空编——当时没接 bureau MCP；dogfood 范围与缺口见 [`learnings/phase-19.md`](./learnings/phase-19.md)）。完整论点在 [**PLAYBOOK.zh-CN.md**](./PLAYBOOK.zh-CN.md) §1–§3。
 
 ---
 

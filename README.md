@@ -41,10 +41,10 @@ Four convictions shaped every subsystem:
    cover what orchestration frameworks do with far more machinery — machinery
    that ages poorly as models get better at long-horizon planning.
 4. **A skill is an executable spec, not documentation.** The model executes it
-   clause by clause, not skims it for vibes. Companion repo
-   [finance-skills](https://github.com/maisieyang/finance-skills) demonstrates a
-   non-Anthropic model following 16 numbered hard-reject rules and citing rule
-   IDs verbatim in its output.
+   clause by clause, not skims it for vibes. The companion repo
+   [finance-skills](https://github.com/maisieyang/finance-skills) encodes exactly
+   this: a credit-review `SKILL.md` of numbered hard-reject rules written to be
+   *applied*, not skimmed — an executable spec, not prose.
 
 ---
 
@@ -158,6 +158,29 @@ and what each phase predicted before being built.*
 
 - The methodology, distilled → [**PLAYBOOK.md**](./PLAYBOOK.md) (the operating model: learn by rebuilding, human owns the contract, the disciplines that keep speed honest)
 - The project-level meta-retro → [`learnings/phase-7.md`](./learnings/phase-7.md)
+
+---
+
+## Part of a three-repo arc
+
+This harness is the base layer. The same move — study the best reference, rebuild it from
+scratch, distill the principles — was run at two altitudes over the same ~7 weeks. The three
+repos are really **one capability in three packagings**: a **tool** is the capability always
+resident (the LLM's syscall); a **skill** is it lazy-loaded (expert context summoned on demand,
+through a tool); a **plugin** is it packaged to ship (a skill bundled with a manifest, version,
+permission surface, and marketplace entry — the packaging where it can be versioned, gated, and
+sold).
+
+- **tool** → **build-my-own-harness** (you are here) — the production harness.
+- **skill** → [**my-skills**](https://github.com/maisieyang/my-skills) — the method itself, codified into reusable skills (a fork of agent-skills; only what the base lacks).
+- **plugin** → [**finance-skills**](https://github.com/maisieyang/finance-skills) — the same move run into a vertical: studied Anthropic's open-source `financial-services`, then built [`mybank-credit-risk`](https://github.com/maisieyang/finance-skills/tree/main/mybank-credit-risk) from scratch.
+
+The arc isn't just narrated — it ran at the seam: a dual-format `PluginLoader` let this harness
+**load and dispatch** that Claude-Code-style finance plugin, and triggering
+`/credit-report-reviewer__parse-credit-report` on this runtime fired the skill (the model then
+correctly asked for the credit data source — no bureau MCP was wired up; dogfood scope and gaps
+in [`learnings/phase-19.md`](./learnings/phase-19.md)). The full thesis is in
+[**PLAYBOOK.md**](./PLAYBOOK.md) §1–§3.
 
 ---
 
