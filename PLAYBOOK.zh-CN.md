@@ -1,7 +1,7 @@
 # PLAYBOOK — 一个人 + AI,重建一套生产级系统
 
 > [OpenHarness](./README.zh-CN.md) 背后的工作模型:一个开发者 + Claude Code,从零造出一套
-> 生产级 LLM agent harness,至今仍在迭代——`mypy --strict`、`ruff` clean、CI 上 ≥95% 覆盖。
+> LLM agent harness,从零做到生产级标准、至今仍在迭代——`mypy --strict`、`ruff` clean、CI 上 ≥95% 覆盖。
 > 这不是一份写 prompt 的指南,而是那套让"快"不变成"鲁莽"的工作模型:**人守在 contract 层,
 > agent 驱动实现,几条硬纪律保证速度是诚实的。**
 >
@@ -132,8 +132,8 @@ append-only 的三个 trail(`decisions/`、`tasks/`、`learnings/`)解决它。�
 [harness engineering 实验](https://www.langchain.com/blog/improving-deep-agents-with-harness-engineering)
 是最干净的对照:模型固定,纯靠 harness 改动把一个 agent 从 52.8% 提到 66.5%——其中一个听起来很合理的
 改动("全程开最高 reasoning")被**测量**证明反而更差。能泛化的教训:当一个系统的行为一半是代码、一半是
-概率模型,"看起来没问题"和"测试照样过",都不等于"它没有劣化"。验证必须是刻意的。(为这个项目建一套
-概率行为的回归基线,仍在进行中,不在此处声称已有。)
+概率模型,"看起来没问题"和"测试照样过",都不等于"它没有劣化"。验证必须是刻意的。(这个项目已 ship 一套
+eval substrate、两个 consumer;把它变成对*每一次*概率改动都跑的、有纪律的回归基线,仍在进行中——见 §6。)
 
 ---
 

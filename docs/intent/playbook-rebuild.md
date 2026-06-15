@@ -23,6 +23,16 @@
 - `my-skills` 三个自有 skill(reverse-spec / roadmap→并入 / debrief)+ build/test/eval skill
 - `learnings/` `decisions/` `tasks/` —— 真实推理留痕(作为证据,不作为方法论叙述)
 
-## 下一步
+## 状态（2026-06-15，更新）
 
-A 路径:存意图(本文件)→ 读 CLAUDE.md + my-skills → 出新 `PLAYBOOK.md` 骨架审稿 → 点头后写正文 → 再处理 PLAYBOOK-PM(轻量)→ 同步 README en/zh-CN 链接描述。
+**已完成并 commit/push：**
+- `PLAYBOOK.md` / `.zh-CN.md` — 第一性原理重写（learn-by-rebuilding / 人守契约 / 让速度诚实的纪律）；eval·debrief 不作为方法论；去版本化（~7 周 / 20 子系统 / 300+ commits，版本号退为次要）。
+- `PLAYBOOK-PM.md` / `.zh-CN.md` — 18,500 字 → 一屏 6 条产品决策表。
+- `README.md` / `.zh-CN.md` — 链接改指本地化版本 + 去版本化。
+- 经 doubt-driven 对抗式 review，修复并**已同步到 en + zh**：① REFERENCE 版本 v0.1.7→**v0.1.9**（删假日期 2026-04-26）；② PLAYBOOK §5 改为"substrate 已 ship、纪律实践仍在成形"（消除与已 ship 的 `eval/` 子系统的自相矛盾）；③ "production-grade" 锚到"标准/质量门"；④ README "里面有什么" 补全 5 个遗漏子系统（api/protocols/config/prompts/markdown_store）；`pyproject` 删未测的 py3.12 classifier。
+
+commit:`7f7d523`（en 主体）+ 后续 zh-CN 同步 commit。源 session 抢救存档：`../recovered-session-97d7d854.md`。
+
+**仍开放（未决，非阻塞）：** README `## Architecture` 仍把 streaming 全归 `engine/`、未提 `api/` 的 wire 翻译（doubt-driven item 3，判为 out-of-scope 暂留）。
+
+**纪律备忘：** 任何对 en 的改动必须同步 zh（本轮一度只改了 en 才发现 drift）。

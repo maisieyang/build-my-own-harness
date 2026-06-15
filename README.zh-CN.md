@@ -11,7 +11,7 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 ![Type checked: mypy](https://img.shields.io/badge/type%20checked-mypy%20strict-1f5082)
 
-> **生产级的 LLM agent harness——用 Python 从零重建，每个子系统、每个取舍都亲手拥有。**
+> **一套用 Python 从零重建的 LLM agent harness，做到生产级标准——每个子系统、每个取舍都亲手拥有。**
 
 你给一个 prompt，它流式驱动 LLM，LLM 选工具，harness 安全地执行，循环持续到模型说"做完了"。一个严肃的 agent runtime 该有的都在——流式工具循环、三层权限、hook 中间件、结构化可观测、Docker/gVisor 沙箱、slash 命令、插件、递归子 agent、多轮 REPL、capability 锚定的 eval substrate、Claude-Code 式自动记忆——全部建在一个刻意保持的**薄核心**上。Provider 无关：同一个循环跑 Qwen、DeepSeek 或任何 OpenAI 兼容端。`mypy --strict`、`ruff` 干净、≥95% 覆盖率门禁。
 
@@ -79,6 +79,7 @@ LLM 自己就是编排器——没有状态机。循环只看"这轮模型有没
 - **压缩**（`compaction/` + `services/`）—— L1 逐工具结果截断 + L2 反应式 PromptTooLong 恢复。
 - **Eval substrate**（`eval/`）—— `Sample`/`Score`/`Scorer` + scorer（程序化 + LLM-judge）+ cassette 录制/回放 + 版本戳结果 + `oh eval`。两个 consumer 已落地。
 - **自动记忆**（`memory/`）—— LLM 自行决定何时持久记住；两步内联 `Write` + `Edit` `MEMORY.md`；按项目存储。由一个多轮 eval 把关。
+- **基座**（`api/` · `protocols/` · `config/` · `prompts/` · `markdown_store/`）—— OpenAI-compatible client + 流式翻译、Pydantic v2 wire 类型、`OPENHARNESS_*` 配置、system prompt、共享 Markdown store。
 
 ---
 
@@ -131,7 +132,7 @@ uv run oh chat                                       #    或多轮 REPL
 
 ## 致谢
 
-名称与模块词汇承袭自 [**HKUDS/OpenHarness**](https://github.com/HKUDS/OpenHarness)（MIT）——最初的 Python LLM harness。本仓库是**独立、从零的重新实现**，作为学习 artifact 而建：不共享代码、实现频繁分歧、范围刻意更窄。[`REFERENCE.md`](./REFERENCE.md) 捕获了上游 v0.1.7 spec（截至 2026-04-26）作为研究标的，非拷贝源。
+名称与模块词汇承袭自 [**HKUDS/OpenHarness**](https://github.com/HKUDS/OpenHarness)（MIT）——最初的 Python LLM harness。本仓库是**独立、从零的重新实现**，作为学习 artifact 而建：不共享代码、实现频繁分歧、范围刻意更窄。[`REFERENCE.md`](./REFERENCE.md) 捕获了上游 v0.1.9 spec 作为研究标的，非拷贝源。
 
 ## License
 
