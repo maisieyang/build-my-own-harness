@@ -16,6 +16,7 @@ Covers:
 from __future__ import annotations
 
 import json
+import re
 from typing import TYPE_CHECKING
 
 from typer.testing import CliRunner
@@ -329,17 +330,21 @@ class TestChatResumeBanner:
 
 class TestHelpMentionsResume:
     def test_ask_help_lists_resume_flags(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Wide terminal so the flags don't wrap; strip ANSI because under
+        # force_terminal (CI sets GITHUB_ACTIONS) Rich styles the help text.
         monkeypatch.setenv("COLUMNS", "200")
         runner = CliRunner()
         result = runner.invoke(cli_module.app, ["ask", "--help"])
         assert result.exit_code == 0
-        assert "--resume" in result.stdout
-        assert "--resume-id" in result.stdout
+        plain = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", result.stdout)
+        assert "--resume" in plain
+        assert "--resume-id" in plain
 
     def test_chat_help_lists_resume_flags(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("COLUMNS", "200")
         runner = CliRunner()
         result = runner.invoke(cli_module.app, ["chat", "--help"])
         assert result.exit_code == 0
-        assert "--resume" in result.stdout
-        assert "--resume-id" in result.stdout
+        plain = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", result.stdout)
+        assert "--resume" in plain
+        assert "--resume-id" in plain

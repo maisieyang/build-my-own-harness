@@ -17,6 +17,7 @@ stack was deleted.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from typer.testing import CliRunner
@@ -226,21 +227,24 @@ class TestCompactReplCommand:
 
 class TestHelpMentionsNewFlags:
     def test_ask_help_lists_new_flags(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # Wide terminal so Rich doesn't truncate.
+        # Wide terminal so the flags don't wrap; strip ANSI because under
+        # force_terminal (CI sets GITHUB_ACTIONS) Rich styles the help text.
         monkeypatch.setenv("COLUMNS", "200")
         runner = CliRunner()
         result = runner.invoke(cli_module.app, ["ask", "--help"])
         assert result.exit_code == 0
-        assert "--no-auto-compact" in result.stdout
-        assert "--compact-threshold" in result.stdout
+        plain = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", result.stdout)
+        assert "--no-auto-compact" in plain
+        assert "--compact-threshold" in plain
 
     def test_chat_help_lists_new_flags(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("COLUMNS", "200")
         runner = CliRunner()
         result = runner.invoke(cli_module.app, ["chat", "--help"])
         assert result.exit_code == 0
-        assert "--no-auto-compact" in result.stdout
-        assert "--compact-threshold" in result.stdout
+        plain = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", result.stdout)
+        assert "--no-auto-compact" in plain
+        assert "--compact-threshold" in plain
 
     def test_chat_help_text_mentions_compact_repl(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_min_env(monkeypatch)
