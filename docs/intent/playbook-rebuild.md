@@ -33,6 +33,6 @@
 
 commit:`7f7d523`（en 主体）+ 后续 zh-CN 同步 commit。源 session 抢救存档：`../recovered-session-97d7d854.md`。
 
-**仍开放（未决，非阻塞）：** README `## Architecture` 仍把 streaming 全归 `engine/`、未提 `api/` 的 wire 翻译（doubt-driven item 3，判为 out-of-scope 暂留）。
+**仍开放（未决，非阻塞）：** 无。（README `## Architecture` 的 `api/` wire 翻译层已于 2026-06-15 补上，en + zh 同步。）
 
 **纪律备忘：** 任何对 en 的改动必须同步 zh（本轮一度只改了 en 才发现 drift）。

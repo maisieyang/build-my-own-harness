@@ -36,7 +36,7 @@
 2. **Tools**（`tools/`）—— `BaseTool` 抽象基类 + Pydantic 校验的输入 schema；`ToolRegistry` 是 engine 内省的目录。权限检查在派发**之前**跑。
 3. **Hooks**（`hooks/`）—— 覆盖 5 个生命周期事件的中间件链；hook 可 deny / modify / observe。它是扩展缝：压缩、mode bundle、插件全挂在它上面。
 
-LLM 自己就是编排器——没有状态机。循环只看"这轮模型有没有发 `tool_use`"前进，仅此而已；换 provider 不碰它。
+LLM 自己就是编排器——没有状态机。循环只看"这轮模型有没有发 `tool_use`"前进，仅此而已。provider 边界落在 `api/`——一个流式 client，加上 wire→`ApiStreamEvent` 的翻译（连同差异化错误与 retry/backoff）——所以换 provider（Qwen、DeepSeek、任何 OpenAI 兼容端）都不碰这个循环。
 
 ---
 

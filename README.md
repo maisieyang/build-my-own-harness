@@ -64,8 +64,10 @@ Three layered concerns, sliced vertically:
    and plugins all hang off it.
 
 The LLM is the orchestrator — there's no state machine. The loop advances on
-"did the model emit a `tool_use` this turn?", nothing else; swapping providers
-doesn't touch it.
+"did the model emit a `tool_use` this turn?", nothing else. The provider boundary
+sits in `api/` — a streaming client plus wire-to-`ApiStreamEvent` translation
+(with differentiated errors and retry/backoff) — so swapping providers (Qwen,
+DeepSeek, any OpenAI-compatible endpoint) never touches the loop.
 
 ---
 
