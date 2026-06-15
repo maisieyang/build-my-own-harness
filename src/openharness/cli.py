@@ -1362,6 +1362,7 @@ async def _run_chat(
                 cmd = command_store.get(slash_name) if command_store is not None else None
                 if cmd is not None:
                     # CommandStore hit → Phase 5b path (substitute body + carry mode).
+                    assert command_store is not None  # cmd came from command_store.get
                     user_input, invoked_command = resolve_command_invocation(
                         user_input, command_store
                     )

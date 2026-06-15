@@ -66,6 +66,7 @@ from openharness.eval.cassette import (
 from openharness.protocols.content import TextBlock, ToolResultBlock, ToolUseBlock
 from openharness.protocols.messages import ConversationMessage
 from openharness.protocols.requests import ApiMessageRequest
+from openharness.protocols.stream_events import ApiMessageCompleteEvent
 from openharness.protocols.tools import ToolSpec
 
 if TYPE_CHECKING:
@@ -421,9 +422,9 @@ async def _stream_one_turn(
     api_client: OpenAICompatibleApiClient,
 ) -> tuple[list[ToolUseBlock], list[TextBlock], str | None]:
     """Run one LLM round-trip; return (tool_uses, text_blocks, stop_reason)."""
-    completion_event = None
+    completion_event: ApiMessageCompleteEvent | None = None
     async for event in api_client.stream_message(request):
-        if type(event).__name__ == "ApiMessageCompleteEvent":
+        if isinstance(event, ApiMessageCompleteEvent):
             completion_event = event
             break
     if completion_event is None:

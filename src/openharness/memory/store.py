@@ -189,7 +189,9 @@ class FilesystemMemoryStore(FilesystemMarkdownStore[Memory]):
         if not candidate.exists():
             return candidate
         # Collision with a different-signature memory — append id suffix
-        suffix = memory.id[:8] if len(memory.id) >= 8 else memory.id
+        mem_id = memory.id
+        assert mem_id is not None  # id is populated before a memory is persisted
+        suffix = mem_id[:8] if len(mem_id) >= 8 else mem_id
         return target_dir / f"{slug}-{suffix}.md"
 
 
