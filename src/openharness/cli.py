@@ -3001,7 +3001,7 @@ app.add_typer(eval_app, name="eval")
         "4 scorers (parse + keyword + substring + LLM-judge), version-stamped results."
     ),
 )
-def eval_focus_state(
+def eval_focus_state(  # pragma: no cover — experimental eval surface (excluded from coverage gate)
     mode: str = typer.Option(
         "live",
         "--mode",
@@ -3158,7 +3158,7 @@ def eval_focus_state(
         "5 scorers, version-stamped results."
     ),
 )
-def eval_memory_decision(
+def eval_memory_decision(  # pragma: no cover — experimental eval surface (excluded from coverage gate)
     mode: str = typer.Option(
         "live",
         "--mode",

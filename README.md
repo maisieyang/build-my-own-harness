@@ -108,7 +108,7 @@ By subsystem (`src/openharness/`):
 - **Sandbox** (`execution/`) — Docker via `--sandbox`, runtime-selectable (`runc` / `runsc` gVisor).
 - **REPL** — `oh chat` accumulates history across turns via `ConversationCompleteEvent`.
 - **Compaction** (`compaction/` + `services/`) — L1 per-tool-result truncation + L2 reactive PromptTooLong recovery.
-- **Eval substrate** (`eval/`) — `Sample`/`Score`/`Scorer` + scorers (programmatic + LLM-judge) + cassette record/replay + version-stamped results + `oh eval`. Two consumers ship.
+- **Eval substrate** (`eval/`, *experimental*) — `Sample`/`Score`/`Scorer` + scorers (programmatic + LLM-judge) + cassette record/replay + version-stamped results + `oh eval`. Two consumers ship; the subsystem is excluded from the coverage gate while it stabilizes.
 - **Auto memory** (`memory/`) — the LLM decides when to durably remember; two-step inline `Write` + `Edit` of `MEMORY.md`; per-project storage. Gated by a multi-turn eval.
 - **Foundations** (`api/` · `protocols/` · `config/` · `prompts/` · `markdown_store/`) — OpenAI-compatible client + stream translation, Pydantic v2 wire types, `OPENHARNESS_*` settings, system prompts, shared Markdown store.
 

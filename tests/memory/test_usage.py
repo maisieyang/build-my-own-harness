@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 import pytest
 import yaml
 
+from openharness.memory import usage
 from openharness.memory.model import parse_memory
 from openharness.memory.usage import mark_memory_used
 
@@ -239,3 +240,51 @@ class TestMarkMemoryUsedFailures:
         mark_memory_used(memory)
         files = sorted(p.name for p in path.parent.iterdir())
         assert files == ["stripe.md"]
+
+    def test_no_raise_when_frontmatter_missing(self, tmp_path: Path) -> None:
+        # File lost its frontmatter fence between discovery and mark
+        # (e.g. user hand-edited it). Must bail without raising or writing.
+        path, memory = _write_and_parse(tmp_path)
+        path.write_text("no frontmatter here, just body\n")
+        mark_memory_used(memory)  # no raise
+        assert path.read_text() == "no frontmatter here, just body\n"
+
+    def test_no_raise_on_invalid_yaml_frontmatter(self, tmp_path: Path) -> None:
+        # Frontmatter present but not parseable YAML → bail, no raise.
+        path, memory = _write_and_parse(tmp_path)
+        path.write_text("---\nfoo: [unclosed\n---\nbody\n")
+        mark_memory_used(memory)  # no raise
+
+    def test_no_raise_when_frontmatter_not_a_mapping(self, tmp_path: Path) -> None:
+        # Frontmatter is valid YAML but a scalar, not a mapping → bail.
+        path, memory = _write_and_parse(tmp_path)
+        path.write_text("---\njust a scalar string\n---\nbody\n")
+        mark_memory_used(memory)  # no raise
+
+    def test_no_raise_when_serialize_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # yaml.safe_dump blows up on the rewritten frontmatter → bail
+        # before touching the file. Original use_count stays 3.
+        path, memory = _write_and_parse(tmp_path)
+
+        def _boom(*_a: object, **_k: object) -> str:
+            raise yaml.YAMLError("cannot serialize")
+
+        monkeypatch.setattr(usage.yaml, "safe_dump", _boom)
+        mark_memory_used(memory)  # no raise
+        assert _read_frontmatter_dict(path)["use_count"] == 3
+
+    def test_cleans_up_tmp_when_replace_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Tempfile is written but os.replace fails (e.g. cross-device) →
+        # the orphan tempfile must be cleaned up, leaving only the original.
+        path, memory = _write_and_parse(tmp_path)
+
+        def _boom(*_a: object, **_k: object) -> None:
+            raise OSError("replace failed")
+
+        monkeypatch.setattr(usage.os, "replace", _boom)
+        mark_memory_used(memory)  # no raise
+        assert sorted(p.name for p in path.parent.iterdir()) == ["stripe.md"]

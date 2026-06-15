@@ -14,6 +14,7 @@ Coverage targets (per decisions/24 acceptance):
 
 from __future__ import annotations
 
+import sys
 import textwrap
 from typing import TYPE_CHECKING
 
@@ -340,6 +341,21 @@ class TestParseManifestErrors:
         # Uppercase plugin name rejected by ``__post_init__``.
         assert parse_manifest(manifest) is None
 
+    def test_unreadable_file_returns_none(self, tmp_path: Path) -> None:
+        # File exists (passes is_file) but read_text fails on permissions →
+        # warning + None, never raises. POSIX-only chmod semantics.
+        if sys.platform.startswith("win"):
+            pytest.skip("POSIX chmod semantics required")
+        manifest = _write_manifest(
+            tmp_path / "p",
+            "name: p\nversion: 0.1.0\ndescription: x\n",
+        )
+        manifest.chmod(0)
+        try:
+            assert parse_manifest(manifest) is None
+        finally:
+            manifest.chmod(0o644)
+
 
 # --------------------------------------------------------------------------- #
 # Component parsing — defensive tolerance                                     #
@@ -382,6 +398,43 @@ class TestComponentParsing:
             ComponentRef(file="valid.md"),
             ComponentRef(file="also-valid.md"),
         )
+
+    def test_non_mapping_component_entry_skipped(self, tmp_path: Path) -> None:
+        # A bare scalar (not a mapping) inside a component list is skipped
+        # with a warning; valid sibling entries still load.
+        manifest = _write_manifest(
+            tmp_path / "p",
+            """\
+            name: my-plugin
+            version: 0.1.0
+            description: x
+            commands:
+              - just-a-bare-string
+              - file: ok.md
+            """,
+        )
+        m = parse_manifest(manifest)
+        assert m is not None
+        assert m.commands == (ComponentRef(file="ok.md"),)
+
+    def test_mcp_server_missing_name_skipped(self, tmp_path: Path) -> None:
+        # An mcp_servers entry without a usable name is skipped; the
+        # well-formed sibling still loads.
+        manifest = _write_manifest(
+            tmp_path / "p",
+            """\
+            name: my-plugin
+            version: 0.1.0
+            description: x
+            mcp_servers:
+              - command: ["echo", "hi"]
+              - name: Good
+                command: ["echo", "ok"]
+            """,
+        )
+        m = parse_manifest(manifest)
+        assert m is not None
+        assert tuple(s.name for s in m.mcp_servers) == ("Good",)
 
     def test_hook_missing_module_skipped(self, tmp_path: Path) -> None:
         manifest = _write_manifest(

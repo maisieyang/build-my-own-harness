@@ -179,6 +179,33 @@ class TestCallFailures:
             text_parts = [c.text for c in result.content if hasattr(c, "text")]
             assert any("intentional test failure" in t.lower() for t in text_parts)
 
+    async def test_list_tools_wraps_transport_error(
+        self, monkeypatch: pytest.MonkeyPatch, log_stream: io.StringIO
+    ) -> None:
+        # A live session that raises mid-call (transport drop / server crash)
+        # is wrapped in McpCallError and logged as mcp_server_error.
+        _configure(log_stream)
+
+        async def _raise(*_a: object, **_k: object) -> object:
+            raise RuntimeError("session exploded")
+
+        async with McpClient(_python_server_cfg(name="Boom")) as client:
+            assert client._session is not None
+            monkeypatch.setattr(client._session, "list_tools", _raise)
+            with pytest.raises(McpCallError, match="list_tools failed"):
+                await client.list_tools()
+        assert any(e["phase"] == "call" for e in _events(log_stream, "mcp_server_error"))
+
+    async def test_call_tool_wraps_transport_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def _raise(*_a: object, **_k: object) -> object:
+            raise RuntimeError("session exploded")
+
+        async with McpClient(_python_server_cfg(name="Boom")) as client:
+            assert client._session is not None
+            monkeypatch.setattr(client._session, "call_tool", _raise)
+            with pytest.raises(McpCallError, match=r"call_tool.*failed"):
+                await client.call_tool("echo", arguments={"text": "x"})
+
 
 # --------------------------------------------------------------------------- #
 # Smoke: re-enterability & isolation                                          #

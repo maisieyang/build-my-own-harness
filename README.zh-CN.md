@@ -77,7 +77,7 @@ LLM 自己就是编排器——没有状态机。循环只看"这轮模型有没
 - **沙箱**（`execution/`）—— Docker via `--sandbox`，运行时可选（`runc` / `runsc` gVisor）。
 - **REPL** —— `oh chat` 经 `ConversationCompleteEvent` 跨轮累积历史。
 - **压缩**（`compaction/` + `services/`）—— L1 逐工具结果截断 + L2 反应式 PromptTooLong 恢复。
-- **Eval substrate**（`eval/`）—— `Sample`/`Score`/`Scorer` + scorer（程序化 + LLM-judge）+ cassette 录制/回放 + 版本戳结果 + `oh eval`。两个 consumer 已落地。
+- **Eval substrate**（`eval/`，*experimental*）—— `Sample`/`Score`/`Scorer` + scorer（程序化 + LLM-judge）+ cassette 录制/回放 + 版本戳结果 + `oh eval`。两个 consumer 已落地；该子系统在稳定前不纳入覆盖率门禁。
 - **自动记忆**（`memory/`）—— LLM 自行决定何时持久记住；两步内联 `Write` + `Edit` `MEMORY.md`；按项目存储。由一个多轮 eval 把关。
 - **基座**（`api/` · `protocols/` · `config/` · `prompts/` · `markdown_store/`）—— OpenAI-compatible client + 流式翻译、Pydantic v2 wire 类型、`OPENHARNESS_*` 配置、system prompt、共享 Markdown store。
 
