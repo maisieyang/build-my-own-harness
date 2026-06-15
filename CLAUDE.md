@@ -1,60 +1,39 @@
 # CLAUDE.md
 
-## Where things live
+> **build-my-own-harness**：亲手重建一个 agent harness（对标 HKUDS/OpenHarness），用"能创造"换"真懂"。solo，无协作。
 
-| 路径 | 内容 |
+## Cognition map（认知地图）
+
+`REFERENCE.md` = 逆向 OpenHarness v0.1.9 的认知地图，**整份冻结**：§1-§4 认知（§2 目录树+数据流 / §3 九要素 / §4 跨要素模式），§5 有序 build 模块拆分（按依赖排）。它是防玩具化的底图——动手前对着它，动手时按 §5 的顺序选模块。
+
+## The module loop（一个模块怎么走）
+
+0. **参照系** → `reverse-spec`（已完成 → `REFERENCE.md`）。
+1. **设计** → 上游 `interview-me`（想清楚模块角色 / 核心要素 / trade-off 立场）→ `/plan`（拆成 `tasks/<module>-plan.md`：该模块任务清单，**留档不删**——第一次学是发散的、执行中会叉出去探讨，固化的 plan 是"发散完能回来"的锚；模块是 capability 级、跨度长，光靠末尾 §回顾 不够）。capability 级，不下沉实现。
+2. **实现** → 见下「Solo coding loop」。
+3. **回顾** → `debrief`（draft）—— 挖隐式决策、对照 REFERENCE §3 自评、行业对比，沉淀一篇模块认知文档。
+
+横切：改动触碰 prompt / memory / 概率性模型行为 → `eval`（draft）。确定性测试 GREEN 证明不了这层没劣化。
+
+> 模块文档放哪、什么格式——**边做边和你一起长出来，有了沉淀再固化，现在不预设结构。**
+
+## Solo coding loop（写码流）
+
+你给信号，我自循环到绿——**循环是 Claude 的本能，不用教；要守的就一条让信号可信的纪律：**
+
+- **TDD 是脊梁**：先写测试 → **亲眼见 RED** → 写代码到 GREEN。没见过红的绿是假绿。**测试是 spec：挂了改代码，绝不弱化断言 / 改测试凑绿。**（"快点过"压力下我最容易朝"变绿"飘，所以非守不可）
+
+加一个 solo gate：**commit 前出示 diff、你点头才提交。**
+
+## Project reference（项目速查）
+
+干活要用、code 里看不出、又不能猜的项目事实——写在这，要用时来查：
+
+| What | Value |
 |---|---|
-| `REFERENCE.md` | HKUDS v0.1.7 reverse-engineered spec —— alignment target |
-| `decisions/NN-*.md` | Boundary doc —— D-numbered decisions + §六 wiring audit |
-| `decisions/_template_lean.md` | 新 phase boundary 起点（copy 它） |
-| `tasks/phase-X-plan.md` | (历史) D01-D39 时代单独的 plan 文件；D40+ 不再写，Tasks 进 boundary doc |
-| `learnings/phase-X.md` | Phase retro |
-| `learnings/*.md` | 其它 free-form 思考 note |
-| `docs/ideas/` | Curiosity-driven exploration |
-| `CHANGELOG.md` | User-facing release notes |
-
-## Phase loop
-
-1. **Boundary doc** (`decisions/NN-*.md`) —— D-numbered decisions + §六 wiring audit + Tasks (T1..TN with per-task acceptance)
-2. **Execute** —— agent runtime 推每个 task 的 sub-tasks
-3. **Retro** (`learnings/phase-X.md`) —— §六 verdict 对照实测、predictions for next phase
-
-## Rules
-
-### R1. §六 Wiring audit 必须 in 每个 boundary doc
-
-列每个跨的 runtime layer + verdict (`unchanged` / `requires extension` / `requires bypass` / `requires verification`)。retro 时逐项 falsify。
-
-≥ 3 `extension` 或多个 `bypass` → contract 跨太多层，回头重 ratify scope 或 split phase。
-
-### R2. Spec 颗粒度停在 capability，不下到 sub-task
-
-✅ `oh ask streaming + error messages + integration tests behind real API key`
-❌ `4a Settings → 4b mock client → 4c real client → 4d integration test`
-
-Sub-task decomposition 是 agent runtime 的事。
-
-### R3. Stop and ask —— 三 trigger
-
-- **External contract** —— 公开 API / env var / 新依赖 / package 外可见
-- **Irreversible** —— file deletion / schema migration / force-push / public interface 改名
-- **Capability description is wrong** —— boundary doc 的前提站不住
-
-前两条 blast radius，第三条 epistemic honesty。
-
-### R4. Never auto-commit on GREEN
-
-测试 GREEN 后、`git commit` 之前，walkthrough diff vs acceptance criteria 每条 bullet 对照。human sign off 才 commit。不允许 "I'll commit it" 不出示 diff。
-
-### R5. 新 boundary doc copy `decisions/_template_lean.md`
-
-目标 ≤ 230 行/篇（含 Tasks section）。D01-D39 老 doc 不重写。
-D40+ 不再单独写 `tasks/phase-X-plan.md` —— Tasks 进 boundary doc §五。
-
-### R6. 文档容器分工
-
-- `decisions/` 是 **machine-readable contract** —— AI 当 context 读，human ratify decisions
-- `learnings/` 是 **human reflection** —— human 写给未来的 human
-- `docs/ideas/` 是 **curiosity** —— 闪现时记，要继续探索时回头
-
-Narrative 思考、case study、跟外部对比 → 进 `learnings/` 或 `docs/ideas/`，**不**塞 boundary doc。
+| 跑全量测试 | `uv run pytest -q` |
+| 提交前质量门 | `uv run mypy --strict src/` + `uv run ruff check && uv run ruff format --check` |
+| 对标 spec | `REFERENCE.md`（OpenHarness v0.1.9 逆向，冻结） |
+| eval 决策面 map | `decisions/35-eval-coverage-map.md` |
+| eval substrate | `openharness.eval` 子模块（`.runner` / `.cassette` / `.protocol`(Scorer) / `.results`，分别 import）；consumer `evals/<surface>/` |
+| 行业对比拿谁比 | Claude Code（体感锚点）、OpenAI Codex、LangChain、Cursor、上游 OpenHarness |
