@@ -220,8 +220,9 @@ harness 都能用。
 
 2026 年 6 月，业界冒出一个新词：**loop engineering（回路工程）**。演化链又走了一站：
 `prompt → context → harness → loop`。说得最直白的是 Claude Code 的作者 Boris Cherny：
-*"I don't prompt Claude anymore. I have loops running. My job is to write loops."*（我不再
-prompt Claude 了，我跑的是 loop，我的工作是写 loop。）
+*"I don't prompt Claude anymore. I have loops running that prompt Claude and figuring out
+what to do. My job is to write loops."*（我不再 prompt Claude 了——我跑的是一套自己去
+prompt Claude、自己决定下一步做什么的 loop，我的工作是写 loop。）
 
 主张是：当模型能自主跑几分钟到几小时、还能从自己的错误里恢复，最高杠杆的活就不再是
 "打磨一句 prompt"，而是设计那个**自己决定 prompt 什么、何时 prompt、结果合不合格**的
@@ -245,8 +246,9 @@ substrate。
 本文 §3 那条 METR 曲线推到了"一个工作日以上"的样子。一个值得记下的脚注：Fable 5 在
 发布三天后的 **6 月 12 日被美国政府以出口管制指令叫停**——理由是一个"越狱"，而按
 Anthropic 的说法，那个所谓越狱差不多就是"让模型读一个代码库、修掉里面的软件缺陷"。
-换句话说，被当成国家安全风险点名的，恰恰是一个 coding harness 本来就在干的事。截至
-本次补记，两个模型仍下线。
+换句话说，被当成国家安全风险点名的，恰恰是一个 coding harness 本来就在干的事。截至本文
+更新的 6 月 23 日，两个模型仍下线（claude-fable-5 的 API 仍返回错误）——Anthropic 高管
+称有信心"未来几天"恢复，但尚未发生。
 
 对我这个 build-my-own-harness 项目，这是个意外的利好：我手搓的那层
 `while stop_reason == "tool_use"`，正是 loop engineering 的最小内核。不是在学一个要
