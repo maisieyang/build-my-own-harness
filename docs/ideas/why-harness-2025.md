@@ -1,10 +1,7 @@
 # Claude Code 不是凭空出现的：agent harness 流行的底层条件
 
-> 写于 2026-04-27 · 中文版 · 计划另出英文版
->
-> 这是我在 [build-my-own-harness](https://github.com/maisieyang/build-my-own-harness)
-> 项目期间的思考记录。我用 Python 从零复刻一个 Claude Code 风格的 harness，
-> 所以会带着实践视角分析"为什么是 2024-2025"。
+> 写于 2026-04-27
+> 这是我在 [build-my-own-harness](https://github.com/maisieyang/build-my-own-harness) 项目期间的思考记录。
 
 ---
 
@@ -25,15 +22,11 @@
 收敛出一个词来命名这一整类东西：**agent harness**——LLM 是大脑，harness 提供
 手（工具）、眼（搜索/观察）、记忆（持久化）和安全边界（权限/沙箱）。
 
-> 注意这里的时间差：**产品是 2024-2025，名字是 2026**。我写这篇时（2026-04）
-> 这个词才出现没几个月——某种程度上，我是在一个范畴**刚被命名**的当口，动手从零
-> 复刻它。
 
 为什么是 2024-2025 这两年集中出现？为什么不是 2022 年 ChatGPT 火的时候，或者
 2023 年 GPT-4 出来的时候？
 
-我的判断是：这**不是某一个突破，而是 8 个力量同时跨过阈值**。本文逐一拆解，
-并诚实标注哪些判断我自己也可能搞错。
+我的判断是：这**不是某一个突破，而是 8 个力量同时跨过阈值**。本文逐一拆解.
 
 ---
 
@@ -57,32 +50,25 @@
 
 **没有长上下文，harness 不是"还没火"，而是结构上不存在。** 这是最底层的前提。
 
-> ⚠ 我可能错的地方：200K 不是"必要阈值"，只是 Claude Code 风格的阈值。Cursor
-> 在 32K 上下文里工作得很好——它通过更激进的截断和检索来弥补。"harness 至少
-> 需要多大上下文"这个问题没有标准答案。
 
 ### 2. 工具调用从"能用"到"可靠"的复利质变
 
-光有上下文还不够——模型得能**正确**调用工具。看一组数字：
+光有上下文还不够——模型得能**正确**调用工具。这里先说清：没有一个干净的公开基准能给出权威数字——"成功率"随定义剧烈变化（单次调用的**格式合法性**可到九成以上，而端到端**任务**成功率在难基准上连前沿模型都不到一半）。下面两个是**示意量级**，真正的论点不在精度，而在复利：
 
-- 2023 GPT-4 早期：tool calling 第一次成功率 ~70%
-- 2024 Claude 3.5 Sonnet：**>95%**
+- 2023 GPT-4 早期：单步 tool calling ~70% 量级
+- 2024 Claude 3.5 Sonnet：进到 95%+ 量级
 
-差 25 个百分点，**复利下来差距是天文级**。考虑一个 50 步的任务：
+哪怕只差这个量级，放到一个 50 步的任务上，**复利下来差距就是天文级**：
 
 | 单步成功率 | 50 步全成功率 |
 |---------|------------|
-| 70% | 0.7^50 ≈ **0.000008%**（等于不可用） |
+| 70% | 0.7^50 ≈ **0.0000018%**（等于不可用） |
 | 95% | 0.95^50 ≈ **7.7%**（加局部重试就能用） |
 | 99% | 0.99^50 ≈ **60.5%**（接近实用） |
 
 这条曲线是**凸的**——99% 比 95% 好的程度，远大于 95% 比 90% 好的程度。
 2024-2025 模型刚好挤进了"50 步任务可用"的阈值。
 
-> ⚠ 我可能错的地方：不同 benchmark 数字差异很大（BFCL / ToolBench / MMAU 给的
-> 数字不一致），我用的 "95%" 是个直觉值。更要紧的是，这条复利曲线假设**每步
-> 独立、失败即终止**——真实 harness 会重试、自纠、重规划，实际没有这么悬崖。
-> 但**凸曲线**的方向是成立的——这条曲线再往上爬一点，下一波 agent 形态就会出来。
 
 ### 3. METR 任务长度曲线：把"长任务"机器化
 
@@ -97,10 +83,6 @@ harness 的本质就是**把长任务机器化**。如果模型只能稳定做 3
 你不需要工具循环、计划、子代理这一套——直接 chat completion 就够。
 
 正是因为模型能稳定做"长任务"了，harness 才有意义。
-
-> ⚠ 我可能错的地方：METR 曲线不一定线性外推。scaling law 已经在某些维度
-> （pre-training 上）出现放缓信号；agent 能力是否继续每 7 个月翻倍，
-> 严肃讲是可以质疑的。
 
 ---
 
@@ -125,7 +107,7 @@ harness 的本质就是**把长任务机器化**。如果模型只能稳定做 3
 - Claude 3.5 Sonnet：$3/M input, $15/M output
 - GPT-4o-mini：$0.15/M input, $0.60/M output
 
-同一个 100 步任务，用 Sonnet 约 $0.50，用 Haiku 几分钱。
+同一个 100 步任务（同上假设），用 Sonnet 约 $3，用 Haiku 约 $0.80。
 **从奢侈品到日用品**——开发者敢跑几十次试错，公司 CI 里每个 PR 跑一次也烧得起。
 
 这个经济阈值跨过去之后，**技术上能做的事，市场上才真正能用**。
@@ -230,7 +212,50 @@ harness 都能用。
   驱动的工具循环；第二代会不会出现完全不同的范式（如基于 RL 训练的端到端
   agent，让"循环"这层抽象消失）。
 
-最后一段私货：我自己在用 Python 从零复刻一个 Claude Code 风格的 harness
-（[build-my-own-harness](https://github.com/maisieyang/build-my-own-harness)）。
-既是为了精通 Python 工程实践，也是为了在亲手做的过程中**验证或挑战**这篇
-文章里的判断。
+---
+
+## 后记（2026-06）：第二代 harness 的形状，初见
+
+写完一个多月后，上面"第二代 harness"那条预测开始有了答案——**但带一个我没料到的反转。**
+
+2026 年 6 月，业界冒出一个新词：**loop engineering（回路工程）**。演化链又走了一站：
+`prompt → context → harness → loop`。说得最直白的是 Claude Code 的作者 Boris Cherny：
+*"I don't prompt Claude anymore. I have loops running. My job is to write loops."*（我不再
+prompt Claude 了，我跑的是 loop，我的工作是写 loop。）
+
+主张是：当模型能自主跑几分钟到几小时、还能从自己的错误里恢复，最高杠杆的活就不再是
+"打磨一句 prompt"，而是设计那个**自己决定 prompt 什么、何时 prompt、结果合不合格**的
+回路——trigger → goal → actions → verify → 重复到目标达成。prompt engineering 没死，
+只是降成了 table stakes；loop 成了新的上层。
+
+**反转在这里：我当时猜"循环这层抽象会消失"——现实是它没消失，反而从隐式的工程细节，
+浮成了人类亲手设计的头号对象。** 第一代 harness 里，`while stop_reason == "tool_use"`
+是写在框架内部、你基本不碰的一行；第二代里，这行循环本身成了要反复打磨的产品。循环
+没有沉进模型，而是升到了台面。
+
+而 harness 这层并没有像"过时论"说的那样被淘汰。Addy Osmani 那篇《Agent Harness
+Engineering》里有句话很准：**"Agent = Model + Harness。你不是模型，你就是 harness。"**
+同一个模型装在 Claude Code 里和装在定制 harness 里，Terminal Bench 2.0 分数差一大截——
+光换 harness 就能把一个 coding agent 从 Top 30 抬到 Top 5。harness 没有过时，它变成了
+地基；loop 是盖在地基上的新楼。这反过来印证了本文 Layer 3：harness 是承载这一切的
+substrate。
+
+**什么把这一切推过阈值？还是模型。** 2026 年 5 月 Opus 4.8、6 月 Anthropic 在 Opus 之上
+又出了 **Fable 5 / Mythos 5**——能跑整夜自主 coding run、单次请求常以分钟计。这正是
+本文 §3 那条 METR 曲线推到了"一个工作日以上"的样子。一个值得记下的脚注：Fable 5 在
+发布三天后的 **6 月 12 日被美国政府以出口管制指令叫停**——理由是一个"越狱"，而按
+Anthropic 的说法，那个所谓越狱差不多就是"让模型读一个代码库、修掉里面的软件缺陷"。
+换句话说，被当成国家安全风险点名的，恰恰是一个 coding harness 本来就在干的事。截至
+本次补记，两个模型仍下线。
+
+对我这个 build-my-own-harness 项目，这是个意外的利好：我手搓的那层
+`while stop_reason == "tool_use"`，正是 loop engineering 的最小内核。不是在学一个要
+过时的东西——是在亲手做现在全行业突然开始当回事的那一层。
+
+> 来源：[Loop engineering（explainx）](https://explainx.ai/blog/what-is-loop-engineering-ai-agents-2026)
+> · [Boris Cherny / 角色之变（Medium）](https://medium.com/@vovance/loop-engineering-the-skill-thats-replacing-prompting-d429b000489c)
+> · [Agent Harness Engineering（Addy Osmani）](https://addyosmani.com/blog/agent-harness-engineering/)
+> · [Fable/Mythos 停用声明（Anthropic）](https://www.anthropic.com/news/fable-mythos-access)
+> · [CNBC 报道](https://www.cnbc.com/2026/06/12/anthropic-disables-access-to-fable-5-and-mythos-5-to-comply-with-government-directive.html)
+
+— 2026-06 补记
