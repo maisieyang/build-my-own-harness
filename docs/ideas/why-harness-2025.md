@@ -13,15 +13,24 @@
 2024 年起，一类新的 AI 产品集中冒了出来。它们都不是"AI 助手"那种聊天界面的衍生品，
 而是带工具、有记忆、能调度子任务的"代理"：
 
-- Anthropic 的 **Claude Code**
-- OpenAI 开源的 **Codex**
-- **Manus** 的全自主代理
-- **OpenHarness**、**Aider**、**Continue**、**Cline** 等开源项目
+- **2024 年先引爆**：Cognition 的 **Devin**（3 月，第一个"autonomous software
+  engineer"，端到端返回 PR）、紧随其后的开源响应 **OpenHands**、**SWE-agent**、
+  **Cline**
+- **2025 年第一方跟上**：Anthropic 的 **Claude Code**、**Manus** 的全自主代理、
+  OpenAI 的 **Codex**（CLI 开源，云端 agent 闭源）
+- 一路还有 **Aider**、**Continue**、**OpenHarness** 等开源项目
 
-业界给这类产品起了个新名字：**agent harness**——LLM 是大脑，harness 提供手（工具）、
-眼（搜索/观察）、记忆（持久化）和安全边界（权限/沙箱）。
+有意思的是：这批产品冒出来后，**很长一段时间没有统一的名字**——大家各叫各的
+（coding agent / autonomous engineer / scaffold）。直到 **2026 年初**，业界才
+收敛出一个词来命名这一整类东西：**agent harness**——LLM 是大脑，harness 提供
+手（工具）、眼（搜索/观察）、记忆（持久化）和安全边界（权限/沙箱）。
 
-为什么是这两年集中出现？为什么不是 2022 年 ChatGPT 火的时候，或者 2023 年 GPT-4 出来的时候？
+> 注意这里的时间差：**产品是 2024-2025，名字是 2026**。我写这篇时（2026-04）
+> 这个词才出现没几个月——某种程度上，我是在一个范畴**刚被命名**的当口，动手从零
+> 复刻它。
+
+为什么是 2024-2025 这两年集中出现？为什么不是 2022 年 ChatGPT 火的时候，或者
+2023 年 GPT-4 出来的时候？
 
 我的判断是：这**不是某一个突破，而是 8 个力量同时跨过阈值**。本文逐一拆解，
 并诚实标注哪些判断我自己也可能搞错。
@@ -71,8 +80,9 @@
 2024-2025 模型刚好挤进了"50 步任务可用"的阈值。
 
 > ⚠ 我可能错的地方：不同 benchmark 数字差异很大（BFCL / ToolBench / MMAU 给的
-> 数字不一致），我用的 "95%" 是个直觉值。但**凸曲线**的逻辑是成立的——这条
-> 曲线再往上爬一点，下一波 agent 形态就会出来。
+> 数字不一致），我用的 "95%" 是个直觉值。更要紧的是，这条复利曲线假设**每步
+> 独立、失败即终止**——真实 harness 会重试、自纠、重规划，实际没有这么悬崖。
+> 但**凸曲线**的方向是成立的——这条曲线再往上爬一点，下一波 agent 形态就会出来。
 
 ### 3. METR 任务长度曲线：把"长任务"机器化
 
@@ -136,8 +146,8 @@ harness 的本质就是**把长任务机器化**。如果模型只能稳定做 3
 
 2024-2025：
 
-- 2024 Q4：Anthropic 推出 **Claude Code**
-- 2025：OpenAI 开源 **Codex**
+- 2025 Q1：Anthropic 推出 **Claude Code**（2 月研究预览，5 月 GA）
+- 2025：OpenAI 推出 **Codex**（CLI 开源 + 云端 agent）
 - 各家紧跟上线官方 IDE 集成
 
 第一方下场的意义有三个：
@@ -157,8 +167,10 @@ agent 和工具之间解耦的开放协议。
 个 adapter 接其他框架。MCP 之后，工具厂商写一个 server，所有 MCP 兼容的
 harness 都能用。
 
-到 2026 年初，MCP 已经有**几百个公开 server**（GitHub、Slack、Notion、
-各种数据库）。Claude Code、Cline、Continue 都原生支持。
+到 2026 年初，公开 MCP server 已达**上万个**（2025 年底 Anthropic 称
+>10,000；GitHub、Slack、Notion、各种数据库）。Claude Code、Cline、Continue
+都原生支持，OpenAI 也在 2025 年采纳了 MCP——它没有分裂成竞争协议，反而收敛成
+事实标准。
 
 ---
 
