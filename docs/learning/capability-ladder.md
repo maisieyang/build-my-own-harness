@@ -1,13 +1,7 @@
 # Capability Ladder — 我们在哪儿，要去哪儿
 
-> 这份文档不是 SPEC（合同），不是 ARCHITECTURE（模块战略），也不是 plan（任务清单）。
-> 它是一张**能力坐标图**——把"我们要做的事"从**模块视角**换成**用户体验视角**：
+> 这份文档是一张**能力坐标图**——把"我们要做的事"从**模块视角**换成**用户体验视角**：
 > 每多走一级，harness 多了一项 Claude Code 才有的本事。
->
-> 配套阅读：
-> - [SPEC.md](../../SPEC.md) — 项目契约（做什么 / 不做什么 / 行为）
-> - [ARCHITECTURE.md](../../ARCHITECTURE.md) — 模块战略（Tier / Phase / 依赖图）
-> - [tasks/phase-1-todo.md](../../tasks/phase-1-todo.md) — 当前阶段任务
 
 ---
 

@@ -119,7 +119,6 @@ uv run oh chat                                       #    或多轮 REPL
 单人开发者 + Claude Code，AI-first：人留在契约层（范围、取舍、验收），agent 驱动实现——**从零造起、至今仍在迭代，~7 周、20 个子系统、300+ commits、solo**。让它成为一份"案例研究"而不只是代码的，是**完整推理 trail 被保留下来**：每个取舍在 [`decisions/`](./decisions)、每篇回顾在 [`learnings/`](./learnings)、plan/execute 轨迹在 [`tasks/`](./tasks)——*不只是建了什么，而是每个取舍为什么这么做、每个阶段在动手前预测了什么。*
 
 - 方法论提炼 → [**PLAYBOOK.zh-CN.md**](./PLAYBOOK.zh-CN.md)（工作模型：靠重建来学、人守契约、让速度诚实的几条纪律）
-- 项目级 meta-retro → [`learnings/phase-7.md`](./learnings/phase-7.md)
 
 ---
 

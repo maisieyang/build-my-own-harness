@@ -5,8 +5,9 @@ extension surface. Drop them into the right `~/.openharness/`
 subdirectory (or the project-local `.openharness/`) and run the
 matching `oh ask` invocation.
 
-The companion walkthrough is [`docs/tutorial.md`](../docs/tutorial.md);
-each example below is referenced from a scenario in the tutorial.
+Each example maps to a user-facing extension surface; see the
+[feature index in `README.md`](../README.md#key-features) for the
+framework features they exercise.
 
 ## What's in here
 
@@ -68,17 +69,17 @@ oh hooks list --enable-plugin-hooks  # adds turn_counter once you've installed i
 
 (There's no `oh skills list` / `oh commands list` / `oh bundles list`
 in this release — those are Phase 8+ candidates. For now, verify
-each artifact by running the invocation the tutorial demonstrates.)
+each artifact by running its matching `oh ask` invocation.)
 
 ## What each example demonstrates
 
-| File | Surface | Phase | Tutorial section |
-|---|---|---|---|
-| `commands/review.md` | Slash command — pre-LLM prompt template | 5b | §2 |
-| `commands/code-review.md` | Slash command with `mode:` → triggers a bundle | 5d | §3 |
-| `skills/python-testing.md` | Skill — lazy-loaded expertise in the system prompt catalog | 5c | optional |
-| `bundles/read-only.md` | ModeBundle — system prompt + tool whitelist + deny_paths + hooks | 5d | §3 |
-| `hooks/turn_counter.py` | Filesystem plugin hook — `@hook_spec("PreApiCall")` | 5f | optional |
+| File | Surface | Phase |
+|---|---|---|
+| `commands/review.md` | Slash command — pre-LLM prompt template | 5b |
+| `commands/code-review.md` | Slash command with `mode:` → triggers a bundle | 5d |
+| `skills/python-testing.md` | Skill — lazy-loaded expertise in the system prompt catalog | 5c |
+| `bundles/read-only.md` | ModeBundle — system prompt + tool whitelist + deny_paths + hooks | 5d |
+| `hooks/turn_counter.py` | Filesystem plugin hook — `@hook_spec("PreApiCall")` | 5f |
 
 See the full feature index in [`README.md`](../README.md#key-features)
 or the framework-level retrospectives in

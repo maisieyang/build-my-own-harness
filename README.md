@@ -157,7 +157,6 @@ every retrospective in [`learnings/`](./learnings), the plan/execute trail in
 and what each phase predicted before being built.*
 
 - The methodology, distilled → [**PLAYBOOK.md**](./PLAYBOOK.md) (the operating model: learn by rebuilding, human owns the contract, the disciplines that keep speed honest)
-- The project-level meta-retro → [`learnings/phase-7.md`](./learnings/phase-7.md)
 
 ---
 

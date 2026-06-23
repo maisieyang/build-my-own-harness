@@ -256,9 +256,6 @@ What I'll be watching over the next 12-18 months:
 - **Will the METR curve hold?** This is the biggest uncertainty. If agent
   capability slows from 7-month doubling to annual doubling, the entire
   harness category's ceiling gets locked.
-- **Will MCP win?** Or does OpenAI ship an incompatible scheme that splits
-  the ecosystem? This decides whether the agent stack stays open or
-  fragments.
 - **Second-generation harnesses.** First-gen harnesses (Claude Code style)
   are `stop_reason`-driven tool loops. Will a fundamentally different
   paradigm emerge — say, end-to-end RL-trained agents where "the loop" as
@@ -271,23 +268,3 @@ It's both a way to master Python production-grade engineering and a way to
 **stress-test or refute** the judgments in this post by getting my hands on
 the actual abstractions. If you're thinking about this category too, I'd
 welcome the conversation.
-
----
-
-## Author's note
-
-A few writing principles for this post (full meta-note in the
-[Chinese version](./why-harness-2025.md)):
-
-- **Honesty over authority.** Every layer flags "where I might be wrong."
-  Most tech blogs skip this. Readers reward it.
-- **Data over adjectives.** Token prices, context sizes, compounding math
-  are concrete numbers. Vague phrases ("massive improvement") got cut.
-- **Personal angle over panoramic survey.** The build-my-own-harness
-  experience grounds claims in something specific — the differentiator
-  others can't replicate.
-- **Falsifiability.** The conclusion names what would refute the thesis,
-  rather than asserting one final answer.
-- **Distinguishing cause from narrative.** Layer 4 is arguably the most
-  valuable section — most industry analysis treats narrative as cause,
-  which leads to wrong predictions.
