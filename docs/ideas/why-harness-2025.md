@@ -250,10 +250,6 @@ Anthropic 的说法，那个所谓越狱差不多就是"让模型读一个代码
 更新的 6 月 23 日，两个模型仍下线（claude-fable-5 的 API 仍返回错误）——Anthropic 高管
 称有信心"未来几天"恢复，但尚未发生。
 
-对我这个 build-my-own-harness 项目，这是个意外的利好：我手搓的那层
-`while stop_reason == "tool_use"`，正是 loop engineering 的最小内核。不是在学一个要
-过时的东西——是在亲手做现在全行业突然开始当回事的那一层。
-
 > 来源：[Loop engineering（explainx）](https://explainx.ai/blog/what-is-loop-engineering-ai-agents-2026)
 > · [Boris Cherny / 角色之变（Medium）](https://medium.com/@vovance/loop-engineering-the-skill-thats-replacing-prompting-d429b000489c)
 > · [Agent Harness Engineering（Addy Osmani）](https://addyosmani.com/blog/agent-harness-engineering/)

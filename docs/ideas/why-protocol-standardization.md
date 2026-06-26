@@ -1,16 +1,7 @@
 # 为什么 harness 要标准化和 LLM 的交互协议：trade-off 思考
 
-> 写于 2026-05-06 · 中文版
->
-> 配套读物：
->
-> - 决策记录：[decisions/02-protocols.md](../../decisions/02-protocols.md)（实现层）
-> - 模块复盘：[learnings/02-protocols.md](../../learnings/02-protocols.md)（"框架视角的内化"）
-> - 策略基础：[docs/ideas/why-harness-2025.md](./why-harness-2025.md)
->
-> 这篇不是讨论"我们的协议怎么实现的"（那是 decisions/02），
-> 而是讨论 **"为什么 harness 必须有一层协议，以及为这一层付的代价"**——
-> 站在企业落地视角的 trade-off 思考。
+> 写于 2026-05-06
+> 这篇讨论 **"为什么 harness 必须有一层协议，以及为这一层付的代价"** —— 站在企业落地视角的 trade-off 思考。
 
 ---
 
