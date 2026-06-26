@@ -43,7 +43,7 @@ import asyncio
 import contextlib
 import difflib
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 # Side-effect import: when a readline backend is imported, Python's
 # built-in ``input()`` switches to it, enabling backspace, arrow-key
@@ -150,6 +150,12 @@ from openharness.tools.web_search import TavilySearchProvider, WebSearch
 # defaults — covers most file-creating tool calls in one shot. Users with
 # tight budgets opt down via ``--max-tokens``.
 DEFAULT_MAX_TOKENS = 8192
+
+# loop-runtime L1: headless print-mode output shapes. Typer reflects this
+# ``Literal`` at runtime to build the ``--output-format`` Click Choice (same
+# mechanism as ``LogLevel`` / ``LogFormat`` above). ``text`` is wired in T1;
+# ``json`` / ``stream-json`` land in T3 / T4.
+OutputFormat = Literal["text", "json", "stream-json"]
 
 
 app = typer.Typer(
@@ -437,8 +443,14 @@ async def _run_ask(
     resume: bool = False,
     resume_id: str | None = None,
     llm_focus_state_override: bool | None = None,
-) -> None:
+) -> str | None:
     """Build the QueryContext, run the loop, render the events.
+
+    Returns the terminal ``stop_reason`` of the final assistant turn (or
+    ``None`` if the run produced no completion event) so the synchronous
+    Typer command can map run-level outcome → exit code in print mode
+    (loop-runtime L1 T2). ``end_turn`` is a clean finish; anything else
+    (e.g. ``max_tokens``) means the run stopped without completing.
 
     Not exception-handling aware -- the synchronous Typer command wraps
     this and translates exceptions into user-facing exit codes.
@@ -910,7 +922,8 @@ async def _run_ask(
                 ConversationMessage(role="user", content=[TextBlock(text=prompt)]),
             ]
         events = run_query(initial_messages, context)
-        await render_stream(events)
+        final_event = await render_stream(events)
+        return final_event.stop_reason if final_event is not None else None
 
 
 # --------------------------------------------------------------------------- #
@@ -1590,6 +1603,25 @@ def ask(
         "--dry-run",
         help="List tool calls the loop would make without executing them.",
     ),
+    print_mode: bool = typer.Option(
+        False,
+        "-p",
+        "--print",
+        help=(
+            "Headless print mode (loop-runtime L1): run one goal "
+            "non-interactively and exit. The atom that scripts and outer "
+            "loops call. Pair with --output-format for machine-readable output."
+        ),
+    ),
+    output_format: OutputFormat = typer.Option(
+        "text",
+        "--output-format",
+        help=(
+            "Headless output shape [text|json|stream-json]. ``text`` "
+            "(default) streams the response as-is. ``json`` / ``stream-json`` "
+            "are machine-readable (land in L1 T3 / T4)."
+        ),
+    ),
     log_level: LogLevel | None = typer.Option(
         None,
         "--log-level",
@@ -1817,6 +1849,21 @@ def ask(
         )
         raise typer.Exit(code=2)
 
+    # loop-runtime L1 T1: the headless atom's flag surface. ``text`` is wired
+    # (it shares the standard non-interactive text passthrough below); ``json``
+    # / ``stream-json`` are rejected loudly until T3 / T4 implement them, and
+    # ``--output-format`` is meaningless without ``-p``.
+    if output_format != "text":
+        if print_mode:
+            msg = (
+                f"--output-format {output_format} is not yet available "
+                "(loop-runtime L1 T3/T4); only 'text' is wired so far."
+            )
+        else:
+            msg = "--output-format only applies in headless print mode (-p/--print)."
+        typer.echo(msg, err=True)
+        raise typer.Exit(code=2)
+
     permission_mode_override: PermissionMode | None = None
     if dry_run:
         permission_mode_override = PermissionMode.DRY_RUN
@@ -1827,8 +1874,9 @@ def ask(
     # CLI;no positive ``--auto-truncate`` flag (it's the default).
     auto_truncate_override: bool | None = False if no_auto_truncate else None
 
+    final_stop_reason: str | None = None
     try:
-        asyncio.run(
+        final_stop_reason = asyncio.run(
             _run_ask(
                 prompt,
                 model_override=model,
@@ -1919,6 +1967,19 @@ def ask(
         # P3+ ToolError / PermissionError / HookError once they raise.
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+
+    # loop-runtime L1 T2: run-level two-tier exit code for print mode. A clean
+    # ``end_turn`` already exits 0 (no exception). A run that stopped without
+    # completing -- e.g. ``max_tokens`` (output cap) -- raises no exception but
+    # is not a clean finish; surface it as non-zero so outer loops can react.
+    # Goal-level success (did the goal get met?) is deliberately NOT judged here
+    # -- that is the L3 verification gate's job (the atom stays gate-out).
+    if print_mode and final_stop_reason != "end_turn":
+        typer.echo(
+            f"run did not complete cleanly (stop_reason={final_stop_reason or 'none'})",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
 
 @app.command(help="Open an interactive multi-turn REPL (Phase 6+).")

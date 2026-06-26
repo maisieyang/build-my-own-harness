@@ -107,6 +107,20 @@ def _hello_world_events(text: str = "hello") -> list[ApiStreamEvent]:
     ]
 
 
+def _incomplete_events(text: str = "partial") -> list[ApiStreamEvent]:
+    """Events whose terminal stop_reason is NOT ``end_turn`` (output truncated
+    by the model's token cap). The run raises no exception — it just didn't
+    finish cleanly."""
+    return [
+        ApiTextDeltaEvent(text=text),
+        ApiMessageCompleteEvent(
+            message=ConversationMessage(role="assistant", content=[TextBlock(text=text)]),
+            usage=UsageSnapshot(input_tokens=3, output_tokens=1),
+            stop_reason="max_tokens",
+        ),
+    ]
+
+
 def _set_minimum_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-fake-test")
     monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://fake.example.com/v1")
@@ -1834,3 +1848,113 @@ class TestFilesystemHookPlugins:
         result = runner.invoke(cli_module.app, ["ask", "/x args"])
         assert result.exit_code == 1
         assert "Unknown hook" in result.stderr
+
+
+# --------------------------------------------------------------------------- #
+# L1 headless entry — print mode (loop-runtime-L1-plan.md)                     #
+# --------------------------------------------------------------------------- #
+
+
+class TestPrintMode:
+    """`oh -p "<goal>"` — non-interactive headless atom (loop-runtime L1).
+
+    T1 (thinnest slice): the ``-p/--print`` flag exists, ``--output-format``
+    defaults to ``text``, the final assistant text reaches stdout, and the
+    process exits 0 on a clean ``end_turn`` run.
+    """
+
+    def test_print_mode_text_passthrough(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events("hi from stub"))
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "-p", "say hi"])
+
+        assert result.exit_code == 0, result.stderr
+        assert "hi from stub" in result.stdout
+
+    def test_print_mode_long_flag_and_explicit_text_format(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events("hi from stub"))
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_module.app, ["ask", "--print", "--output-format", "text", "say hi"]
+        )
+
+        assert result.exit_code == 0, result.stderr
+        assert "hi from stub" in result.stdout
+
+    # ---- T2: run-level two-tier exit code (end_turn → 0, else → non-0) ---- #
+
+    def test_print_mode_end_turn_exits_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Contract: a clean ``end_turn`` run exits 0 in print mode."""
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events("done"))
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "-p", "go"])
+
+        assert result.exit_code == 0, result.stderr
+
+    def test_print_mode_incomplete_stop_reason_exits_nonzero(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The genuine T2 gap: a run that ends on a non-``end_turn`` terminal
+        stop_reason (here ``max_tokens``) raises no exception but did NOT
+        finish cleanly — print mode must surface that as a non-zero exit."""
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_incomplete_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "-p", "go"])
+
+        assert result.exit_code != 0
+
+    # ---- T1 guard contract: --output-format gating (text-only for now) ---- #
+
+    def test_print_mode_json_format_not_yet_available(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``json`` / ``stream-json`` are rejected loudly until T3 / T4."""
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "-p", "--output-format", "json", "go"])
+
+        assert result.exit_code == 2
+        assert "not yet available" in result.stderr
+
+    def test_output_format_requires_print_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``--output-format`` is meaningless without ``-p`` and is rejected."""
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "--output-format", "json", "go"])
+
+        assert result.exit_code == 2
+        assert "only applies in headless print mode" in result.stderr
+
+    def test_print_mode_request_failure_exits_nonzero(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Contract: an infra error exits non-zero in print mode (existing
+        exception chain already maps RequestFailure → exit 1)."""
+        _set_minimum_env(monkeypatch)
+        stub = _RaisingStubClient(RequestFailure("boom", status_code=500))
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "-p", "go"])
+
+        assert result.exit_code != 0
