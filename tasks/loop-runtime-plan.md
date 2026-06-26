@@ -3,6 +3,8 @@
 > **地位声明**：这**不是** SPEC v1 的一个 phase（v1 已于 2026-05-20 冻结，见
 > `learnings/phase-7.md`）。这是 v1 冻结之后的**新 epic**，capability 级、留档不删。
 > 认知来源：`docs/ideas/from-prompt-to-loop-2026.md`（三把椅子）。
+> §参照系：`loop-runtime-autopilot-reference.md`（逆向上游 `autopilot` 子系统，2026-06 补）——
+> 见本文 **§7 参照系回填**。
 >
 > ⚠️ 一个目录身份的小张力：`tasks/README.md` 说本目录是"17 个已发 phase 的冻结历史，
 > 不是 roadmap"。这份前瞻 plan 放这里是按你指定的路径；若你想把"已发历史"和"前瞻
@@ -54,6 +56,8 @@
 | L5 | 规划器（模型自拆） | **规划** | §3.8 | L4 | 让模型把大 goal **自拆**成子目标（复用 `SpawnAgent`），替代人脑预拆。对应 Claude Code 的 `/batch`。 |
 | L6 | 触发器 | 触发 | §3.9 | L4 | cron / git 事件 / API / 手动。**MVP 只要手动 kickoff**，自动触发后置。 |
 
+> ⚠ **2026-06 回填**：逆向上游 `autopilot` 后，本表漏列了**四块**（L6 不只是后置触发器，还另有 worktree 隔离 / 人机交接边界 / 状态机+journal）——见 **§7**。
+
 ---
 
 ## 3. MVP 切线（最小能自己跑的一圈）
@@ -101,5 +105,43 @@ oh -p "修好所有失败测试，只改源码别动断言" \
 
 > 为什么从 L1 起：它是所有外层 loop 的**被调用原子**，且**确定性、可端到端验证**——
 > 正好复刻 v1 当年"phase 4 先把 CLI 跑通做最小入口"的那条经验（§5 模块 4）。
+>
+> **2026-06 update**：module loop 第 0 步（参照系 → reverse-spec）**已完成**，产出
+> `loop-runtime-autopilot-reference.md`。下一步仍从 L1 起，但 L1 的 interview-me 要把
+> reference §5 的"上游教训"带进 trade-off（见 §7.3）。
 
-— 2026-06 plan（capability 级 · 留档不删）
+---
+
+## 7. 参照系回填（2026-06 update · 逆向上游 `autopilot` 之后）
+
+> 来源：[`loop-runtime-autopilot-reference.md`](./loop-runtime-autopilot-reference.md)——逆向
+> HKUDS/OpenHarness `autopilot` 子系统（`main` @ `9b2efd7`）。**核心结论：上游已有这条 epic
+> 的完整参照实现**（issue/idea → worktree → agent → returncode 闸 + CI → repair 循环 → PR
+> 状态机，cron 驱动）。§1「v1 缺外层 loop」对**你的** build-my-own-harness 仍成立，但补一句：
+> **外层 loop 在上游有现成的、可逐行抄思路（非抄码）的范本。**
+
+**1) §2 的 L1-L4 全部命中上游参照**（指针见 reference §5）：L1←`run_print_mode`、
+L2←`permissions/checker`、L3←`_run_verification_steps`、L4←`run_card`+`_prepare_repair_prompt`。
+建造每块时对着读。
+
+**2) 逆向暴露了本 plan 漏列的四块——补进 capability 地图**：
+
+| # | 新模块 | 椅子 / 边界 | 上游参照（要素→文件） | 为什么不是后置/不变量 |
+|---|---|---|---|---|
+| **L6′** | 触发 = intake 评分队列 + cron 守护 | 触发 | 要素①+⑥ · `scan_*`/`_score_card`/`cron_scheduler` | 原把 L6 当"后置、手动 kickoff"；上游证明 `$GOAL` 真源头 = 评分队列，是自治核心入口。MVP 仍可手动，但模块要预留这个 seam |
+| **L7** | worktree 隔离执行场 | 把关（沙箱兜底的具体形态） | 要素② · `swarm/worktree.py` | 原 §4 只当不变量；上游证明它是 L2 敢无人值守放手的**物理前提**，该单列模块 |
+| **L8** | 人机交接边界 | 把关（自治边界） | 要素⑦ · automerge / human-gate / `stop_on` | PR-not-merge + 不可逆动作清单是独立设计，不只一句不变量 |
+| **L9** | 状态机 + journal（可恢复/可观测） | — | 要素⑧ · 13 状态 / `update_status` / journal | 无人值守离不开"状态外置"；原 plan 完全没提 |
+
+**3) 三处把 §1/§4 的设想校准成上游实证**：
+- §4 不变量 #1（gate 非 prompt）→ 上游用 **returncode + 真 CI 双硬闸**坐实；但其 L3 默认 policy
+  被 `_looks_available` 按仓库标志物筛，**外部仓库会空过当 success**——**你的 L3 要 fail-closed**
+  （零步 = 未验证，而非通过）。
+- §4 不变量 #2（fail-closed）→ 上游唯一不可覆盖底线是 `SENSITIVE_PATH_PATTERNS`，
+  `denied_commands` 默认**空**。**L2 别假设有内置危险命令护栏，要自己定。**
+- L1 教训：上游 `run_print_mode` **不透传 permission_mode、不自定退出码**——**你的 L1 务必把
+  "成/败退出码"做实**（这恰是 §2 对 L1 的硬要求，上游反而没守住）。
+
+**4) module loop 第 0 步（参照系）就此完成**，下一步仍从 L1 起（§6）。
+
+— 2026-06 plan（capability 级 · 留档不删；§7 为 2026-06 参照系回填）
