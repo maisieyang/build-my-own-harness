@@ -129,4 +129,25 @@ T5 只依赖 T1（与 T3/T4 输出形状正交），可在 T2 后任意时机插
 - **T3 num_turns**：= `ApiMessageCompleteEvent` 计数；**usage 多 turn 累加** = 逐 complete event 求和。
 - **T2 退出码**：`stop_reason=="end_turn"` → `0`；`max_tokens`/`stop_sequence`（终止但未完）+ `LoopLimitExceeded`（撞 `--max-turns`，注意这是 engine 概念，**不是** API 的 `max_tokens`）+ API 异常 → **非0**。与立场 1「二档」一致。
 
-— 2026-06 L1 plan（TDD 脊梁 · 留档不删 · T0 已勘探）
+---
+
+## 5. 完成记录（2026-06 · L1 全绿）
+
+L1 已全部落地，5 个 commit（main）：T0 勘探 → T1/T2（`89afc2c`）→ T3/T4（`80b9725`）→ T5（`327c840`）。
+全程 2167 passed、cov 95.11%、`mypy --strict src/` clean、ruff clean。**engine 一行未动。**
+
+| 任务 | 结果 | 关键 |
+|---|---|---|
+| T1 | ✅ `-p/--print` + `--output-format text` | 复用现有非交互文本通路 |
+| T2 | ✅ run 级二档退出码 | `end_turn`→0；`max_tokens`/`LoopLimitExceeded`/API 异常→非0。`_run_ask` 返回终止 stop_reason，`ask` 映射 |
+| T3 | ✅ `--output-format json` | 单 result 对象；`cost_usd: null`（v1 无定价层）；`session_id` = 新铸 run_id |
+| T4 | ✅ `--output-format stream-json` | 逐事件 newline JSON + 末尾 result；`build_result_obj` 单源化形状 |
+| T5 | ✅ **satisfied-by-design + 回归测试锁定** | **无新行为**——v1 引擎本就 fail-closed（`query.py` Three-Axis G：`ASK+非AUTO→DENY`），`_run_ask` 本就透传 permission_mode + 用真 `TierBasedPermissionChecker`。§7.3 的"上游两坑"在你 repo **不存在**。加 3 条 characterization 测试锁住 print 模式的权限接线（防将来回归到上游那种 print-specific 旁路） |
+
+**两个留给后续的 follow-up**（不阻塞 L1）：
+1. `cost_usd` 等定价层（Phase 4 cost-cap）落地再填；现按 token 估。
+2. `session_id` 现在每次 `-p` 新铸、不可 resume、不与引擎日志 run_id 关联；要 resume / 关联需改 engine，留到 L2+ 或单独议。
+
+**下一步（按 module loop）**：L1 绿了 → `debrief`（挖隐式决策 / 对照 REFERENCE §3 自评 / 行业对比），再决定走 L2（权限·loop 策略）还是 L3（验证闸）。
+
+— 2026-06 L1 plan（TDD 脊梁 · 留档不删 · T0 已勘探 · L1 已完成）
