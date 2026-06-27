@@ -18,9 +18,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated, Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+from pydantic_settings import NoDecode
 
 from openharness.permissions.checker import DecisionResult
 from openharness.permissions.tier_based import _extract_path_arg, _matches_tier2
@@ -37,11 +38,39 @@ class PermissionRules(BaseModel):
     嵌套进 :class:`~openharness.config.Settings` 的 ``permissions`` 块,env 走
     ``OPENHARNESS_PERMISSIONS__ALLOW`` 等(``env_nested_delimiter='__'``).
     与 ``permission_mode``(posture) / ``deny_paths``(Tier2 legacy) 并存——三者关注点不同.
+
+    The ``_parse_and_validate`` before-validator does two jobs (review-fix [5]+[6]):
+
+    1. **env comma-split**: ``OPENHARNESS_PERMISSIONS__ALLOW='Edit(*),Write(src/**)'``
+       → ``("Edit(*)", "Write(src/**)")`` — mirrors ``Settings.deny_paths`` so the
+       documented env form works instead of crashing on JSON decode.
+    2. **fail-fast validation**: every rule string is run through :func:`parse_rule`
+       at config-load time, so a malformed rule raises ``ValidationError`` here
+       rather than an uncaught ``ValueError`` from the per-call hot path mid-loop.
     """
 
-    allow: tuple[str, ...] = ()
-    deny: tuple[str, ...] = ()
-    ask: tuple[str, ...] = ()
+    # ``NoDecode`` stops pydantic-settings from JSON-decoding the env value
+    # before ``_parse_and_validate`` runs (same reason Settings.deny_paths uses
+    # it) — so ``OPENHARNESS_PERMISSIONS__ALLOW='Edit(*)'`` reaches the
+    # comma-split validator instead of crashing on a JSON parse error.
+    allow: Annotated[tuple[str, ...], NoDecode] = ()
+    deny: Annotated[tuple[str, ...], NoDecode] = ()
+    ask: Annotated[tuple[str, ...], NoDecode] = ()
+
+    @field_validator("allow", "deny", "ask", mode="before")
+    @classmethod
+    def _parse_and_validate(cls, value: Any) -> Any:
+        # env comma-split (review-fix [5]) — same shape as Settings._parse_deny_paths.
+        if isinstance(value, str):
+            items: tuple[str, ...] = tuple(p.strip() for p in value.split(",") if p.strip())
+        elif value is None:
+            items = ()
+        else:
+            items = tuple(value)
+        # fail-fast at load (review-fix [6]): reject malformed rules now, not mid-loop.
+        for spec in items:
+            parse_rule(spec)
+        return items
 
 
 @dataclass(frozen=True)

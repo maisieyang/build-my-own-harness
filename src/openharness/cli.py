@@ -449,6 +449,7 @@ async def _run_ask(
     resume_id: str | None = None,
     llm_focus_state_override: bool | None = None,
     output_format: OutputFormat = "text",
+    print_mode: bool = False,
 ) -> str | None:
     """Build the QueryContext, run the loop, render the events.
 
@@ -830,7 +831,14 @@ async def _run_ask(
             # carry-over Bash deny-list). P5d-T4: TierBasedPermissionChecker
             # reads ``settings.deny_paths`` which already includes the bundle's
             # extra patterns (via ``effective_settings``).
-            permission_checker=TierBasedPermissionChecker(effective_registry, effective_settings),
+            # loop-runtime L2: `-p` headless runs are fail-closed — a mutating
+            # tool with no matching permissions.allow rule is DENIED. Wiring
+            # ``headless=print_mode`` is what activates that guarantee in
+            # production (the L2 unit tests pass headless=True directly).
+            # Interactive ``_run_chat`` stays headless=False (legacy ALLOW).
+            permission_checker=TierBasedPermissionChecker(
+                effective_registry, effective_settings, headless=print_mode
+            ),
             hook_registry=effective_hook_registry,
             system_prompt=system_prompt,
             cwd=env.cwd,
@@ -1921,6 +1929,7 @@ def ask(
                 resume_id=resume_id,
                 llm_focus_state_override=llm_focus_state,
                 output_format=output_format,
+                print_mode=print_mode,
             )
         )
     except ValidationError as exc:

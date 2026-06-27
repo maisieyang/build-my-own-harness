@@ -9,6 +9,9 @@
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from openharness.config import Settings
 from openharness.permissions.rules import PermissionRules
 
@@ -50,3 +53,40 @@ class TestSettingsHasPermissionsBlock:
         assert "permission_mode" in Settings.model_fields  # posture
         assert "deny_paths" in Settings.model_fields  # Tier 2 legacy
         assert "permissions" in Settings.model_fields  # L2 rule layer
+
+
+class TestPermissionsEnvParsing:
+    """review-fix [5] — the documented ``OPENHARNESS_PERMISSIONS__ALLOW`` env
+    var must parse a comma-separated string into a tuple, like ``deny_paths``
+    (NoDecode + before-validator). Currently it JSON-decodes → crashes startup.
+    """
+
+    def test_comma_separated_env_parses_to_tuple(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://fake.example.com/v1")
+        monkeypatch.setenv("OPENHARNESS_PERMISSIONS__ALLOW", "Edit(*),Write(src/**)")
+        settings = Settings()
+        assert settings.permissions.allow == ("Edit(*)", "Write(src/**)")
+
+    def test_single_rule_env_parses(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://fake.example.com/v1")
+        monkeypatch.setenv("OPENHARNESS_PERMISSIONS__DENY", "Bash(curl:*)")
+        settings = Settings()
+        assert settings.permissions.deny == ("Bash(curl:*)",)
+
+
+class TestMalformedRuleRejectedAtLoad:
+    """review-fix [6] — a malformed rule must fail at config load (fail-fast),
+    not defer an uncaught ValueError to the hot path mid-loop.
+    """
+
+    @pytest.mark.parametrize("bad", ["Bash(rm", "Edit(src/**", "()", "(x)"])
+    def test_malformed_rule_raises_at_construction(self, bad: str) -> None:
+        with pytest.raises(ValidationError):
+            PermissionRules(deny=(bad,))
+
+    def test_valid_rules_construct_fine(self) -> None:
+        rules = PermissionRules(allow=("Edit(*)", "Bash(npm test:*)"), deny=("Write(secrets/**)",))
+        assert rules.allow == ("Edit(*)", "Bash(npm test:*)")
+        assert rules.deny == ("Write(secrets/**)",)
