@@ -550,3 +550,21 @@ class TestRenderStreamJson:
         assert lines[-1]["session_id"] == "sid-123"
         # The terminal stop_reason is returned for run-level exit-code mapping.
         assert stop_reason == "end_turn"
+
+    @pytest.mark.asyncio
+    async def test_emits_error_terminator_on_mid_stream_raise(self) -> None:
+        """A mid-stream raise (LoopLimitExceeded / API failure / ...) still
+        emits a terminal ``error`` object — so stream-json ALWAYS ends with a
+        ``result`` or an ``error`` — then re-raises for the CLI exit-code map."""
+
+        async def _raising() -> AsyncIterator[ApiStreamEvent]:
+            yield ApiTextDeltaEvent(text="partial")
+            raise RuntimeError("boom")
+
+        out = io.StringIO()
+        with pytest.raises(RuntimeError, match="boom"):
+            await render_stream_json(_raising(), session_id="sid", stdout=out)
+
+        lines = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+        assert lines[-1]["type"] == "error"
+        assert "boom" in lines[-1]["error"]
