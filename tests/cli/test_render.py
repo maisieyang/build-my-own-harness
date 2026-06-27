@@ -532,11 +532,14 @@ class TestRenderStreamJson:
 
         lines = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
         types = [obj["type"] for obj in lines]
-        # All five mapped event types appear, result is LAST.
+        # All five mapped event types appear, result is LAST. A retry is
+        # "retrying after a retryable error" — NOT a failure — so it must NOT
+        # be typed "error" (debrief: that misleads consumers like L4).
         assert "assistant_delta" in types
         assert "tool_started" in types
         assert "tool_completed" in types
-        assert "error" in types
+        assert "retry" in types
+        assert "error" not in types
         assert lines[-1]["type"] == "result"
         # The result object is the same shape as --output-format json (T3).
         assert lines[-1]["result"] == "hello"

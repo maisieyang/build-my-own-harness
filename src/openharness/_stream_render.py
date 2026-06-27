@@ -244,7 +244,7 @@ async def render_stream_json(
     stop_reason so the caller maps run-level outcome → exit code (T2).
 
     Event → line mapping: text deltas → ``assistant_delta``; tool dispatch →
-    ``tool_started`` / ``tool_completed``; retryable API errors →  ``error``.
+    ``tool_started`` / ``tool_completed``; retry-after-retryable-error → ``retry``.
     ``ApiMessageCompleteEvent`` is accumulated (usage / turn count / final
     text) rather than emitted, and surfaces in the terminating ``result``.
     """
@@ -281,7 +281,10 @@ async def render_stream_json(
                 }
             )
         elif isinstance(event, ApiRetryEvent):
-            _emit({"type": "error", "attempt": event.attempt, "error": event.error})
+            # A retry is "retrying after a retryable error", NOT a failure —
+            # type it "retry" so consumers (e.g. L4) don't misread it as the
+            # run having errored. ``error`` carries what triggered the retry.
+            _emit({"type": "retry", "attempt": event.attempt, "error": event.error})
         elif isinstance(event, ApiMessageCompleteEvent):
             final = event
             num_turns += 1
