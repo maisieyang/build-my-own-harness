@@ -56,6 +56,7 @@ class TestInvalidGrammarRaises:
             "Edit(src/**",  # unbalanced paren
             "Edit src/**)",  # missing open paren
             "(src/**)",  # specifier without tool
+            "Bash(:*)",  # round 4 [D]: empty command prefix → reject at load
         ],
     )
     def test_malformed_rule_raises_valueerror(self, bad: str) -> None:

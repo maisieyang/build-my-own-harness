@@ -258,25 +258,6 @@ class TestT5FailClosed:
         )
         assert result.decision is Decision.ALLOW
 
-    def test_wildcard_allow_matches_in_cwd_under_symlinked_cwd(self, tmp_path: Path) -> None:
-        # review round 3 [F]: when cwd is reached via a symlink (e.g. macOS /tmp),
-        # an in-cwd write given in symlink form must still match a wildcard allow
-        # (not get denied because abspath != cwd.resolve()).
-        real = tmp_path / "real"
-        real.mkdir()
-        link = tmp_path / "link"
-        link.symlink_to(real)
-        checker = _checker(
-            headless=True,
-            permissions=PermissionRules(allow=("Write(*)",)),
-        )
-        result = checker.evaluate(
-            "Write",
-            _PathInput(path=str(link / "file.py")),
-            ToolExecutionContext(cwd=link),
-        )
-        assert result.decision is Decision.ALLOW
-
     def test_headless_out_cwd_mutating_failclosed(self, tmp_path: Path) -> None:
         # review-fix [4]: out-cwd mutating with no allow normally hits Tier3 ASK,
         # which maps to ALLOW under --auto — escaping fail-closed. In headless
@@ -289,6 +270,9 @@ class TestT5FailClosed:
             ToolExecutionContext(cwd=tmp_path),
         )
         assert result.decision is Decision.DENY
+        # review round 4: the deny reason must name the boundary so the agent can
+        # tell a path-scoping violation from a plain missing-rule case.
+        assert "outside project root" in (result.reason or "")
 
 
 # --------------------------------------------------------------------------- #

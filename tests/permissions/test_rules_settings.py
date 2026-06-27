@@ -97,3 +97,15 @@ class TestMalformedRuleRejectedAtLoad:
         # ValidationError (fail-fast), not a raw AttributeError/TypeError.
         with pytest.raises(ValidationError):
             PermissionRules(allow=bad)
+
+    def test_accepts_non_list_iterable_of_strings(self) -> None:
+        # review round 4 [E]: a set/generator of rule strings must still be
+        # accepted (round 3 over-narrowed to list/tuple only).
+        rules = PermissionRules(allow={"Edit(*)"})
+        assert rules.allow == ("Edit(*)",)
+
+    def test_empty_bash_prefix_rejected_at_load(self) -> None:
+        # review round 4 [D]: `Bash(:*)` (empty command prefix) is malformed and
+        # must fail at config load, not silently match-nothing/everything.
+        with pytest.raises(ValidationError):
+            PermissionRules(deny=("Bash(:*)",))

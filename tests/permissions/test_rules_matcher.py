@@ -190,18 +190,6 @@ class TestBashDenyWordBoundary:
         assert result is not None
         assert result.decision is Decision.DENY
 
-    def test_empty_prefix_allow_matches_nothing(self, tmp_path: Path) -> None:
-        # [D] `Bash(:*)` → empty token must NOT allow every command.
-        result = match_rules(
-            "Bash",
-            _BashInput(command="rm -rf /"),
-            tmp_path,
-            allow=("Bash(:*)",),
-            deny=(),
-            ask=(),
-        )
-        assert result is None
-
 
 class TestBashDenyAsymmetricMatching:
     """review-fix [3]: deny is a security boundary → match by SUBSTRING (over-deny

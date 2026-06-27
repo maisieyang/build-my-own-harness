@@ -58,14 +58,17 @@ class PermissionRules(BaseModel):
             items = tuple(p.strip() for p in value.split(",") if p.strip())
         elif value is None:
             items = ()
-        elif isinstance(value, (list, tuple)):
-            items = tuple(value)
         else:
-            # review round 3 [E]: a non-iterable (e.g. a bare int) must fail with
-            # a clean ValidationError, not a raw TypeError from tuple(value).
-            raise ValueError(
-                f"permission rules must be a string or list of strings, got {type(value).__name__}"
-            )
+            # Accept any non-str iterable (list/tuple/set/generator); round 4 [E]
+            # restores that flexibility while still failing cleanly on a scalar
+            # (e.g. a bare int) with a ValidationError rather than a raw TypeError.
+            try:
+                items = tuple(value)
+            except TypeError:
+                raise ValueError(
+                    f"permission rules must be a string or iterable of strings, "
+                    f"got {type(value).__name__}"
+                ) from None
         # fail-fast at load (review-fix [6] + [E]): reject malformed / non-str
         # rules now, not as an opaque crash on the per-call hot path mid-loop.
         for spec in items:
@@ -103,6 +106,11 @@ def parse_rule(rule: str) -> PermissionRule:
         specifier = s[open_idx + 1 : -1].strip()
         if not tool:
             raise ValueError(f"permission rule missing tool name: {rule!r}")
+        # round 4 [D]: reject an empty command prefix (``Bash(:*)``) at load —
+        # an empty token would otherwise match every / no command depending on
+        # allow-vs-deny, a silent footgun. Fail-fast like every other malformed rule.
+        if specifier.endswith(":*") and not specifier[:-2].strip():
+            raise ValueError(f"permission rule has empty command prefix: {rule!r}")
         return PermissionRule(tool=tool, specifier=specifier or "*")
 
     # No trailing ')': must be a bare tool name (no '(' allowed → unbalanced).

@@ -216,15 +216,16 @@ def _matches_tier2(path: str, patterns: tuple[str, ...], cwd: Path) -> str | Non
     abs_path = os.path.abspath(os.path.expanduser(path))
 
     # Compute cwd-relative form if path is under cwd; else None.
-    # review round 3 [F]: resolve symlinks on BOTH sides for the cwd-relative
-    # test (mirrors Tier 3's _inside_project_root), so an in-cwd path given in
-    # symlink form (e.g. macOS /tmp → /private/tmp) is still recognized as
-    # inside cwd. Absolute patterns keep matching the un-resolved ``abs_path``
-    # so user-written ``/tmp/...`` patterns still work.
-    resolved_path = os.path.realpath(os.path.expanduser(path))
+    # Known limitation (review round 4): this uses the *lexical* abspath, NOT
+    # symlink-resolved realpath. So a project whose cwd is itself reached via a
+    # symlink (e.g. macOS /tmp → /private/tmp) may see an in-cwd relative
+    # pattern miss — a fail-CLOSED (safe) edge. round 3 tried realpath here and
+    # it caused worse regressions (a relative DENY for an in-cwd dir symlinked
+    # OUTWARD silently under-matched), so we keep the lexical form. Callers
+    # needing out-of-cwd grants should use an explicit absolute/tilde pattern.
     rel_path: str | None
     try:
-        rel_path = str(Path(resolved_path).relative_to(cwd.resolve()))
+        rel_path = str(Path(abs_path).relative_to(cwd.resolve()))
     except ValueError:
         rel_path = None  # path is outside cwd — relative patterns can't match
 
@@ -434,6 +435,14 @@ class TierBasedPermissionChecker:
                 tool=tool_name,
                 tier="headless_failclosed",
             )
+            # round 4: name the boundary when the target is outside cwd, so the
+            # agent can tell a path-scoping violation from a plain missing-rule
+            # case (and relocate the write into cwd rather than blindly retry).
+            if path is not None and not _inside_project_root(path, context.cwd):
+                return DecisionResult.deny(
+                    f"headless fail-closed: {path!r} is outside project root; add a "
+                    "permissions.allow rule naming this path to permit it"
+                )
             return DecisionResult.deny(
                 "headless fail-closed: mutating tool requires an explicit permissions.allow rule"
             )
