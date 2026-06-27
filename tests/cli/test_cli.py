@@ -1990,6 +1990,70 @@ class TestPrintMode:
         assert result.exit_code == 2
         assert "only applies in headless print mode" in result.stderr
 
+    # ---- T5: headless permission posture (fail-closed + permission_mode 透传) ---- #
+    # Characterization/regression tests (NOT RED-first): v1's engine already
+    # fail-closes ASK→DENY for non-AUTO modes (query.py Three-Axis G), and
+    # _run_ask already threads permission_mode + the real TierBasedPermissionChecker.
+    # These lock the print-mode wiring against the exact regression upstream hit
+    # (run_print_mode that noop-allowed + dropped permission_mode — reference §7.3).
+    # The engine's ASK→DENY deny semantics are covered by tests/engine/test_query.py.
+
+    def test_print_mode_threads_default_permission_mode(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`-p` without `--auto` stays DEFAULT (fail-closed) — NOT silently
+        auto-allowed. In DEFAULT mode the engine denies ASK (mutating) tools."""
+        from openharness.permissions import PermissionMode
+
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "-p", "go"])
+
+        assert result.exit_code == 0, result.stderr
+        assert captured.context.permission_mode is PermissionMode.DEFAULT  # type: ignore[attr-defined]
+
+    def test_print_mode_auto_threads_auto_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`-p --auto` threads AUTO into the engine context (the loop-runtime
+        '圈地': trust in-cwd actions; sensitive paths still Tier-1 denied)."""
+        from openharness.permissions import PermissionMode
+
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "-p", "--auto", "go"])
+
+        assert result.exit_code == 0, result.stderr
+        assert captured.context.permission_mode is PermissionMode.AUTO  # type: ignore[attr-defined]
+
+    def test_print_mode_uses_real_permission_checker(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`-p` wires the real TierBasedPermissionChecker — NOT a noop that
+        allows everything (the upstream run_print_mode bug, §7.3)."""
+        from openharness.permissions import TierBasedPermissionChecker
+
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "-p", "go"])
+
+        assert result.exit_code == 0, result.stderr
+        assert isinstance(
+            captured.context.permission_checker,  # type: ignore[attr-defined]
+            TierBasedPermissionChecker,
+        )
+
     def test_print_mode_request_failure_exits_nonzero(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
