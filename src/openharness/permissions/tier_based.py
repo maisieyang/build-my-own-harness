@@ -282,15 +282,23 @@ class TierBasedPermissionChecker:
     Resolution order (first-match-wins):
 
     1. **Bash deny-list** (carry-over for catastrophic shell patterns)
-    2. **Tier 1**:hardcoded sensitive paths → DENY
-    3. **Tier 2**:user-config glob patterns from ``Settings.deny_paths`` → DENY
-    4. **Tier 3**:mode-based — write/exec tools outside cwd → **ASK** (G)
-    5. fallthrough → ALLOW
+    2. **Tier 1**: hardcoded sensitive paths → DENY (red line; no allow rule
+       can override it — it sits above the L2 rule layer)
+    3. **Tier 2**: user-config glob patterns from ``Settings.deny_paths`` → DENY
+    4. **L2 rule layer** (``Settings.permissions``, loop-runtime L2): deny > ask
+       > allow. Wildcard/relative allows are cwd-scoped; only explicit
+       absolute/tilde specifiers reach outside cwd. Bash deny matches by
+       substring (a security boundary), Bash allow by narrow prefix.
+    5. **Tier 3**: mode-based — write/exec outside cwd → ASK, or **DENY** under
+       ``headless`` (fail-closed; ASK would map to ALLOW under --auto)
+    6. **fallthrough** → ALLOW, or **DENY** for a mutating tool under
+       ``headless`` (fail-closed: needs an explicit ``permissions.allow`` rule)
 
     Dependencies injected at construction (per Three-Axis):
 
     - ``registry``:to look up ``tool.is_read_only`` for Tier 3
-    - ``settings``:to read ``deny_paths`` for Tier 2
+    - ``settings``:to read ``deny_paths`` (Tier 2) + ``permissions`` (L2 rules)
+    - ``headless``: the ``-p`` posture — flips fallthrough/Tier-3 to fail-closed
 
     evaluate() signature stays minimal (matches the Protocol from
     ``checker.py``) — per-call data only;config / registry are state.
@@ -404,8 +412,23 @@ class TierBasedPermissionChecker:
 
         t3 = _matches_tier3(tool.is_read_only, path, context.cwd)
         if t3 is not None:
-            # Tier 3 maps to ASK (Three-Axis G):writing outside cwd is a
-            # plausible legitimate intent;loop layer + PermissionMode
+            # review-fix [4]: under headless, an out-cwd mutating tool with no
+            # explicit allow rule is fail-closed DENY (not ASK). ASK maps to
+            # ALLOW under --auto, which would escape the fail-closed guarantee.
+            # ``_matches_tier3`` only fires for mutating tools, so this branch
+            # never affects read-only calls.
+            if self._headless:
+                logger.warning(
+                    "permission_denied",
+                    tool=tool_name,
+                    tier="headless_failclosed_outside_cwd",
+                )
+                return DecisionResult.deny(
+                    f"headless fail-closed: {t3}; add a permissions.allow rule "
+                    "naming this path to permit it"
+                )
+            # Interactive: Tier 3 maps to ASK (Three-Axis G) — writing outside
+            # cwd is a plausible legitimate intent; loop layer + PermissionMode
             # decide final outcome.
             return DecisionResult.ask(t3)
 

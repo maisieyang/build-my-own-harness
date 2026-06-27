@@ -112,31 +112,45 @@ def rule_matches(
     tool_name: str,
     args: _PydanticModel,
     cwd: Path,
+    *,
+    substring_bash: bool = False,
 ) -> bool:
     """True iff ``rule`` matches this ``(tool_name, args)`` call.
 
     - tool name must match exactly.
-    - specifier ``*`` → matches any invocation of that tool.
-    - Bash-style args (has ``command``): ``prefix:*`` → ``startswith``;
-      otherwise exact command match.
-    - file-style args (has ``path``): cwd-relative glob via Tier2 semantics.
+    - **Bash-style args** (has ``command``): ``*`` → any command.
+      ``substring_bash=True`` (deny rules, review-fix [3]) → the token (specifier
+      minus trailing ``:*``) must appear **anywhere** in the command — over-match
+      is the safe direction for a deny boundary, catching ``; curl`` /
+      ``bash -c '...'``. Otherwise (allow/ask) → narrow ``prefix:*`` startswith /
+      exact match (under-match is the safe direction for allow).
+    - **file-style args** (has ``path``): matched via Tier2 semantics, so ``*``
+      and relative globs are **cwd-scoped** (review-fix [2]) and only explicit
+      absolute/tilde specifiers reach outside cwd.
     """
     if rule.tool != tool_name:
         return False
-    if rule.specifier == "*":
-        return True
 
     command = getattr(args, "command", None)
     if isinstance(command, str):
         spec = rule.specifier
-        if spec.endswith(":*"):
-            return command.startswith(spec[:-2])
-        return command == spec
+        if spec == "*":
+            return True
+        token = spec[:-2] if spec.endswith(":*") else spec
+        if substring_bash:
+            return token in command
+        return command.startswith(token) if spec.endswith(":*") else command == spec
 
     path = _extract_path_arg(args)
     if path is not None:
+        # Routing through _matches_tier2 (not a blanket ``*`` early-return) is
+        # what makes wildcard/relative allows cwd-scoped — ``*`` is a relative
+        # pattern, so it only matches paths under cwd; ``/abs/**`` / ``~/x/**``
+        # match directly and can escape cwd.
         return _matches_tier2(path, (rule.specifier,), cwd) is not None
-    return False
+
+    # Pathless, command-less tool: only ``*`` (any invocation) matches.
+    return rule.specifier == "*"
 
 
 def match_rules(
@@ -153,7 +167,9 @@ def match_rules(
     无任何规则命中返回 ``None``(调用方 checker 交回 Tier 链 / fallthrough).
     """
     for spec in deny:
-        if rule_matches(parse_rule(spec), tool_name, args, cwd):
+        # deny matches Bash by substring (review-fix [3]) — a security boundary
+        # over-matches on the safe side.
+        if rule_matches(parse_rule(spec), tool_name, args, cwd, substring_bash=True):
             return DecisionResult.deny(f"matches deny rule {spec!r}")
     for spec in ask:
         if rule_matches(parse_rule(spec), tool_name, args, cwd):

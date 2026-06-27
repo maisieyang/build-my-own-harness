@@ -147,16 +147,47 @@ class TestT4ResolutionOrder:
         )
         assert result.decision is Decision.DENY
 
-    def test_rules_allow_short_circuits_tier3_ask(self, tmp_path: Path) -> None:
-        # Writing outside cwd is normally Tier 3 ASK. An explicit allow rule
-        # lets the loop do it → ALLOW (this is the whole point of L2).
+    def test_in_cwd_allow_short_circuits_tier3(self, tmp_path: Path) -> None:
+        # In-cwd: an allow rule lets the loop do the write → ALLOW.
         checker = _checker(
             headless=True,
             permissions=PermissionRules(allow=("Write(*)",)),
         )
         result = checker.evaluate(
             "Write",
-            _PathInput(path="/tmp/outside-cwd.txt"),
+            _PathInput(path=str(tmp_path / "src" / "main.py")),
+            ToolExecutionContext(cwd=tmp_path),
+        )
+        assert result.decision is Decision.ALLOW
+
+    def test_wildcard_allow_is_cwd_scoped(self, tmp_path: Path) -> None:
+        # review-fix [2]: a WILDCARD allow (`Write(*)`) does NOT reach outside
+        # cwd — it must not silently grant filesystem-wide writes. Outside-cwd
+        # falls through to the headless fail-closed → DENY.
+        outside = tmp_path.parent / "sibling-repo" / "x.txt"
+        checker = _checker(
+            headless=True,
+            permissions=PermissionRules(allow=("Write(*)",)),
+        )
+        result = checker.evaluate(
+            "Write",
+            _PathInput(path=str(outside)),
+            ToolExecutionContext(cwd=tmp_path),
+        )
+        assert result.decision is Decision.DENY
+
+    def test_explicit_path_allow_escapes_cwd(self, tmp_path: Path) -> None:
+        # review-fix [2]: an EXPLICIT absolute-path allow CAN reach outside cwd
+        # — the user named that exact location → ALLOW.
+        outside_dir = tmp_path.parent / "sibling-repo"
+        outside = outside_dir / "x.txt"
+        checker = _checker(
+            headless=True,
+            permissions=PermissionRules(allow=(f"Write({outside_dir}/**)",)),
+        )
+        result = checker.evaluate(
+            "Write",
+            _PathInput(path=str(outside)),
             ToolExecutionContext(cwd=tmp_path),
         )
         assert result.decision is Decision.ALLOW
@@ -211,6 +242,19 @@ class TestT5FailClosed:
             ToolExecutionContext(cwd=tmp_path),
         )
         assert result.decision is Decision.ALLOW
+
+    def test_headless_out_cwd_mutating_failclosed(self, tmp_path: Path) -> None:
+        # review-fix [4]: out-cwd mutating with no allow normally hits Tier3 ASK,
+        # which maps to ALLOW under --auto — escaping fail-closed. In headless
+        # posture it must be DENY, not ASK.
+        outside = tmp_path.parent / "sibling-repo" / "x.txt"
+        checker = _checker(headless=True)
+        result = checker.evaluate(
+            "Write",
+            _PathInput(path=str(outside)),
+            ToolExecutionContext(cwd=tmp_path),
+        )
+        assert result.decision is Decision.DENY
 
 
 # --------------------------------------------------------------------------- #
