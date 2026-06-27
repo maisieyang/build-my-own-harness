@@ -216,9 +216,15 @@ def _matches_tier2(path: str, patterns: tuple[str, ...], cwd: Path) -> str | Non
     abs_path = os.path.abspath(os.path.expanduser(path))
 
     # Compute cwd-relative form if path is under cwd; else None.
+    # review round 3 [F]: resolve symlinks on BOTH sides for the cwd-relative
+    # test (mirrors Tier 3's _inside_project_root), so an in-cwd path given in
+    # symlink form (e.g. macOS /tmp → /private/tmp) is still recognized as
+    # inside cwd. Absolute patterns keep matching the un-resolved ``abs_path``
+    # so user-written ``/tmp/...`` patterns still work.
+    resolved_path = os.path.realpath(os.path.expanduser(path))
     rel_path: str | None
     try:
-        rel_path = str(Path(abs_path).relative_to(cwd.resolve()))
+        rel_path = str(Path(resolved_path).relative_to(cwd.resolve()))
     except ValueError:
         rel_path = None  # path is outside cwd — relative patterns can't match
 
@@ -286,13 +292,16 @@ class TierBasedPermissionChecker:
        can override it — it sits above the L2 rule layer)
     3. **Tier 2**: user-config glob patterns from ``Settings.deny_paths`` → DENY
     4. **L2 rule layer** (``Settings.permissions``, loop-runtime L2): deny > ask
-       > allow. Wildcard/relative allows are cwd-scoped; only explicit
-       absolute/tilde specifiers reach outside cwd. Bash deny matches by
-       substring (a security boundary), Bash allow by narrow prefix.
-    5. **Tier 3**: mode-based — write/exec outside cwd → ASK, or **DENY** under
-       ``headless`` (fail-closed; ASK would map to ALLOW under --auto)
-    6. **fallthrough** → ALLOW, or **DENY** for a mutating tool under
-       ``headless`` (fail-closed: needs an explicit ``permissions.allow`` rule)
+       > allow, with an allow/deny **asymmetry** — deny over-matches (wildcard =
+       any path; Bash = command-token-boundary substring), allow under-matches
+       (wildcard/relative are cwd-scoped; Bash prefix). Only explicit
+       absolute/tilde allow specifiers reach outside cwd.
+    5. **Headless gate** (``-p`` posture): a mutating tool with no matching allow
+       rule → DENY (fail-closed). Carve-outs: read-only tools and the
+       per-project memory dir. ASK is skipped here because --auto maps it to
+       ALLOW, which would escape the guarantee.
+    6. **Tier 3** (interactive only): write/exec outside cwd → ASK (Three-Axis G)
+    7. fallthrough → ALLOW
 
     Dependencies injected at construction (per Three-Axis):
 
@@ -401,7 +410,7 @@ class TierBasedPermissionChecker:
                 )
             return rule_result
 
-        # 5. Tier 3 mode-based (needs tool.is_read_only).
+        # 5. Tool lookup (needed for the is_read_only checks below).
         try:
             tool = self._registry.get(tool_name)
         except KeyError:
@@ -410,33 +419,16 @@ class TierBasedPermissionChecker:
             # AuthZ shouldn't second-guess that.
             return DecisionResult.allow()
 
-        t3 = _matches_tier3(tool.is_read_only, path, context.cwd)
-        if t3 is not None:
-            # review-fix [4]: under headless, an out-cwd mutating tool with no
-            # explicit allow rule is fail-closed DENY (not ASK). ASK maps to
-            # ALLOW under --auto, which would escape the fail-closed guarantee.
-            # ``_matches_tier3`` only fires for mutating tools, so this branch
-            # never affects read-only calls.
-            if self._headless:
-                logger.warning(
-                    "permission_denied",
-                    tool=tool_name,
-                    tier="headless_failclosed_outside_cwd",
-                )
-                return DecisionResult.deny(
-                    f"headless fail-closed: {t3}; add a permissions.allow rule "
-                    "naming this path to permit it"
-                )
-            # Interactive: Tier 3 maps to ASK (Three-Axis G) — writing outside
-            # cwd is a plausible legitimate intent; loop layer + PermissionMode
-            # decide final outcome.
-            return DecisionResult.ask(t3)
-
-        # 6. Fallthrough. loop-runtime L2 立场5: in headless posture a mutating
-        #    tool that reached here with no matching allow rule is fail-closed
-        #    DENY (not the legacy ALLOW). Read-only tools + interactive runs
-        #    (headless=False) keep the legacy ALLOW → zero regression.
+        # 6. Headless fail-closed gate (loop-runtime L2, ONE place — review
+        #    round 3 consolidates the former scattered DENY branches). Under the
+        #    ``-p`` posture, a mutating tool that reached here with no matching
+        #    allow rule is DENIED — in-cwd OR outside — because Tier 3's ASK
+        #    maps to ALLOW under --auto and would escape the guarantee. Two
+        #    carve-outs: read-only tools, and the framework's own per-project
+        #    memory dir (Phase-16 write path, review round 3 [B]).
         if self._headless and not tool.is_read_only:
+            if path is not None and _inside_project_memory_dir(path, context.cwd):
+                return DecisionResult.allow()
             logger.warning(
                 "permission_denied",
                 tool=tool_name,
@@ -445,5 +437,12 @@ class TierBasedPermissionChecker:
             return DecisionResult.deny(
                 "headless fail-closed: mutating tool requires an explicit permissions.allow rule"
             )
+
+        # 7. Tier 3 mode-based — interactive only (headless handled at step 6).
+        #    Write/exec outside cwd → ASK (Three-Axis G): a plausible legitimate
+        #    intent; loop layer + PermissionMode decide the final outcome.
+        t3 = _matches_tier3(tool.is_read_only, path, context.cwd)
+        if t3 is not None:
+            return DecisionResult.ask(t3)
 
         return DecisionResult.allow()

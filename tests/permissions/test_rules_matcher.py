@@ -117,6 +117,92 @@ class TestBashPrefixMatching:
         assert result.decision is Decision.ALLOW
 
 
+class TestDenyBroaderThanAllow:
+    """review round 3 [A]: cwd-scoping is right for ALLOW (narrow=safe) but WRONG
+    for DENY (narrow=under-deny). A wildcard deny must block anywhere; a wildcard
+    allow must stay cwd-scoped.
+    """
+
+    def test_wildcard_deny_blocks_out_of_cwd(self, tmp_path: Path) -> None:
+        outside = tmp_path.parent / "sibling-repo" / "x.txt"
+        result = match_rules(
+            "Write",
+            _PathInput(path=str(outside)),
+            tmp_path,
+            allow=(),
+            deny=("Write(*)",),
+            ask=(),
+        )
+        assert result is not None
+        assert result.decision is Decision.DENY
+
+    def test_wildcard_allow_stays_cwd_scoped(self, tmp_path: Path) -> None:
+        # guard: the [2] fix is preserved — wildcard allow does NOT escape cwd.
+        outside = tmp_path.parent / "sibling-repo" / "x.txt"
+        result = match_rules(
+            "Write",
+            _PathInput(path=str(outside)),
+            tmp_path,
+            allow=("Write(*)",),
+            deny=(),
+            ask=(),
+        )
+        assert result is None
+
+
+class TestBashDenyWordBoundary:
+    """review round 3 [C]+[D]: deny substring must respect command-token boundaries
+    (no mid-word over-deny), and an empty-prefix ``Bash(:*)`` must match nothing.
+    """
+
+    def test_deny_does_not_match_midword_terraform(self, tmp_path: Path) -> None:
+        result = match_rules(
+            "Bash",
+            _BashInput(command="terraform apply"),
+            tmp_path,
+            allow=(),
+            deny=("Bash(rm:*)",),
+            ask=(),
+        )
+        assert result is None
+
+    def test_deny_does_not_match_midword_npm_format(self, tmp_path: Path) -> None:
+        result = match_rules(
+            "Bash",
+            _BashInput(command="npm run format"),
+            tmp_path,
+            allow=(),
+            deny=("Bash(rm:*)",),
+            ask=(),
+        )
+        assert result is None
+
+    def test_deny_still_matches_rm_at_boundary(self, tmp_path: Path) -> None:
+        # guard: real chained rm is still caught.
+        result = match_rules(
+            "Bash",
+            _BashInput(command="git add . && rm -rf build"),
+            tmp_path,
+            allow=(),
+            deny=("Bash(rm:*)",),
+            ask=(),
+        )
+        assert result is not None
+        assert result.decision is Decision.DENY
+
+    def test_empty_prefix_allow_matches_nothing(self, tmp_path: Path) -> None:
+        # [D] `Bash(:*)` → empty token must NOT allow every command.
+        result = match_rules(
+            "Bash",
+            _BashInput(command="rm -rf /"),
+            tmp_path,
+            allow=("Bash(:*)",),
+            deny=(),
+            ask=(),
+        )
+        assert result is None
+
+
 class TestBashDenyAsymmetricMatching:
     """review-fix [3]: deny is a security boundary → match by SUBSTRING (over-deny
     is the safe direction), while allow stays narrow PREFIX (under-match is safe

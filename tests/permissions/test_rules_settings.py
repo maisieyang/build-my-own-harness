@@ -90,3 +90,10 @@ class TestMalformedRuleRejectedAtLoad:
         rules = PermissionRules(allow=("Edit(*)", "Bash(npm test:*)"), deny=("Write(secrets/**)",))
         assert rules.allow == ("Edit(*)", "Bash(npm test:*)")
         assert rules.deny == ("Write(secrets/**)",)
+
+    @pytest.mark.parametrize("bad", [[None], [5], 5, [["nested"]]])
+    def test_non_str_rule_element_raises_validation_error(self, bad: object) -> None:
+        # review round 3 [E]: a non-str element must fail with a clean
+        # ValidationError (fail-fast), not a raw AttributeError/TypeError.
+        with pytest.raises(ValidationError):
+            PermissionRules(allow=bad)

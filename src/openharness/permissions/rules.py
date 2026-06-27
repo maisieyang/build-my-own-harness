@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Any
 
@@ -39,20 +40,11 @@ class PermissionRules(BaseModel):
     ``OPENHARNESS_PERMISSIONS__ALLOW`` 等(``env_nested_delimiter='__'``).
     与 ``permission_mode``(posture) / ``deny_paths``(Tier2 legacy) 并存——三者关注点不同.
 
-    The ``_parse_and_validate`` before-validator does two jobs (review-fix [5]+[6]):
-
-    1. **env comma-split**: ``OPENHARNESS_PERMISSIONS__ALLOW='Edit(*),Write(src/**)'``
-       → ``("Edit(*)", "Write(src/**)")`` — mirrors ``Settings.deny_paths`` so the
-       documented env form works instead of crashing on JSON decode.
-    2. **fail-fast validation**: every rule string is run through :func:`parse_rule`
-       at config-load time, so a malformed rule raises ``ValidationError`` here
-       rather than an uncaught ``ValueError`` from the per-call hot path mid-loop.
+    Env parsing + load-time validation live in :meth:`_parse_and_validate`
+    (the single canonical explanation); ``NoDecode`` lets that validator see the
+    raw env string instead of a JSON-decoded value.
     """
 
-    # ``NoDecode`` stops pydantic-settings from JSON-decoding the env value
-    # before ``_parse_and_validate`` runs (same reason Settings.deny_paths uses
-    # it) — so ``OPENHARNESS_PERMISSIONS__ALLOW='Edit(*)'`` reaches the
-    # comma-split validator instead of crashing on a JSON parse error.
     allow: Annotated[tuple[str, ...], NoDecode] = ()
     deny: Annotated[tuple[str, ...], NoDecode] = ()
     ask: Annotated[tuple[str, ...], NoDecode] = ()
@@ -61,14 +53,26 @@ class PermissionRules(BaseModel):
     @classmethod
     def _parse_and_validate(cls, value: Any) -> Any:
         # env comma-split (review-fix [5]) — same shape as Settings._parse_deny_paths.
+        items: tuple[Any, ...]
         if isinstance(value, str):
-            items: tuple[str, ...] = tuple(p.strip() for p in value.split(",") if p.strip())
+            items = tuple(p.strip() for p in value.split(",") if p.strip())
         elif value is None:
             items = ()
-        else:
+        elif isinstance(value, (list, tuple)):
             items = tuple(value)
-        # fail-fast at load (review-fix [6]): reject malformed rules now, not mid-loop.
+        else:
+            # review round 3 [E]: a non-iterable (e.g. a bare int) must fail with
+            # a clean ValidationError, not a raw TypeError from tuple(value).
+            raise ValueError(
+                f"permission rules must be a string or list of strings, got {type(value).__name__}"
+            )
+        # fail-fast at load (review-fix [6] + [E]): reject malformed / non-str
+        # rules now, not as an opaque crash on the per-call hot path mid-loop.
         for spec in items:
+            if not isinstance(spec, str):
+                raise ValueError(
+                    f"permission rule must be a string, got {type(spec).__name__}: {spec!r}"
+                )
             parse_rule(spec)
         return items
 
@@ -113,44 +117,56 @@ def rule_matches(
     args: _PydanticModel,
     cwd: Path,
     *,
-    substring_bash: bool = False,
+    deny: bool = False,
 ) -> bool:
     """True iff ``rule`` matches this ``(tool_name, args)`` call.
 
-    - tool name must match exactly.
-    - **Bash-style args** (has ``command``): ``*`` → any command.
-      ``substring_bash=True`` (deny rules, review-fix [3]) → the token (specifier
-      minus trailing ``:*``) must appear **anywhere** in the command — over-match
-      is the safe direction for a deny boundary, catching ``; curl`` /
-      ``bash -c '...'``. Otherwise (allow/ask) → narrow ``prefix:*`` startswith /
-      exact match (under-match is the safe direction for allow).
-    - **file-style args** (has ``path``): matched via Tier2 semantics, so ``*``
-      and relative globs are **cwd-scoped** (review-fix [2]) and only explicit
-      absolute/tilde specifiers reach outside cwd.
+    ``deny`` selects the allow-vs-deny **asymmetry**: a deny rule is a security
+    boundary, so it over-matches on the safe side; an allow rule grants access,
+    so it under-matches on the safe side.
+
+    - **Bash-style args** (has ``command``) — see :func:`_bash_matches`:
+      deny → command-token-boundary substring; allow/ask → narrow prefix/exact.
+    - **file-style args** (has ``path``):
+      *deny* ``*`` → any path (over-deny, review round 3 [A]); otherwise matched
+      via Tier2 semantics, so *allow/ask* ``*`` and relative globs are
+      **cwd-scoped** ([2]) and only explicit absolute/tilde specifiers escape cwd.
     """
     if rule.tool != tool_name:
         return False
 
     command = getattr(args, "command", None)
     if isinstance(command, str):
-        spec = rule.specifier
-        if spec == "*":
-            return True
-        token = spec[:-2] if spec.endswith(":*") else spec
-        if substring_bash:
-            return token in command
-        return command.startswith(token) if spec.endswith(":*") else command == spec
+        return _bash_matches(rule.specifier, command, deny=deny)
 
     path = _extract_path_arg(args)
     if path is not None:
-        # Routing through _matches_tier2 (not a blanket ``*`` early-return) is
-        # what makes wildcard/relative allows cwd-scoped — ``*`` is a relative
-        # pattern, so it only matches paths under cwd; ``/abs/**`` / ``~/x/**``
-        # match directly and can escape cwd.
+        if deny and rule.specifier == "*":
+            return True  # [A] a wildcard deny blocks any path, in or outside cwd
         return _matches_tier2(path, (rule.specifier,), cwd) is not None
 
     # Pathless, command-less tool: only ``*`` (any invocation) matches.
     return rule.specifier == "*"
+
+
+def _bash_matches(specifier: str, command: str, *, deny: bool) -> bool:
+    """Match a Bash ``specifier`` against a ``command`` (allow/deny asymmetric)."""
+    if specifier == "*":
+        return True
+    token = specifier[:-2] if specifier.endswith(":*") else specifier
+    if not token:
+        # review round 3 [D]: an empty-prefix ``Bash(:*)`` must match nothing,
+        # never every command (which would silently bypass fail-closed).
+        return False
+    if deny:
+        # review round 3 [C]: match the token only at command-token boundaries —
+        # catches ``; rm``, ``bash -c 'rm'`` but NOT ``terraform`` / ``format``.
+        # Over-match on the safe side without breaking unrelated commands. Still
+        # a best-effort tripwire, not a jail — the real boundary is Tier 1 +
+        # sandbox (L7).
+        return re.search(rf"(?<!\w){re.escape(token)}(?!\w)", command) is not None
+    # allow/ask: narrow — prefix for ``:*``, exact otherwise.
+    return command.startswith(token) if specifier.endswith(":*") else command == specifier
 
 
 def match_rules(
@@ -167,9 +183,9 @@ def match_rules(
     无任何规则命中返回 ``None``(调用方 checker 交回 Tier 链 / fallthrough).
     """
     for spec in deny:
-        # deny matches Bash by substring (review-fix [3]) — a security boundary
-        # over-matches on the safe side.
-        if rule_matches(parse_rule(spec), tool_name, args, cwd, substring_bash=True):
+        # deny is a security boundary → over-match on the safe side (review-fix
+        # [3] Bash substring + round 3 [A] wildcard-any-path).
+        if rule_matches(parse_rule(spec), tool_name, args, cwd, deny=True):
             return DecisionResult.deny(f"matches deny rule {spec!r}")
     for spec in ask:
         if rule_matches(parse_rule(spec), tool_name, args, cwd):

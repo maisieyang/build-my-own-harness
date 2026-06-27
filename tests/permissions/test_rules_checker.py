@@ -243,6 +243,40 @@ class TestT5FailClosed:
         )
         assert result.decision is Decision.ALLOW
 
+    def test_headless_allows_framework_memory_write(self, tmp_path: Path) -> None:
+        # review round 3 [B]: the per-project memory dir (Phase-16 exception) lives
+        # OUTSIDE cwd by design; the headless fail-closed must NOT deny the
+        # framework's own memory writes, or `oh -p` silently breaks memory.
+        from openharness.memory.paths import get_project_memory_dir
+
+        mem_dir = get_project_memory_dir(tmp_path)
+        checker = _checker(headless=True)
+        result = checker.evaluate(
+            "Write",
+            _PathInput(path=str(mem_dir / "MEMORY.md")),
+            ToolExecutionContext(cwd=tmp_path),
+        )
+        assert result.decision is Decision.ALLOW
+
+    def test_wildcard_allow_matches_in_cwd_under_symlinked_cwd(self, tmp_path: Path) -> None:
+        # review round 3 [F]: when cwd is reached via a symlink (e.g. macOS /tmp),
+        # an in-cwd write given in symlink form must still match a wildcard allow
+        # (not get denied because abspath != cwd.resolve()).
+        real = tmp_path / "real"
+        real.mkdir()
+        link = tmp_path / "link"
+        link.symlink_to(real)
+        checker = _checker(
+            headless=True,
+            permissions=PermissionRules(allow=("Write(*)",)),
+        )
+        result = checker.evaluate(
+            "Write",
+            _PathInput(path=str(link / "file.py")),
+            ToolExecutionContext(cwd=link),
+        )
+        assert result.decision is Decision.ALLOW
+
     def test_headless_out_cwd_mutating_failclosed(self, tmp_path: Path) -> None:
         # review-fix [4]: out-cwd mutating with no allow normally hits Tier3 ASK,
         # which maps to ALLOW under --auto — escaping fail-closed. In headless
