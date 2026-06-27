@@ -76,7 +76,12 @@ from openai import AsyncOpenAI
 from pydantic import ValidationError
 
 from openharness import __version__
-from openharness._stream_render import render_stream
+from openharness._stream_render import (
+    build_result_obj,
+    collect_print_result,
+    render_stream,
+    render_stream_json,
+)
 from openharness.api import (
     AuthenticationFailure,
     OpenAICompatibleApiClient,
@@ -112,7 +117,7 @@ from openharness.memory import (
     MemoryStore,
     get_project_memory_dir,
 )
-from openharness.observability import configure_logging
+from openharness.observability import configure_logging, new_run_id
 
 # Typer reflects ``Literal[...]`` types at RUNTIME to build Click Choice
 # constraints — moving these into ``TYPE_CHECKING`` would break ``--log-level
@@ -443,6 +448,7 @@ async def _run_ask(
     resume: bool = False,
     resume_id: str | None = None,
     llm_focus_state_override: bool | None = None,
+    output_format: OutputFormat = "text",
 ) -> str | None:
     """Build the QueryContext, run the loop, render the events.
 
@@ -922,6 +928,21 @@ async def _run_ask(
                 ConversationMessage(role="user", content=[TextBlock(text=prompt)]),
             ]
         events = run_query(initial_messages, context)
+        # loop-runtime L1: session_id is a freshly-minted v1 run_id (one per
+        # -p run). It does NOT yet correlate with the engine's internal log
+        # run_id (threading that needs engine changes — out of scope for L1).
+        if output_format == "json":
+            import json
+
+            # T3: drain silently, aggregate, emit ONE result object on stdout.
+            # Run-level exit code still maps from stop_reason (T2), so a
+            # non-end_turn run prints the json AND exits non-zero.
+            collected = await collect_print_result(events)
+            typer.echo(json.dumps(build_result_obj(collected, session_id=new_run_id())))
+            return collected.stop_reason
+        if output_format == "stream-json":
+            # T4: one JSON object per event, terminated by a result object.
+            return await render_stream_json(events, session_id=new_run_id())
         final_event = await render_stream(events)
         return final_event.stop_reason if final_event is not None else None
 
@@ -1849,19 +1870,13 @@ def ask(
         )
         raise typer.Exit(code=2)
 
-    # loop-runtime L1 T1: the headless atom's flag surface. ``text`` is wired
-    # (it shares the standard non-interactive text passthrough below); ``json``
-    # / ``stream-json`` are rejected loudly until T3 / T4 implement them, and
-    # ``--output-format`` is meaningless without ``-p``.
-    if output_format != "text":
-        if print_mode:
-            msg = (
-                f"--output-format {output_format} is not yet available "
-                "(loop-runtime L1 T3/T4); only 'text' is wired so far."
-            )
-        else:
-            msg = "--output-format only applies in headless print mode (-p/--print)."
-        typer.echo(msg, err=True)
+    # loop-runtime L1: ``--output-format`` is meaningless without ``-p``.
+    # text (T1) / json (T3) / stream-json (T4) are all wired.
+    if output_format != "text" and not print_mode:
+        typer.echo(
+            "--output-format only applies in headless print mode (-p/--print).",
+            err=True,
+        )
         raise typer.Exit(code=2)
 
     permission_mode_override: PermissionMode | None = None
@@ -1905,6 +1920,7 @@ def ask(
                 resume=resume or resume_id is not None,
                 resume_id=resume_id,
                 llm_focus_state_override=llm_focus_state,
+                output_format=output_format,
             )
         )
     except ValidationError as exc:

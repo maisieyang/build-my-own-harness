@@ -18,6 +18,7 @@ Two assertion surfaces:
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 from typer.testing import CliRunner
@@ -1917,21 +1918,65 @@ class TestPrintMode:
 
         assert result.exit_code != 0
 
-    # ---- T1 guard contract: --output-format gating (text-only for now) ---- #
+    # ---- T3: --output-format json (single final result object) ---- #
 
-    def test_print_mode_json_format_not_yet_available(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """``json`` / ``stream-json`` are rejected loudly until T3 / T4."""
+    def test_print_mode_json_shape(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``-p --output-format json`` emits ONE result object on stdout with
+        the locked field set (result / stop_reason / usage / num_turns /
+        session_id; cost_usd=null — v1 has no pricing layer, L1 T0)."""
         _set_minimum_env(monkeypatch)
-        stub = _RecordingStubClient(_hello_world_events())
+        stub = _RecordingStubClient(_hello_world_events("the answer"))
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
         result = runner.invoke(cli_module.app, ["ask", "-p", "--output-format", "json", "go"])
 
-        assert result.exit_code == 2
-        assert "not yet available" in result.stderr
+        assert result.exit_code == 0, result.stderr
+        obj = json.loads(result.stdout)
+        assert obj["type"] == "result"
+        assert obj["result"] == "the answer"
+        assert obj["stop_reason"] == "end_turn"
+        assert obj["usage"] == {"input_tokens": 3, "output_tokens": 1, "total_tokens": 4}
+        assert obj["cost_usd"] is None
+        assert obj["num_turns"] == 1
+        assert isinstance(obj["session_id"], str) and obj["session_id"]
+
+    def test_print_mode_json_incomplete_still_nonzero(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """json mode still honors the run-level exit code: a non-end_turn run
+        emits the json object on stdout AND exits non-zero (T2 ∩ T3)."""
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_incomplete_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["ask", "-p", "--output-format", "json", "go"])
+
+        assert result.exit_code != 0
+        obj = json.loads(result.stdout)
+        assert obj["stop_reason"] == "max_tokens"
+
+    # ---- stream-json still gated until T4 ---- #
+
+    def test_print_mode_stream_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """T4: ``-p --output-format stream-json`` emits one JSON object per
+        event (newline-delimited), terminated by a ``result`` object."""
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events("streamed"))
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_module.app, ["ask", "-p", "--output-format", "stream-json", "go"]
+        )
+
+        assert result.exit_code == 0, result.stderr
+        lines = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+        assert any(obj["type"] == "assistant_delta" for obj in lines)
+        assert lines[-1]["type"] == "result"
+        assert lines[-1]["stop_reason"] == "end_turn"
+        assert lines[-1]["session_id"]
 
     def test_output_format_requires_print_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """``--output-format`` is meaningless without ``-p`` and is rejected."""

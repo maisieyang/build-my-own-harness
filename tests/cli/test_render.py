@@ -20,12 +20,17 @@ The four behaviors that matter for Phase 1 (D5.5):
 from __future__ import annotations
 
 import io
+import json
 from typing import TYPE_CHECKING
 
 import pytest
 from rich.console import Console
 
-from openharness._stream_render import MAX_OUTPUT_PREVIEW, render_stream
+from openharness._stream_render import (
+    MAX_OUTPUT_PREVIEW,
+    render_stream,
+    render_stream_json,
+)
 from openharness.protocols.content import TextBlock
 from openharness.protocols.messages import ConversationMessage
 from openharness.protocols.stream_events import (
@@ -497,3 +502,48 @@ class TestLiveBranch:
         assert any(ch in rendered for ch in self._BRAILLE_FRAMES)
         # Final line landed even though Live was running just before.
         assert "127.0.0.1 localhost" in rendered
+
+
+class TestRenderStreamJson:
+    """loop-runtime L1 T4: ``--output-format stream-json`` — one JSON object
+    per engine event, terminated by a single ``result`` object."""
+
+    @pytest.mark.asyncio
+    async def test_emits_one_json_object_per_event_then_result(self) -> None:
+        events: list[ApiStreamEvent] = [
+            ApiTextDeltaEvent(text="hel"),
+            ApiTextDeltaEvent(text="lo"),
+            ToolExecutionStartedEvent(tool_use_id="t1", tool_name="Read", tool_input={"path": "x"}),
+            ToolExecutionCompletedEvent(
+                tool_use_id="t1", tool_name="Read", output="contents", is_error=False
+            ),
+            ApiRetryEvent(attempt=1, delay_seconds=0.5, error="overloaded"),
+            ApiMessageCompleteEvent(
+                message=ConversationMessage(role="assistant", content=[TextBlock(text="hello")]),
+                usage=UsageSnapshot(input_tokens=5, output_tokens=2),
+                stop_reason="end_turn",
+            ),
+        ]
+        out = io.StringIO()
+
+        stop_reason = await render_stream_json(
+            _async_iter(events), session_id="sid-123", stdout=out
+        )
+
+        lines = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+        types = [obj["type"] for obj in lines]
+        # All five mapped event types appear, result is LAST.
+        assert "assistant_delta" in types
+        assert "tool_started" in types
+        assert "tool_completed" in types
+        assert "error" in types
+        assert lines[-1]["type"] == "result"
+        # The result object is the same shape as --output-format json (T3).
+        assert lines[-1]["result"] == "hello"
+        assert lines[-1]["stop_reason"] == "end_turn"
+        assert lines[-1]["usage"] == {"input_tokens": 5, "output_tokens": 2, "total_tokens": 7}
+        assert lines[-1]["cost_usd"] is None
+        assert lines[-1]["num_turns"] == 1
+        assert lines[-1]["session_id"] == "sid-123"
+        # The terminal stop_reason is returned for run-level exit-code mapping.
+        assert stop_reason == "end_turn"

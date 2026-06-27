@@ -26,8 +26,10 @@ without modification.
 
 from __future__ import annotations
 
+import json
 import sys
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from rich.console import Console
@@ -35,6 +37,7 @@ from rich.live import Live
 from rich.spinner import Spinner
 from rich.table import Table
 
+from openharness.protocols.content import TextBlock
 from openharness.protocols.stream_events import (
     ApiMessageCompleteEvent,
     ApiRetryEvent,
@@ -163,6 +166,142 @@ async def render_stream(
             current_live.stop()
 
     return final
+
+
+@dataclass(frozen=True)
+class PrintResult:
+    """Aggregated pieces a headless ``--output-format json`` result needs
+    (loop-runtime L1 T3). Usage is summed across all turns; ``text`` and
+    ``stop_reason`` come from the final turn."""
+
+    text: str
+    stop_reason: str | None
+    input_tokens: int
+    output_tokens: int
+    num_turns: int
+
+
+async def collect_print_result(events: AsyncIterator[ApiStreamEvent]) -> PrintResult:
+    """Drain ``events`` SILENTLY (still driving tool execution) and aggregate
+    the headless json result.
+
+    Unlike :func:`render_stream`, nothing is written to any stream -- the
+    caller serializes the returned :class:`PrintResult` as a single JSON
+    object. Usage is summed across every ``ApiMessageCompleteEvent`` (one per
+    turn); ``text`` / ``stop_reason`` reflect the final turn.
+    """
+    input_tokens = 0
+    output_tokens = 0
+    num_turns = 0
+    final: ApiMessageCompleteEvent | None = None
+    async for event in events:
+        if isinstance(event, ApiMessageCompleteEvent):
+            final = event
+            num_turns += 1
+            input_tokens += event.usage.input_tokens
+            output_tokens += event.usage.output_tokens
+    text = (
+        "".join(b.text for b in final.message.content if isinstance(b, TextBlock))
+        if final is not None
+        else ""
+    )
+    return PrintResult(
+        text=text,
+        stop_reason=final.stop_reason if final is not None else None,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        num_turns=num_turns,
+    )
+
+
+def build_result_obj(result: PrintResult, *, session_id: str) -> dict[str, object]:
+    """Single source of truth for the headless json ``result`` object shape
+    (loop-runtime L1 T3 + T4). ``cost_usd`` stays null until a pricing layer
+    lands (T0: v1 has no cost computation)."""
+    return {
+        "type": "result",
+        "result": result.text,
+        "stop_reason": result.stop_reason,
+        "usage": {
+            "input_tokens": result.input_tokens,
+            "output_tokens": result.output_tokens,
+            "total_tokens": result.input_tokens + result.output_tokens,
+        },
+        "cost_usd": None,
+        "num_turns": result.num_turns,
+        "session_id": session_id,
+    }
+
+
+async def render_stream_json(
+    events: AsyncIterator[ApiStreamEvent],
+    *,
+    session_id: str,
+    stdout: TextIO | None = None,
+) -> str | None:
+    """Stream each engine event as ONE newline-delimited JSON object, then a
+    final ``result`` object (loop-runtime L1 T4). Returns the terminal
+    stop_reason so the caller maps run-level outcome → exit code (T2).
+
+    Event → line mapping: text deltas → ``assistant_delta``; tool dispatch →
+    ``tool_started`` / ``tool_completed``; retryable API errors →  ``error``.
+    ``ApiMessageCompleteEvent`` is accumulated (usage / turn count / final
+    text) rather than emitted, and surfaces in the terminating ``result``.
+    """
+    out = sys.stdout if stdout is None else stdout
+
+    def _emit(obj: dict[str, object]) -> None:
+        out.write(json.dumps(obj) + "\n")
+        out.flush()
+
+    input_tokens = 0
+    output_tokens = 0
+    num_turns = 0
+    final: ApiMessageCompleteEvent | None = None
+    async for event in events:
+        if isinstance(event, ApiTextDeltaEvent):
+            _emit({"type": "assistant_delta", "text": event.text})
+        elif isinstance(event, ToolExecutionStartedEvent):
+            _emit(
+                {
+                    "type": "tool_started",
+                    "tool": event.tool_name,
+                    "tool_use_id": event.tool_use_id,
+                    "input": event.tool_input,
+                }
+            )
+        elif isinstance(event, ToolExecutionCompletedEvent):
+            _emit(
+                {
+                    "type": "tool_completed",
+                    "tool": event.tool_name,
+                    "tool_use_id": event.tool_use_id,
+                    "is_error": event.is_error,
+                    "output": event.output,
+                }
+            )
+        elif isinstance(event, ApiRetryEvent):
+            _emit({"type": "error", "attempt": event.attempt, "error": event.error})
+        elif isinstance(event, ApiMessageCompleteEvent):
+            final = event
+            num_turns += 1
+            input_tokens += event.usage.input_tokens
+            output_tokens += event.usage.output_tokens
+
+    text = (
+        "".join(b.text for b in final.message.content if isinstance(b, TextBlock))
+        if final is not None
+        else ""
+    )
+    result = PrintResult(
+        text=text,
+        stop_reason=final.stop_reason if final is not None else None,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        num_turns=num_turns,
+    )
+    _emit(build_result_obj(result, session_id=session_id))
+    return result.stop_reason
 
 
 def _start_live(event: ToolExecutionStartedEvent, console: Console) -> Live:
