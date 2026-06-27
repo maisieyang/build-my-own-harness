@@ -24,6 +24,7 @@ from openharness.permissions import (
     Decision,
     DecisionResult,
     PermissionChecker,
+    PermissionRules,
     TierBasedPermissionChecker,
 )
 from openharness.tools import BaseTool, ToolExecutionContext, ToolRegistry, ToolResult
@@ -89,10 +90,21 @@ def _registry() -> ToolRegistry:
 
 
 class _StubSettings:
-    """Minimal Settings-shaped stub: only ``deny_paths`` is read by the checker."""
+    """Minimal Settings-shaped stub: ``deny_paths`` (Tier 2) + ``permissions`` (L2 rules).
 
-    def __init__(self, deny_paths: tuple[str, ...] = ()) -> None:
+    loop-runtime L2 widened the checker constructor to read ``settings.permissions``;
+    this fixture grows the field to honor that contract. Existing assertions below
+    are unchanged — with empty ``permissions`` + the default ``headless=False``, the
+    rule layer is a no-op and legacy Tier 1/2/3 behavior is preserved.
+    """
+
+    def __init__(
+        self,
+        deny_paths: tuple[str, ...] = (),
+        permissions: PermissionRules | None = None,
+    ) -> None:
         self.deny_paths = deny_paths
+        self.permissions = permissions if permissions is not None else PermissionRules()
 
 
 # --------------------------------------------------------------------------- #

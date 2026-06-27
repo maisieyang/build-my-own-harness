@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from openharness.observability import get_logger, sanitize_command, sanitize_path
-from openharness.permissions.checker import DecisionResult
+from openharness.permissions.checker import Decision, DecisionResult
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -296,9 +296,22 @@ class TierBasedPermissionChecker:
     ``checker.py``) — per-call data only;config / registry are state.
     """
 
-    def __init__(self, registry: ToolRegistry, settings: Settings) -> None:
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        settings: Settings,
+        *,
+        headless: bool = False,
+    ) -> None:
         self._registry = registry
         self._deny_paths = settings.deny_paths
+        # loop-runtime L2: declarative rule layer + headless posture.
+        self._permissions = settings.permissions
+        # ``headless`` = the L1 ``-p`` posture (plan T0 缝1). When True, a
+        # mutating tool that reaches fallthrough with no matching allow rule
+        # is DENIED (fail-closed) instead of the legacy ALLOW. Interactive
+        # runs (headless=False) keep the legacy in-cwd ALLOW → zero regression.
+        self._headless = headless
 
     def evaluate(
         self,
@@ -352,7 +365,35 @@ class TierBasedPermissionChecker:
                 )
                 return DecisionResult.deny(f"path {path!r} matches deny rule {t2!r}")
 
-        # 4. Tier 3 mode-based (needs tool.is_read_only).
+        # 4. Declarative rule layer (loop-runtime L2) — deny > ask > allow.
+        #    Runs for both path-bearing and command tools. Sits BELOW the
+        #    Tier 1 red line (step 2), so an allow rule can never override a
+        #    sensitive-path DENY; sits ABOVE Tier 3 (step 5), so an explicit
+        #    allow rule short-circuits the outside-cwd ASK — letting the
+        #    headless loop do exactly the work it was permitted to.
+        #    Function-level import avoids the rules<->tier_based import cycle
+        #    (rules.py reuses ``_matches_tier2`` / ``_extract_path_arg`` here).
+        from openharness.permissions.rules import match_rules
+
+        rule_result = match_rules(
+            tool_name,
+            args,
+            context.cwd,
+            allow=self._permissions.allow,
+            deny=self._permissions.deny,
+            ask=self._permissions.ask,
+        )
+        if rule_result is not None:
+            if rule_result.decision is Decision.DENY:
+                logger.warning(
+                    "permission_denied",
+                    tool=tool_name,
+                    tier="rule_deny",
+                    reason=rule_result.reason,
+                )
+            return rule_result
+
+        # 5. Tier 3 mode-based (needs tool.is_read_only).
         try:
             tool = self._registry.get(tool_name)
         except KeyError:
@@ -367,5 +408,19 @@ class TierBasedPermissionChecker:
             # plausible legitimate intent;loop layer + PermissionMode
             # decide final outcome.
             return DecisionResult.ask(t3)
+
+        # 6. Fallthrough. loop-runtime L2 立场5: in headless posture a mutating
+        #    tool that reached here with no matching allow rule is fail-closed
+        #    DENY (not the legacy ALLOW). Read-only tools + interactive runs
+        #    (headless=False) keep the legacy ALLOW → zero regression.
+        if self._headless and not tool.is_read_only:
+            logger.warning(
+                "permission_denied",
+                tool=tool_name,
+                tier="headless_failclosed",
+            )
+            return DecisionResult.deny(
+                "headless fail-closed: mutating tool requires an explicit permissions.allow rule"
+            )
 
         return DecisionResult.allow()
