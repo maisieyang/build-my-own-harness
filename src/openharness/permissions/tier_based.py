@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from openharness.observability import get_logger, sanitize_command, sanitize_path
-from openharness.permissions.checker import DecisionResult
+from openharness.permissions.checker import Decision, DecisionResult
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -216,6 +216,13 @@ def _matches_tier2(path: str, patterns: tuple[str, ...], cwd: Path) -> str | Non
     abs_path = os.path.abspath(os.path.expanduser(path))
 
     # Compute cwd-relative form if path is under cwd; else None.
+    # Known limitation (review round 4): this uses the *lexical* abspath, NOT
+    # symlink-resolved realpath. So a project whose cwd is itself reached via a
+    # symlink (e.g. macOS /tmp → /private/tmp) may see an in-cwd relative
+    # pattern miss — a fail-CLOSED (safe) edge. round 3 tried realpath here and
+    # it caused worse regressions (a relative DENY for an in-cwd dir symlinked
+    # OUTWARD silently under-matched), so we keep the lexical form. Callers
+    # needing out-of-cwd grants should use an explicit absolute/tilde pattern.
     rel_path: str | None
     try:
         rel_path = str(Path(abs_path).relative_to(cwd.resolve()))
@@ -282,23 +289,47 @@ class TierBasedPermissionChecker:
     Resolution order (first-match-wins):
 
     1. **Bash deny-list** (carry-over for catastrophic shell patterns)
-    2. **Tier 1**:hardcoded sensitive paths → DENY
-    3. **Tier 2**:user-config glob patterns from ``Settings.deny_paths`` → DENY
-    4. **Tier 3**:mode-based — write/exec tools outside cwd → **ASK** (G)
-    5. fallthrough → ALLOW
+    2. **Tier 1**: hardcoded sensitive paths → DENY (red line; no allow rule
+       can override it — it sits above the L2 rule layer)
+    3. **Tier 2**: user-config glob patterns from ``Settings.deny_paths`` → DENY
+    4. **L2 rule layer** (``Settings.permissions``, loop-runtime L2): deny > ask
+       > allow, with an allow/deny **asymmetry** — deny over-matches (wildcard =
+       any path; Bash = command-token-boundary substring), allow under-matches
+       (wildcard/relative are cwd-scoped; Bash prefix). Only explicit
+       absolute/tilde allow specifiers reach outside cwd.
+    5. **Headless gate** (``-p`` posture): a mutating tool with no matching allow
+       rule → DENY (fail-closed). Carve-outs: read-only tools and the
+       per-project memory dir. ASK is skipped here because --auto maps it to
+       ALLOW, which would escape the guarantee.
+    6. **Tier 3** (interactive only): write/exec outside cwd → ASK (Three-Axis G)
+    7. fallthrough → ALLOW
 
     Dependencies injected at construction (per Three-Axis):
 
     - ``registry``:to look up ``tool.is_read_only`` for Tier 3
-    - ``settings``:to read ``deny_paths`` for Tier 2
+    - ``settings``:to read ``deny_paths`` (Tier 2) + ``permissions`` (L2 rules)
+    - ``headless``: the ``-p`` posture — flips fallthrough/Tier-3 to fail-closed
 
     evaluate() signature stays minimal (matches the Protocol from
     ``checker.py``) — per-call data only;config / registry are state.
     """
 
-    def __init__(self, registry: ToolRegistry, settings: Settings) -> None:
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        settings: Settings,
+        *,
+        headless: bool = False,
+    ) -> None:
         self._registry = registry
         self._deny_paths = settings.deny_paths
+        # loop-runtime L2: declarative rule layer + headless posture.
+        self._permissions = settings.permissions
+        # ``headless`` = the L1 ``-p`` posture (plan T0 缝1). When True, a
+        # mutating tool that reaches fallthrough with no matching allow rule
+        # is DENIED (fail-closed) instead of the legacy ALLOW. Interactive
+        # runs (headless=False) keep the legacy in-cwd ALLOW → zero regression.
+        self._headless = headless
 
     def evaluate(
         self,
@@ -352,7 +383,35 @@ class TierBasedPermissionChecker:
                 )
                 return DecisionResult.deny(f"path {path!r} matches deny rule {t2!r}")
 
-        # 4. Tier 3 mode-based (needs tool.is_read_only).
+        # 4. Declarative rule layer (loop-runtime L2) — deny > ask > allow.
+        #    Runs for both path-bearing and command tools. Sits BELOW the
+        #    Tier 1 red line (step 2), so an allow rule can never override a
+        #    sensitive-path DENY; sits ABOVE Tier 3 (step 5), so an explicit
+        #    allow rule short-circuits the outside-cwd ASK — letting the
+        #    headless loop do exactly the work it was permitted to.
+        #    Function-level import avoids the rules<->tier_based import cycle
+        #    (rules.py reuses ``_matches_tier2`` / ``_extract_path_arg`` here).
+        from openharness.permissions.rules import match_rules
+
+        rule_result = match_rules(
+            tool_name,
+            args,
+            context.cwd,
+            allow=self._permissions.allow,
+            deny=self._permissions.deny,
+            ask=self._permissions.ask,
+        )
+        if rule_result is not None:
+            if rule_result.decision is Decision.DENY:
+                logger.warning(
+                    "permission_denied",
+                    tool=tool_name,
+                    tier="rule_deny",
+                    reason=rule_result.reason,
+                )
+            return rule_result
+
+        # 5. Tool lookup (needed for the is_read_only checks below).
         try:
             tool = self._registry.get(tool_name)
         except KeyError:
@@ -361,11 +420,38 @@ class TierBasedPermissionChecker:
             # AuthZ shouldn't second-guess that.
             return DecisionResult.allow()
 
+        # 6. Headless fail-closed gate (loop-runtime L2, ONE place — review
+        #    round 3 consolidates the former scattered DENY branches). Under the
+        #    ``-p`` posture, a mutating tool that reached here with no matching
+        #    allow rule is DENIED — in-cwd OR outside — because Tier 3's ASK
+        #    maps to ALLOW under --auto and would escape the guarantee. Two
+        #    carve-outs: read-only tools, and the framework's own per-project
+        #    memory dir (Phase-16 write path, review round 3 [B]).
+        if self._headless and not tool.is_read_only:
+            if path is not None and _inside_project_memory_dir(path, context.cwd):
+                return DecisionResult.allow()
+            logger.warning(
+                "permission_denied",
+                tool=tool_name,
+                tier="headless_failclosed",
+            )
+            # round 4: name the boundary when the target is outside cwd, so the
+            # agent can tell a path-scoping violation from a plain missing-rule
+            # case (and relocate the write into cwd rather than blindly retry).
+            if path is not None and not _inside_project_root(path, context.cwd):
+                return DecisionResult.deny(
+                    f"headless fail-closed: {path!r} is outside project root; add a "
+                    "permissions.allow rule naming this path to permit it"
+                )
+            return DecisionResult.deny(
+                "headless fail-closed: mutating tool requires an explicit permissions.allow rule"
+            )
+
+        # 7. Tier 3 mode-based — interactive only (headless handled at step 6).
+        #    Write/exec outside cwd → ASK (Three-Axis G): a plausible legitimate
+        #    intent; loop layer + PermissionMode decide the final outcome.
         t3 = _matches_tier3(tool.is_read_only, path, context.cwd)
         if t3 is not None:
-            # Tier 3 maps to ASK (Three-Axis G):writing outside cwd is a
-            # plausible legitimate intent;loop layer + PermissionMode
-            # decide final outcome.
             return DecisionResult.ask(t3)
 
         return DecisionResult.allow()

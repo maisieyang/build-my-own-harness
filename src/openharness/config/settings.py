@@ -33,7 +33,7 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from openharness.mcp import McpServerConfig
 from openharness.observability.logging import LogFormat, LogLevel
-from openharness.permissions import PermissionMode
+from openharness.permissions import PermissionMode, PermissionRules
 
 # ---------------------------------------------------------------------------
 # Nested sub-models — P10-T4.4e (D28.10)
@@ -404,6 +404,17 @@ class Settings(BaseSettings):
             "OPENHARNESS_DENY_PATHS='secrets/**,*.env'. Matches via "
             "openharness.permissions.tier_based._glob_match (fnmatch + "
             "`dir/**` recursive suffix). Empty tuple = no user rules."
+        ),
+    )
+    permissions: PermissionRules = Field(
+        default_factory=PermissionRules,
+        description=(
+            "loop-runtime L2: declarative permission rules aligned with Claude "
+            "Code (``permissions.allow/deny/ask``, precedence deny>ask>allow). "
+            "Nested env: ``OPENHARNESS_PERMISSIONS__ALLOW`` etc. Coexists with "
+            "``permission_mode`` (posture) + ``deny_paths`` (Tier 2 legacy); the "
+            "Tier 1 sensitive-path red line sits above every rule and cannot be "
+            "overridden by an allow rule. See :class:`PermissionRules`."
         ),
     )
 
