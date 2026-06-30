@@ -181,6 +181,30 @@ class PrintResult:
     num_turns: int
 
 
+def _print_result(
+    final: ApiMessageCompleteEvent | None,
+    *,
+    input_tokens: int,
+    output_tokens: int,
+    num_turns: int,
+) -> PrintResult:
+    """Assemble a :class:`PrintResult` from drained state. Single source for
+    the final-turn text extraction + construction, shared by the silent
+    (``collect_print_result``) and streaming (``render_stream_json``) drainers."""
+    text = (
+        "".join(b.text for b in final.message.content if isinstance(b, TextBlock))
+        if final is not None
+        else ""
+    )
+    return PrintResult(
+        text=text,
+        stop_reason=final.stop_reason if final is not None else None,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        num_turns=num_turns,
+    )
+
+
 async def collect_print_result(events: AsyncIterator[ApiStreamEvent]) -> PrintResult:
     """Drain ``events`` SILENTLY (still driving tool execution) and aggregate
     the headless json result.
@@ -200,17 +224,8 @@ async def collect_print_result(events: AsyncIterator[ApiStreamEvent]) -> PrintRe
             num_turns += 1
             input_tokens += event.usage.input_tokens
             output_tokens += event.usage.output_tokens
-    text = (
-        "".join(b.text for b in final.message.content if isinstance(b, TextBlock))
-        if final is not None
-        else ""
-    )
-    return PrintResult(
-        text=text,
-        stop_reason=final.stop_reason if final is not None else None,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        num_turns=num_turns,
+    return _print_result(
+        final, input_tokens=input_tokens, output_tokens=output_tokens, num_turns=num_turns
     )
 
 
@@ -247,6 +262,13 @@ async def render_stream_json(
     ``tool_started`` / ``tool_completed``; retry-after-retryable-error → ``retry``.
     ``ApiMessageCompleteEvent`` is accumulated (usage / turn count / final
     text) rather than emitted, and surfaces in the terminating ``result``.
+
+    The stream ALWAYS ends with a terminator: a ``result`` on success, or an
+    ``error`` object if the run raises mid-stream (the exception then re-raises
+    for the CLI exit-code mapping). Note: ``assistant_delta`` lines stream every
+    turn's text (including intermediate pre-tool-call text), so concatenated
+    deltas != ``result.result`` — which is only the FINAL turn's text (matches
+    json mode and Claude Code: deltas are the stream, result is the answer).
     """
     out = sys.stdout if stdout is None else stdout
 
@@ -258,50 +280,49 @@ async def render_stream_json(
     output_tokens = 0
     num_turns = 0
     final: ApiMessageCompleteEvent | None = None
-    async for event in events:
-        if isinstance(event, ApiTextDeltaEvent):
-            _emit({"type": "assistant_delta", "text": event.text})
-        elif isinstance(event, ToolExecutionStartedEvent):
-            _emit(
-                {
-                    "type": "tool_started",
-                    "tool": event.tool_name,
-                    "tool_use_id": event.tool_use_id,
-                    "input": event.tool_input,
-                }
-            )
-        elif isinstance(event, ToolExecutionCompletedEvent):
-            _emit(
-                {
-                    "type": "tool_completed",
-                    "tool": event.tool_name,
-                    "tool_use_id": event.tool_use_id,
-                    "is_error": event.is_error,
-                    "output": event.output,
-                }
-            )
-        elif isinstance(event, ApiRetryEvent):
-            # A retry is "retrying after a retryable error", NOT a failure —
-            # type it "retry" so consumers (e.g. L4) don't misread it as the
-            # run having errored. ``error`` carries what triggered the retry.
-            _emit({"type": "retry", "attempt": event.attempt, "error": event.error})
-        elif isinstance(event, ApiMessageCompleteEvent):
-            final = event
-            num_turns += 1
-            input_tokens += event.usage.input_tokens
-            output_tokens += event.usage.output_tokens
+    try:
+        async for event in events:
+            if isinstance(event, ApiTextDeltaEvent):
+                _emit({"type": "assistant_delta", "text": event.text})
+            elif isinstance(event, ToolExecutionStartedEvent):
+                _emit(
+                    {
+                        "type": "tool_started",
+                        "tool": event.tool_name,
+                        "tool_use_id": event.tool_use_id,
+                        "input": event.tool_input,
+                    }
+                )
+            elif isinstance(event, ToolExecutionCompletedEvent):
+                _emit(
+                    {
+                        "type": "tool_completed",
+                        "tool": event.tool_name,
+                        "tool_use_id": event.tool_use_id,
+                        "is_error": event.is_error,
+                        "output": event.output,
+                    }
+                )
+            elif isinstance(event, ApiRetryEvent):
+                # A retry is "retrying after a retryable error", NOT a failure —
+                # type it "retry" so consumers (e.g. L4) don't misread it as the
+                # run having errored. ``error`` carries what triggered the retry.
+                _emit({"type": "retry", "attempt": event.attempt, "error": event.error})
+            elif isinstance(event, ApiMessageCompleteEvent):
+                final = event
+                num_turns += 1
+                input_tokens += event.usage.input_tokens
+                output_tokens += event.usage.output_tokens
+    except Exception as exc:
+        # Guarantee a stream terminator: on a mid-stream raise (LoopLimitExceeded,
+        # API failure, ...) emit a terminal ``error`` line before the exception
+        # unwinds to the CLI exit-code mapping, so consumers always see a final
+        # ``result`` OR ``error``. ``error`` (terminal) is distinct from ``retry``.
+        _emit({"type": "error", "error": str(exc)})
+        raise
 
-    text = (
-        "".join(b.text for b in final.message.content if isinstance(b, TextBlock))
-        if final is not None
-        else ""
-    )
-    result = PrintResult(
-        text=text,
-        stop_reason=final.stop_reason if final is not None else None,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        num_turns=num_turns,
+    result = _print_result(
+        final, input_tokens=input_tokens, output_tokens=output_tokens, num_turns=num_turns
     )
     _emit(build_result_obj(result, session_id=session_id))
     return result.stop_reason
