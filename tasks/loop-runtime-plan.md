@@ -302,5 +302,49 @@ GREEN 交**两个真正并行**的 `claude -p "/goal ..."` 后台进程（各自
 
 全量测试 2358 passed，`mypy --strict` 123 文件全过，`ruff` 全过。
 
+### 9.5 L5 已实现（2026-07 update）——Track A 收尾
+
+**L5（规划器，`services/decompose.py` + `ask --decompose`）**：`decompose_goal()` 一次性
+`summarize()` 调用，把大 goal 拆成有序子目标数组，解析骨架照抄 L3' 语义闸的 fail-closed
+写法（剥围栏 → `json.loads` → 非数组/空数组/超过 8 项/含非字符串或空白项，任何一种都
+`ok=False`，绝不静默回退去跑原 goal）。`--decompose` 复用 `-p`/`--output-format json`/
+`--verify`/`--goal-condition` 已有校验形状；`_run_decomposed_loop` 顺序对每个子目标各调一次
+现成的 `_run_repair_loop`（fresh context、共用父命令同一个闸），fail-fast——第一个不
+succeeded 的子目标之后不再跑。结果 JSON 加法式扩展一个 `decompose` 字段
+（`sub_goals`/`feedback`/`results`），退出码 = 分解成功且所有子目标都 succeeded 才是 0。
+
+**执行方式**：延续既定流程——本 plan 经 native Plan Mode 批准后，RED 测试（T1 纯函数 →
+T2 flag 校验 → T3 编排本体，T2/T3 合并进同一个 `tests/cli/test_decompose.py`）由主 loop
+写完确认见红，GREEN 交单个 `claude -p "/goal ..."` 后台进程（这次不并行，压缩到 3480
+字符内一次交付 T1+T2+T3 全部三层）。
+
+**高强度 workflow code review 发现 6 个问题，全部修复**：
+- ①（最严重）`--decompose` 没有像 `--max-iter` 那样挡掉 `--resume`/`--resume-id`——
+  resume 的会话历史会静默混进每个子目标的每次 repair 尝试，破坏"fresh context"承诺；
+  加了同款校验。
+- ② 结果 JSON 顶层的 `usage`/`num_turns` 只反映**最后一个**子目标的开销，不是所有跑过的
+  子目标累加——多步骤 decompose 场景下会静默漏算大部分 token 花费；改成对
+  `sub_goal_runs` 里每个 `print_result` 求和（跟 `_run_repair_loop` 自己"跨 attempt 求和"
+  的既有约定看齐）。
+- ③ `_strip_markdown_fence`：开了围栏但没闭合（比如被 `max_tokens` 截断）时，旧实现无
+  条件切掉最后一行，把本该能解析的内容当成非法响应丢弃；改成只在最后一行确实是
+  ```` ``` ```` 时才切。
+- ④ decompose 失败时，`decompose_result.feedback`（具体失败原因：解析失败/空数组/超项数
+  等）从没进过输出 JSON，stderr 只提示"看 JSON 里的 decompose 字段"但字段里其实什么都
+  没有；加了 `feedback` 键。
+- ⑤ 子目标数组校验只查每项是不是 `str`，没查是否空字符串/纯空白——模型返回
+  `["", "干活"]` 会把空字符串当真实子目标喂给 `_run_repair_loop`，白烧一次 API 调用；
+  加了非空校验。
+- ⑥ `_strip_markdown_fence` 跟 `verification/semantic_gate.py` 里的同名函数逐字重复
+  （两边都有完整测试覆盖，不是 `eval/scorers.py` 那种"未测试代码不能碰"情形）——抽成
+  共享的 `services/structured_response.py`，③ 的修复只改一处，两个调用方都受益。
+
+全量测试 2386 passed（新增 28 个），`mypy --strict` 125 文件全过，`ruff` 全过。
+
+**Track A（L5/L6/L8）至此全部完成**。Track B（L4 sandbox 每轮重启容器、L7 worktree 物理
+隔离、L9 状态机+journal、L4 `--resume`/`--max-iter` 互斥深度融合）仍按 §9.3 的决定推迟，
+留待作为一次统筹设计处理，不在没有用户明确要求的情况下开工。
+
 — 2026-06 plan（capability 级 · 留档不删；§7 为 2026-06 参照系回填，§8 为 2026-07 L3′ 落地
-回填，§9 为 2026-07 剩余项问题链 + 并行策略回填，§9.4 为 L6+L8 落地回填）
+回填，§9 为 2026-07 剩余项问题链 + 并行策略回填，§9.4 为 L6+L8 落地回填，§9.5 为 L5 落地
+回填 · Track A 收尾）

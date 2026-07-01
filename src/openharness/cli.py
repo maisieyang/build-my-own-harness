@@ -145,6 +145,7 @@ from openharness.protocols import (
     ConversationMessage,
     TextBlock,
 )
+from openharness.services.decompose import DecomposeResult, decompose_goal
 from openharness.services.session_memory import get_session_memory_dir
 from openharness.skills.store import EmptySkillStore, FilesystemSkillStore, SkillStore
 from openharness.tools import LoadSkillTool, create_default_tool_registry
@@ -1106,6 +1107,52 @@ async def _run_repair_loop(
             return outcome, attempt, succeeded
 
 
+async def _run_decomposed_loop(
+    goal: str,
+    *,
+    verify: list[str],
+    verify_timeout: float,
+    goal_condition: str | None,
+    goal_condition_timeout: float,
+    max_iter: int,
+    **run_ask_kwargs: Any,
+) -> tuple[DecomposeResult, list[tuple[AskOutcome, int, bool]]]:
+    """loop-runtime L5: decompose ``goal`` into an ordered array of
+    sub-goals (single LLM call), then drive each sub-goal through its own
+    ``_run_repair_loop`` sequentially, sharing the parent's --verify/
+    --goal-condition gate and --max-iter cap.
+
+    Fail-fast: stops at the first sub-goal whose repair loop doesn't
+    succeed -- later sub-goals are never attempted. If decomposition
+    itself fails, no sub-goal is ever run against the undecomposed
+    goal -- that would execute something different from what the user
+    asked for while looking like decomposition succeeded.
+    """
+    settings = _load_settings()
+    model = run_ask_kwargs.get("model_override") or settings.model
+    api_client = _build_client(settings)
+
+    decompose_result = await decompose_goal(goal, api_client=api_client, model=model)
+    if not decompose_result.ok:
+        return decompose_result, []
+
+    sub_goal_runs: list[tuple[AskOutcome, int, bool]] = []
+    for sub_goal in decompose_result.sub_goals:
+        outcome, attempts, succeeded = await _run_repair_loop(
+            sub_goal,
+            max_iter=max_iter,
+            verify=verify,
+            verify_timeout=verify_timeout,
+            goal_condition=goal_condition,
+            goal_condition_timeout=goal_condition_timeout,
+            **run_ask_kwargs,
+        )
+        sub_goal_runs.append((outcome, attempts, succeeded))
+        if not succeeded:
+            break
+    return decompose_result, sub_goal_runs
+
+
 # --------------------------------------------------------------------------- #
 # P6+: oh chat REPL                                                           #
 # --------------------------------------------------------------------------- #
@@ -1849,6 +1896,18 @@ def ask(
             "commands, not an LLM round-trip."
         ),
     ),
+    decompose: bool = typer.Option(
+        False,
+        "--decompose",
+        help=(
+            "loop-runtime L5: decompose the goal into an ordered array of "
+            "sub-goals (single LLM call) and run each through its own "
+            "repair loop, sequentially, failing fast on the first sub-goal "
+            "that doesn't succeed. Requires -p/--print, --output-format "
+            "json, and either --verify or --goal-condition to gate each "
+            "sub-goal's repair loop."
+        ),
+    ),
     log_level: LogLevel | None = typer.Option(
         None,
         "--log-level",
@@ -2085,6 +2144,25 @@ def ask(
         )
         raise typer.Exit(code=2)
 
+    # loop-runtime L5: ``--decompose`` mirrors --verify/--max-iter's
+    # print-mode/json-output validation shape. Checked ahead of the
+    # --verify/--goal-condition blocks below so a run combining
+    # --decompose with a gate that's ALSO missing -p/json surfaces the
+    # --decompose-specific message first (the gate's own message doesn't
+    # mention --decompose at all).
+    if decompose and not print_mode:
+        typer.echo(
+            "--decompose only applies in headless print mode (-p/--print).",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if decompose and output_format != "json":
+        typer.echo(
+            "--decompose only supports --output-format json.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
     # loop-runtime L3: ``--verify`` needs a headless run (T2 scope: flag +
     # validation + threading only; execution lands in T3/T4).
     if verify and not print_mode:
@@ -2146,6 +2224,22 @@ def ask(
             err=True,
         )
         raise typer.Exit(code=2)
+
+    if decompose and not verify and not goal_condition:
+        typer.echo(
+            "--decompose requires --verify or --goal-condition (nothing to "
+            "gate each sub-goal's repair loop on).",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if decompose and (resume or resume_id is not None):
+        typer.echo(
+            "--decompose is incompatible with --resume/--resume-id -- resuming "
+            "would carry history into every sub-goal's repair attempts, "
+            "breaking the fresh-context guarantee.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
     permission_mode_override: PermissionMode | None = None
     if dry_run:
         permission_mode_override = PermissionMode.DRY_RUN
@@ -2188,8 +2282,24 @@ def ask(
     outcome: AskOutcome | None = None
     attempts = 1
     loop_succeeded = False
+    decompose_result: DecomposeResult | None = None
+    sub_goal_runs: list[tuple[AskOutcome, int, bool]] = []
     try:
-        if max_iter > 1:
+        if decompose:
+            decompose_result, sub_goal_runs = asyncio.run(
+                _run_decomposed_loop(
+                    prompt,
+                    verify=verify or [],
+                    verify_timeout=verify_timeout,
+                    goal_condition=goal_condition,
+                    goal_condition_timeout=goal_condition_timeout,
+                    max_iter=max_iter,
+                    **common_run_ask_kwargs,
+                )
+            )
+            if sub_goal_runs:
+                outcome, attempts, loop_succeeded = sub_goal_runs[-1]
+        elif max_iter > 1:
             outcome, attempts, loop_succeeded = asyncio.run(
                 _run_repair_loop(
                     prompt,
@@ -2274,6 +2384,73 @@ def ask(
         # P3+ ToolError / PermissionError / HookError once they raise.
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+
+    # loop-runtime L5: like L4 T4, decompose owns its own json emission (a
+    # ``decompose`` field listing the sub-goals + each one's repair-loop
+    # outcome) and exit code (goal-level success -- did decomposition
+    # succeed AND every sub-goal succeed -- rather than the single-run
+    # checks below).
+    if decompose:
+        import json
+
+        assert decompose_result is not None
+        if outcome is not None and outcome.print_result is not None:
+            # loop-runtime L5 review fix: sum usage/num_turns across EVERY
+            # sub-goal that ran (not just the last one) -- mirrors
+            # _run_repair_loop's own "sum across attempts" contract so
+            # tokens spent on earlier sub-goals aren't silently dropped.
+            total_input_tokens = sum(
+                run_outcome.print_result.input_tokens
+                for run_outcome, _, _ in sub_goal_runs
+                if run_outcome.print_result is not None
+            )
+            total_output_tokens = sum(
+                run_outcome.print_result.output_tokens
+                for run_outcome, _, _ in sub_goal_runs
+                if run_outcome.print_result is not None
+            )
+            total_num_turns = sum(
+                run_outcome.print_result.num_turns
+                for run_outcome, _, _ in sub_goal_runs
+                if run_outcome.print_result is not None
+            )
+            summed_print_result = replace(
+                outcome.print_result,
+                input_tokens=total_input_tokens,
+                output_tokens=total_output_tokens,
+                num_turns=total_num_turns,
+            )
+            result_obj = build_result_obj(
+                summed_print_result, session_id=new_run_id(), verification=outcome.verification
+            )
+        else:
+            result_obj = build_result_obj(
+                PrintResult(
+                    text="", stop_reason=None, input_tokens=0, output_tokens=0, num_turns=0
+                ),
+                session_id=new_run_id(),
+                verification=None,
+            )
+        succeeded_flags = [run_succeeded for _, _, run_succeeded in sub_goal_runs]
+        result_obj["decompose"] = {
+            "sub_goals": list(decompose_result.sub_goals),
+            "feedback": decompose_result.feedback,
+            "results": [
+                {"goal": sub_goal, "succeeded": run_succeeded, "attempts": run_attempts}
+                for sub_goal, (_, run_attempts, run_succeeded) in zip(
+                    decompose_result.sub_goals, sub_goal_runs, strict=False
+                )
+            ],
+        }
+        typer.echo(json.dumps(result_obj))
+        if not decompose_result.ok or not all(succeeded_flags):
+            typer.echo(
+                "decompose did not complete successfully -- see the "
+                "'decompose' field in the emitted json for per-sub-goal detail",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        return
 
     # loop-runtime L4 T4: the repair loop owns its own json emission (needs the
     # ``attempts`` count folded in) and exit code (goal-level success -- did

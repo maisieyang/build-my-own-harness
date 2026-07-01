@@ -114,6 +114,17 @@ class TestRunSemanticVerificationFailClosed:
         assert result.passed is True
         assert result.feedback == "fenced but valid"
 
+    async def test_unclosed_markdown_fence_still_parses(self) -> None:
+        """Review fix (shared with L5's decomposer): a truncated response
+        (opening fence, no closing fence) must not have its last content
+        line silently discarded."""
+        stub = _JudgeStubClient('```json\n{"score": 1, "reason": "truncated but valid"}')
+        result = await run_semantic_verification(
+            "cond", "transcript", api_client=stub, model="fake-model"
+        )
+        assert result.passed is True
+        assert result.feedback == "truncated but valid"
+
     async def test_malformed_json_fails_closed(self) -> None:
         stub = _JudgeStubClient("this is not json at all")
         result = await run_semantic_verification(

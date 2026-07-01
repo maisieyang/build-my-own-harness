@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from openharness.protocols import ConversationMessage, TextBlock
+from openharness.services.structured_response import strip_markdown_fence
 from openharness.services.summarize import summarize
 
 if TYPE_CHECKING:
@@ -75,15 +76,6 @@ class SemanticGateResult:
     feedback: str
 
 
-def _strip_markdown_fence(text: str) -> str:
-    if not text.startswith("```"):
-        return text
-    lines = text.splitlines()
-    if len(lines) >= 2:
-        return "\n".join(lines[1:-1]).strip()
-    return text
-
-
 async def run_semantic_verification(
     condition: str,
     transcript: str,
@@ -129,7 +121,7 @@ async def run_semantic_verification(
     if not raw.strip():
         return SemanticGateResult(passed=False, feedback="judge returned an empty response")
 
-    text = _strip_markdown_fence(raw.strip())
+    text = strip_markdown_fence(raw.strip())
 
     try:
         data = json.loads(text)
