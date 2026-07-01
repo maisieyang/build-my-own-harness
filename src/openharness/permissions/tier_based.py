@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import re
+import shlex
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -263,6 +265,74 @@ def _matches_bash_deny(command: str) -> str | None:
     return None
 
 
+# L8 — irreversible git actions. Unlike ``_BASH_DENY_PATTERNS`` (substring
+# match, documented as bypassable), this is real argv parsing: split on
+# shell metacharacters, walk past git's own global options to find the
+# actual subcommand, then check it. No allow rule / preset / posture can
+# override a match — see ``TierBasedPermissionChecker.evaluate`` step 1b.
+#
+# Honest limitation (matches rules.py's own documented Bash-layer honesty):
+# this is a practical tripwire for ORDINARY invocation styles, not a sandbox.
+# Wrapper commands (sudo/env/command), subshells ($()/backticks), and
+# `bash -c "..."` are NOT chased — an agent producing those would already be
+# doing something unusual for a plain commit, unlike e.g. `git -C dir commit`
+# which is common, well-intentioned usage that MUST still be caught.
+_IRREVERSIBLE_GIT_SUBCOMMANDS: tuple[str, ...] = ("commit", "push")
+
+# Git global options that consume a separate following token (e.g. `-C dir`,
+# not fused as `-C=dir`) — must skip both tokens to reach the subcommand.
+_GIT_GLOBAL_OPTS_WITH_SEPARATE_ARG: frozenset[str] = frozenset(
+    {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
+)
+
+
+def _find_git_subcommand(tokens: list[str]) -> tuple[str, list[str]] | None:
+    """Walk past git global options to find ``(subcommand, remaining_args)``.
+
+    Handles both fused (``--git-dir=/x``, single token) and separate-arg
+    (``-C /x``, two tokens) global option forms. Returns ``None`` if
+    ``tokens`` isn't a ``git ...`` invocation or has no subcommand.
+    """
+    if not tokens or tokens[0] != "git":
+        return None
+    i = 1
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok.startswith("-"):
+            i += 2 if tok in _GIT_GLOBAL_OPTS_WITH_SEPARATE_ARG else 1
+            continue
+        return tok, tokens[i + 1 :]
+    return None
+
+
+def _matches_irreversible_git_action(command: str) -> str | None:
+    """Return ``"git commit"`` / ``"git push"`` if ``command`` invokes one
+    of ``_IRREVERSIBLE_GIT_SUBCOMMANDS`` (skipping git global options like
+    ``-C``/``--no-pager``), or ``None`` otherwise.
+
+    Splits on shell metacharacters (``&&``, ``||``, ``;``, ``|``, newline)
+    first so chained/multi-line invocations are still caught, then
+    ``shlex.split`` each segment — a real argv-level check, not a
+    substring/prefix match. A segment that fails to ``shlex.split``
+    (unbalanced quotes) is skipped rather than raising. ``--dry-run``
+    doesn't mutate anything, so it's excluded (git commit's ``-n`` means
+    ``--no-verify``, NOT dry-run, so it is deliberately NOT treated as an
+    alias here).
+    """
+    for segment in re.split(r"&&|\|\||;|\||\n", command):
+        try:
+            tokens = shlex.split(segment)
+        except ValueError:
+            continue
+        found = _find_git_subcommand(tokens)
+        if found is None:
+            continue
+        subcommand, rest = found
+        if subcommand in _IRREVERSIBLE_GIT_SUBCOMMANDS and "--dry-run" not in rest:
+            return f"git {subcommand}"
+    return None
+
+
 def _extract_path_arg(args: BaseModel) -> str | None:
     """Best-effort extraction of a path-bearing field from validated args.
 
@@ -355,6 +425,20 @@ class TierBasedPermissionChecker:
                         command=sanitize_command(command),
                     )
                     return DecisionResult.deny(f"matches catastrophic Bash pattern {bash_pat!r}")
+
+                # 1b. L8 irreversible git action red line — unconditional,
+                # ahead of Tier 1/2/rules/headless/Tier 3. No allow rule,
+                # acceptEdits preset, or posture can override this.
+                git_match = _matches_irreversible_git_action(command)
+                if git_match is not None:
+                    logger.warning(
+                        "permission_denied",
+                        tool="Bash",
+                        tier="irreversible_git_redline",
+                        pattern=git_match,
+                        command=sanitize_command(command),
+                    )
+                    return DecisionResult.deny(f"irreversible git action: {git_match}")
 
         # Path-bearing tools enter the 3-Tier path filter.
         path = _extract_path_arg(args)

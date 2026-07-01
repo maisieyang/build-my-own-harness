@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from openharness.permissions.tier_based import (
     HARDCODED_SENSITIVE_PATHS,
     _glob_match,
+    _matches_irreversible_git_action,
     _matches_tier1,
     _matches_tier2,
 )
@@ -376,3 +377,75 @@ class TestInsideProjectMemoryDir:
         memory_dir = get_project_memory_dir(tmp_path)
         sneaky = memory_dir / ".." / ".." / "etc" / "passwd"
         assert _inside_project_memory_dir(sneaky, tmp_path) is False
+
+
+class TestMatchesIrreversibleGitAction:
+    """L8 — ``_matches_irreversible_git_action(command)`` is a hardcoded,
+    unconditional red line for Bash calls that would irreversibly change
+    shared git state (commit/push). Real argv parsing (shell-metachar split
+    + shlex + first-two-token check), NOT string prefix/substring matching
+    — the existing Bash matchers (``_matches_bash_deny``, ``rules.py``'s
+    ``_bash_matches``) are documented as bypassable and are NOT the model
+    for this check.
+    """
+
+    def test_plain_git_commit_matches(self) -> None:
+        assert _matches_irreversible_git_action("git commit -m x") is not None
+
+    def test_plain_git_push_matches(self) -> None:
+        assert _matches_irreversible_git_action("git push") is not None
+
+    def test_git_push_force_matches(self) -> None:
+        assert _matches_irreversible_git_action("git push --force origin main") is not None
+
+    def test_unrelated_git_command_does_not_match(self) -> None:
+        assert _matches_irreversible_git_action("git status") is None
+
+    def test_lookalike_prefix_does_not_match(self) -> None:
+        """A command whose first token merely STARTS WITH 'git' as a
+        substring, or whose second token isn't exactly 'commit'/'push',
+        must not false-positive under naive prefix/substring matching."""
+        assert _matches_irreversible_git_action("git commit-msg-hook-checker") is None
+        assert _matches_irreversible_git_action("git-wrapper commit") is None
+
+    def test_chained_after_shell_operator_still_matches(self) -> None:
+        """Real argv parsing (splitting on shell metacharacters first)
+        catches chained invocations that a naive command.startswith(...)
+        check would miss."""
+        assert _matches_irreversible_git_action("foo && git commit -m x") is not None
+        assert _matches_irreversible_git_action("echo hi; git push") is not None
+        assert _matches_irreversible_git_action("foo || git push origin main") is not None
+
+    def test_string_literal_containing_git_commit_does_not_match(self) -> None:
+        """Honest limitation, deliberately locked in: this is a practical
+        tripwire, not a sandbox. A command that merely echoes the string
+        'git commit' (never executes it) is not something argv-level
+        first-two-token parsing can or should try to detect — matching
+        rules.py's own documented honesty about Bash-layer limits."""
+        assert _matches_irreversible_git_action("echo 'git commit'") is None
+
+    def test_global_git_options_before_subcommand_still_match(self) -> None:
+        """Review finding: ordinary (non-adversarial) invocations with a
+        git global option before the subcommand must still be caught —
+        this is common usage, not evasion."""
+        assert _matches_irreversible_git_action('git -C /path/to/repo commit -m "fix"') is not None
+        assert _matches_irreversible_git_action("git --no-pager push") is not None
+        assert _matches_irreversible_git_action("git -c user.name=x commit -m y") is not None
+        assert _matches_irreversible_git_action("git --git-dir=/repo/.git commit -m x") is not None
+
+    def test_newline_separated_commands_still_match(self) -> None:
+        """Review finding: a literal newline is a real shell command
+        separator (e.g. heredocs, multi-line scripts), not just an
+        adversarial trick — must split on it like the other operators."""
+        assert _matches_irreversible_git_action("echo done\ngit commit -m x") is not None
+
+    def test_dry_run_is_not_denied(self) -> None:
+        """Review finding: --dry-run doesn't mutate anything, so denying it
+        identically to a real commit/push is an unnecessary false positive.
+        NOTE: only the long-form --dry-run is special-cased -- git commit's
+        `-n` means --no-verify (NOT dry-run), so it must NOT be treated as
+        a dry-run alias here."""
+        assert _matches_irreversible_git_action("git commit --dry-run -m x") is None
+        assert _matches_irreversible_git_action("git push --dry-run") is None
+        # -n on commit is --no-verify, not dry-run -- must still be denied.
+        assert _matches_irreversible_git_action("git commit -n -m x") is not None

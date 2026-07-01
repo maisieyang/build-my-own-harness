@@ -333,3 +333,54 @@ class TestT6RedlineUnoverridableE2E:
         )
         assert result.decision is Decision.DENY
         assert "sensitive system path" in (result.reason or "")
+
+
+class TestL8IrreversibleGitRedline:
+    """L8 — git commit/push through Bash is an unconditional red line, same
+    priority class as Tier1: no allow rule, no acceptEdits preset, no
+    headless/interactive posture difference can let it through."""
+
+    def test_explicit_bash_allow_rule_cannot_override(self, tmp_path: Path) -> None:
+        checker = _checker(
+            headless=True,
+            permissions=PermissionRules(allow=("Bash(git commit:*)", "Bash(git push:*)")),
+        )
+        result = checker.evaluate(
+            "Bash", _CmdInput(command="git commit -m x"), ToolExecutionContext(cwd=tmp_path)
+        )
+        assert result.decision is Decision.DENY
+        assert "irreversible" in (result.reason or "").lower()
+
+        result = checker.evaluate(
+            "Bash", _CmdInput(command="git push"), ToolExecutionContext(cwd=tmp_path)
+        )
+        assert result.decision is Decision.DENY
+
+    def test_accept_edits_preset_cannot_override(self, tmp_path: Path) -> None:
+        # accept_edits_preset() is Edit(*)/Write(*) only, but confirm even a
+        # hypothetical Bash(*) allow can't override this red line either.
+        checker = _checker(
+            headless=True,
+            permissions=PermissionRules(allow=(*accept_edits_preset(), "Bash(*)")),
+        )
+        result = checker.evaluate(
+            "Bash", _CmdInput(command="git commit -m x"), ToolExecutionContext(cwd=tmp_path)
+        )
+        assert result.decision is Decision.DENY
+
+    def test_interactive_posture_still_denies(self, tmp_path: Path) -> None:
+        # Unlike the headless-only fail-closed fallthrough (T5), this red
+        # line applies in BOTH interactive and headless postures -- it is
+        # not a posture-gated behavior, it's an unconditional floor.
+        checker = _checker(headless=False, permissions=PermissionRules(allow=("Bash(*)",)))
+        result = checker.evaluate(
+            "Bash", _CmdInput(command="git push origin main"), ToolExecutionContext(cwd=tmp_path)
+        )
+        assert result.decision is Decision.DENY
+
+    def test_unrelated_bash_command_unaffected(self, tmp_path: Path) -> None:
+        checker = _checker(headless=True, permissions=PermissionRules(allow=("Bash(*)",)))
+        result = checker.evaluate(
+            "Bash", _CmdInput(command="pytest -q"), ToolExecutionContext(cwd=tmp_path)
+        )
+        assert result.decision is Decision.ALLOW
