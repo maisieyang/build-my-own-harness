@@ -42,6 +42,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import difflib
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -77,6 +78,7 @@ from pydantic import ValidationError
 
 from openharness import __version__
 from openharness._stream_render import (
+    PrintResult,
     build_result_obj,
     collect_print_result,
     render_stream,
@@ -147,7 +149,8 @@ from openharness.skills.store import EmptySkillStore, FilesystemSkillStore, Skil
 from openharness.tools import LoadSkillTool, create_default_tool_registry
 from openharness.tools.web_fetch import WebFetch
 from openharness.tools.web_search import TavilySearchProvider, WebSearch
-from openharness.verification.gate import maybe_run_verification
+from openharness.verification.gate import VerificationResult, maybe_run_verification
+from openharness.verification.repair import build_repair_prompt
 
 # Default per-call output cap. Phase 1 originally shipped 1024 (no tools),
 # but with tool-use ship (Phase 2) and especially Agent / Write tool calls
@@ -422,6 +425,17 @@ def _load_memory_index_for_injection(memory_dir: Path) -> str | None:
     return "\n".join(lines)
 
 
+@dataclass(frozen=True)
+class AskOutcome:
+    """loop-runtime L4: unified return shape for _run_ask -- text/json/stream-json
+    branches all hand results back through this instead of a bare stop_reason.
+    verification/print_result are only populated by the json branch."""
+
+    stop_reason: str | None
+    print_result: PrintResult | None = None
+    verification: VerificationResult | None = None
+
+
 async def _run_ask(
     prompt: str,
     *,
@@ -453,7 +467,8 @@ async def _run_ask(
     print_mode: bool = False,
     verify: list[str] | None = None,
     verify_timeout: float = 600.0,
-) -> str | None:
+    suppress_echo: bool = False,
+) -> AskOutcome:
     """Build the QueryContext, run the loop, render the events.
 
     Returns the terminal ``stop_reason`` of the final assistant turn (or
@@ -950,23 +965,104 @@ async def _run_ask(
             # non-end_turn run prints the json AND exits non-zero.
             collected = await collect_print_result(events)
             verification = await maybe_run_verification(verify, cwd=env.cwd, timeout=verify_timeout)
-            typer.echo(
-                json.dumps(
-                    build_result_obj(collected, session_id=new_run_id(), verification=verification)
+            if not suppress_echo:
+                typer.echo(
+                    json.dumps(
+                        build_result_obj(
+                            collected, session_id=new_run_id(), verification=verification
+                        )
+                    )
                 )
+            return AskOutcome(
+                stop_reason=collected.stop_reason,
+                print_result=collected,
+                verification=verification,
             )
-            return collected.stop_reason
         if output_format == "stream-json":
             # T4: one JSON object per event, terminated by a result object.
-            return await render_stream_json(
+            stream_stop_reason = await render_stream_json(
                 events,
                 session_id=new_run_id(),
                 cwd=env.cwd,
                 verify=verify,
                 verify_timeout=verify_timeout,
             )
+            return AskOutcome(stop_reason=stream_stop_reason)
         final_event = await render_stream(events)
-        return final_event.stop_reason if final_event is not None else None
+        return AskOutcome(stop_reason=final_event.stop_reason if final_event is not None else None)
+
+
+async def _run_repair_loop(
+    goal: str,
+    *,
+    max_iter: int,
+    verify: list[str],
+    verify_timeout: float,
+    **run_ask_kwargs: Any,
+) -> tuple[AskOutcome, int, bool]:
+    """loop-runtime L4 T4: outer repair loop -- fresh-context re-invocation of
+    ``_run_ask`` per attempt, with the prior attempt's failed verification
+    threaded into the next prompt via :func:`build_repair_prompt`.
+
+    Stops on the first attempt that both completes cleanly (``end_turn``) and
+    passes verification, or when ``max_iter`` is reached -- whichever comes
+    first. Exceptions from ``_run_ask`` propagate uncaught; the caller (``ask``)
+    owns exception-to-exit-code translation.
+
+    Returns ``(outcome, attempts, succeeded)`` -- the caller must use the
+    returned ``succeeded`` rather than re-deriving it, so the success
+    definition lives in exactly one place. ``outcome.print_result`` carries
+    usage/num_turns SUMMED across every attempt (not just the last one), so
+    tokens spent on earlier failed attempts aren't silently dropped.
+    """
+    if not verify:
+        raise ValueError(
+            "_run_repair_loop requires non-empty verify commands "
+            "(nothing to gate the repair loop on)"
+        )
+
+    outcome: AskOutcome | None = None
+    attempt = 0
+    total_input_tokens = 0
+    total_output_tokens = 0
+    total_num_turns = 0
+    while True:
+        attempt += 1
+        if outcome is None:
+            prompt = goal
+        else:
+            assert outcome.verification is not None  # guaranteed: verify is non-empty
+            prompt = build_repair_prompt(goal, attempt, outcome.verification)
+        outcome = await _run_ask(
+            prompt,
+            verify=verify,
+            verify_timeout=verify_timeout,
+            output_format="json",
+            print_mode=True,
+            suppress_echo=True,
+            **run_ask_kwargs,
+        )
+        if outcome.print_result is not None:
+            total_input_tokens += outcome.print_result.input_tokens
+            total_output_tokens += outcome.print_result.output_tokens
+            total_num_turns += outcome.print_result.num_turns
+        succeeded = (
+            outcome.stop_reason == "end_turn"
+            and outcome.verification is not None
+            and outcome.verification.passed
+        )
+        if succeeded or attempt >= max_iter:
+            if outcome.print_result is not None:
+                outcome = replace(
+                    outcome,
+                    print_result=replace(
+                        outcome.print_result,
+                        input_tokens=total_input_tokens,
+                        output_tokens=total_output_tokens,
+                        num_turns=total_num_turns,
+                    ),
+                )
+            return outcome, attempt, succeeded
 
 
 # --------------------------------------------------------------------------- #
@@ -1681,6 +1777,16 @@ def ask(
         "--verify-timeout",
         help="Timeout in seconds for each --verify step (default 600).",
     ),
+    max_iter: int = typer.Option(
+        1,
+        "--max-iter",
+        min=1,
+        help=(
+            "loop-runtime L4: outer repair-loop iteration cap. Default 1 (no "
+            "looping — identical to L3 single-shot behavior). Requires --verify "
+            "and --output-format json."
+        ),
+    ),
     log_level: LogLevel | None = typer.Option(
         None,
         "--log-level",
@@ -1933,6 +2039,28 @@ def ask(
         )
         raise typer.Exit(code=2)
 
+    # loop-runtime L4 T3: ``--max-iter`` needs ``--verify`` (T3 scope: flag +
+    # validation only; the actual repair loop lands in T4).
+    if max_iter > 1 and not verify:
+        typer.echo(
+            "--max-iter requires --verify (nothing to gate the repair loop on).",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if max_iter > 1 and output_format != "json":
+        typer.echo(
+            "--max-iter only supports --output-format json (not text/stream-json).",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if max_iter > 1 and (resume or resume_id is not None):
+        typer.echo(
+            "--max-iter is incompatible with --resume/--resume-id -- resuming "
+            "would carry history into every repair attempt, breaking the "
+            "loop's fresh-context guarantee.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
     permission_mode_override: PermissionMode | None = None
     if dry_run:
         permission_mode_override = PermissionMode.DRY_RUN
@@ -1943,43 +2071,60 @@ def ask(
     # CLI;no positive ``--auto-truncate`` flag (it's the default).
     auto_truncate_override: bool | None = False if no_auto_truncate else None
 
-    final_stop_reason: str | None = None
+    common_run_ask_kwargs: dict[str, Any] = {
+        "model_override": model,
+        "max_tokens": max_tokens,
+        "permission_mode_override": permission_mode_override,
+        "log_level_override": log_level,
+        "log_format_override": log_format,
+        "tool_result_cap_override": tool_result_cap,
+        "auto_truncate_override": auto_truncate_override,
+        "no_skills": no_skills,
+        "no_commands": no_commands,
+        "sandbox_override": sandbox,
+        "sandbox_image_override": sandbox_image,
+        "sandbox_network_override": sandbox_network,
+        "sandbox_memory_override": sandbox_memory,
+        "sandbox_cpus_override": sandbox_cpus,
+        "sandbox_runtime_override": sandbox_runtime,
+        "enable_plugin_hooks_override": enable_plugin_hooks,
+        "enable_plugins_override": enable_plugins,
+        "enable_memory_override": enable_memory,
+        "enable_web_override": enable_web,
+        "compact_threshold_override": compact_threshold,
+        "no_auto_compact": no_auto_compact,
+        # P12-T5: --resume / --resume-id. --resume-id implies
+        # --resume so the user doesn't have to type both.
+        "resume": resume or resume_id is not None,
+        "resume_id": resume_id,
+        "llm_focus_state_override": llm_focus_state,
+    }
+
+    outcome: AskOutcome | None = None
+    attempts = 1
+    loop_succeeded = False
     try:
-        final_stop_reason = asyncio.run(
-            _run_ask(
-                prompt,
-                model_override=model,
-                max_tokens=max_tokens,
-                permission_mode_override=permission_mode_override,
-                log_level_override=log_level,
-                log_format_override=log_format,
-                tool_result_cap_override=tool_result_cap,
-                auto_truncate_override=auto_truncate_override,
-                no_skills=no_skills,
-                no_commands=no_commands,
-                sandbox_override=sandbox,
-                sandbox_image_override=sandbox_image,
-                sandbox_network_override=sandbox_network,
-                sandbox_memory_override=sandbox_memory,
-                sandbox_cpus_override=sandbox_cpus,
-                sandbox_runtime_override=sandbox_runtime,
-                enable_plugin_hooks_override=enable_plugin_hooks,
-                enable_plugins_override=enable_plugins,
-                enable_memory_override=enable_memory,
-                enable_web_override=enable_web,
-                compact_threshold_override=compact_threshold,
-                no_auto_compact=no_auto_compact,
-                # P12-T5: --resume / --resume-id. --resume-id implies
-                # --resume so the user doesn't have to type both.
-                resume=resume or resume_id is not None,
-                resume_id=resume_id,
-                llm_focus_state_override=llm_focus_state,
-                output_format=output_format,
-                print_mode=print_mode,
-                verify=verify,
-                verify_timeout=verify_timeout,
+        if max_iter > 1:
+            outcome, attempts, loop_succeeded = asyncio.run(
+                _run_repair_loop(
+                    prompt,
+                    max_iter=max_iter,
+                    verify=verify or [],
+                    verify_timeout=verify_timeout,
+                    **common_run_ask_kwargs,
+                )
             )
-        )
+        else:
+            outcome = asyncio.run(
+                _run_ask(
+                    prompt,
+                    output_format=output_format,
+                    print_mode=print_mode,
+                    verify=verify,
+                    verify_timeout=verify_timeout,
+                    **common_run_ask_kwargs,
+                )
+            )
     except ValidationError as exc:
         # Configuration error (Settings missing OPENHARNESS_API_KEY etc.):
         # name the missing fields without dumping a stack trace.
@@ -2041,12 +2186,35 @@ def ask(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
+    # loop-runtime L4 T4: the repair loop owns its own json emission (needs the
+    # ``attempts`` count folded in) and exit code (goal-level success -- did
+    # any attempt pass verification within the cap -- rather than L1 T2's
+    # single-run stop_reason check below).
+    if max_iter > 1:
+        import json
+
+        assert outcome is not None
+        assert outcome.print_result is not None
+        result_obj = build_result_obj(
+            outcome.print_result, session_id=new_run_id(), verification=outcome.verification
+        )
+        result_obj["attempts"] = attempts
+        typer.echo(json.dumps(result_obj))
+        if not loop_succeeded:
+            typer.echo(
+                f"repair loop did not pass verification within --max-iter={max_iter} attempts",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        return
+
     # loop-runtime L1 T2: run-level two-tier exit code for print mode. A clean
     # ``end_turn`` already exits 0 (no exception). A run that stopped without
     # completing -- e.g. ``max_tokens`` (output cap) -- raises no exception but
     # is not a clean finish; surface it as non-zero so outer loops can react.
     # Goal-level success (did the goal get met?) is deliberately NOT judged here
     # -- that is the L3 verification gate's job (the atom stays gate-out).
+    final_stop_reason = outcome.stop_reason if outcome is not None else None
     if print_mode and final_stop_reason != "end_turn":
         typer.echo(
             f"run did not complete cleanly (stop_reason={final_stop_reason or 'none'})",
