@@ -3720,6 +3720,140 @@ def eval_memory_decision(  # pragma: no cover — experimental eval surface (exc
     asyncio.run(_orchestrate())
 
 
+# ----- oh autopilot -----------------------------------------------------------
+
+autopilot_app = typer.Typer(
+    name="autopilot", help="L6 intake queue — enqueue and run repair-loop goals."
+)
+app.add_typer(autopilot_app, name="autopilot")
+
+
+@autopilot_app.command("enqueue", help="Add a goal + verify gate to the intake queue.")
+def autopilot_enqueue(
+    goal: str = typer.Option(..., "--goal", help="Goal text for the repair loop."),
+    verify: list[str] | None = typer.Option(
+        None,
+        "--verify",
+        help="Verify command (argv-form string). Repeatable — each occurrence appends a step.",
+    ),
+    max_iter: int = typer.Option(3, "--max-iter", min=1, help="Max repair-loop iterations."),
+    source_ref: str = typer.Option(
+        ..., "--source-ref", help="Dedup key — re-enqueuing the same ref returns the existing card."
+    ),
+    label: list[str] | None = typer.Option(
+        None, "--label", help="Priority label (repeatable, e.g. urgent, bug)."
+    ),
+) -> None:
+    from datetime import datetime, timezone
+
+    from openharness.services.autopilot import enqueue_card
+
+    if not verify:
+        typer.echo(
+            "--verify is required (at least one verification command) -- "
+            "autopilot has no --goal-condition option yet, so a card with "
+            "no gate would fail at run-next time instead of enqueue time.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    settings = _load_settings()
+    card = enqueue_card(
+        settings.autopilot.queue_path,
+        goal=goal,
+        verify=verify,
+        max_iter=max_iter,
+        source_ref=source_ref,
+        now=datetime.now(timezone.utc),
+        labels=tuple(label or ()),
+    )
+    typer.echo(f"Enqueued card {card.id} ({card.status}): {card.goal}")
+
+
+@autopilot_app.command("list", help="List cards in the intake queue.")
+def autopilot_list() -> None:
+    from openharness.services.autopilot import load_queue
+
+    settings = _load_settings()
+    cards = load_queue(settings.autopilot.queue_path)
+    if not cards:
+        typer.echo("(queue is empty)")
+        return
+    for card in cards:
+        typer.echo(f"{card.id}  {card.status:10s} {card.goal}")
+
+
+@autopilot_app.command(
+    "run-next", help="Pop the highest-priority queued card and run the repair loop."
+)
+def autopilot_run_next() -> None:
+    from datetime import datetime, timezone
+
+    from openharness.services.autopilot import Card, pick_next_card, with_queue_lock
+
+    settings = _load_settings()
+    queue_path = settings.autopilot.queue_path
+    now = datetime.now(timezone.utc)
+
+    picked: Card | None = None
+
+    def _pick_and_mark_running(cards: list[Card]) -> list[Card]:
+        nonlocal picked
+        picked = pick_next_card(cards, now=now)
+        if picked is None:
+            return cards
+        return [replace(c, status="running") if c.id == picked.id else c for c in cards]
+
+    # Locked pick+mark: two concurrent `run-next` invocations must not pick
+    # the same card (the lock covers pick + status transition as one unit).
+    with_queue_lock(queue_path, _pick_and_mark_running)
+
+    if picked is None:
+        typer.echo("Queue is empty — nothing to run.")
+        raise typer.Exit(code=0)
+
+    card = picked
+
+    def _mark(status: str) -> None:
+        with_queue_lock(
+            queue_path,
+            lambda cards: [replace(c, status=status) if c.id == card.id else c for c in cards],
+        )
+
+    try:
+        _outcome, _attempts, succeeded = asyncio.run(
+            _run_repair_loop(
+                card.goal,
+                max_iter=card.max_iter,
+                verify=card.verify,
+                verify_timeout=600.0,
+                model_override=None,
+                max_tokens=8192,
+                permission_mode_override=None,
+                log_level_override=None,
+                log_format_override=None,
+                tool_result_cap_override=None,
+                auto_truncate_override=None,
+            )
+        )
+    except Exception as exc:
+        # _run_repair_loop's own docstring: exceptions from _run_ask
+        # propagate uncaught. Without this, the card would be stranded at
+        # status="running" forever -- pick_next_card only selects "queued"
+        # cards, so it could never be retried without hand-editing the
+        # queue file.
+        _mark("failed")
+        typer.echo(f"Card {card.id} failed with an error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    _mark("completed" if succeeded else "failed")
+
+    if not succeeded:
+        typer.echo(f"Card {card.id} failed after {_attempts} attempt(s).", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"Card {card.id} completed after {_attempts} attempt(s).")
+
+
 # --------------------------------------------------------------------------- #
 # Entry point                                                                 #
 # --------------------------------------------------------------------------- #

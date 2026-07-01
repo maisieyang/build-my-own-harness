@@ -152,4 +152,155 @@ L2←`permissions/checker`、L3←`_run_verification_steps`、L4←`run_card`+`_
 真正的 `/goal`（语义 condition + LLM 裁判）已建成——见 §2 表格新增的 L3′ 行，实现记录、
 锁定立场、任务分解、冒烟验证全在独立文档：[`loop-runtime-L3-goal-plan.md`](./loop-runtime-L3-goal-plan.md)（跟 L1/L2 各自有独立 `-plan.md` 是同一惯例）。
 
-— 2026-06 plan（capability 级 · 留档不删；§7 为 2026-06 参照系回填，§8 为 2026-07 L3′ 落地回填）
+---
+
+## 9. L4-L9 剩余项：为什么要做 + 依赖/耦合分析（2026-07 update）
+
+L1-L4（含 L3′）已全部落地。§7 回填的 L6′/L7/L8/L9，加上 L4 自己留的两条已知限制，是
+epic 剩下的部分。每一项"为什么要做"用同一条链子讲：**朴素方案（现状）→ 暴露的问题 →
+下一修复**。这条链子本身是跟用户讨论沉淀出来的，比单纯罗列"缺什么"更能回答"不做行不行"。
+
+### 9.1 每一项的问题链（为什么要做）
+
+**L5 规划器自拆**
+- 朴素方案：L4 outer loop 只会反复跑**同一个** goal，goal 从头到尾不变、不拆分，规划这
+  一步（大目标怎么拆成几步）完全靠人自己想清楚再喂给 `oh -p`。
+- 暴露问题：① goal 太大时单轮做不完（受 `max_turns` 限制，撞上限即"没成功"，但 L4 的
+  重喂逻辑不会把目标拆小，agent 每轮还是面对同一个庞然大物，收敛很慢甚至原地打转）；
+  ② 验证闸只能一次性判断终态，没法表达"先验证子任务 A，再做子任务 B"这种里程碑式推进；
+  ③ 人还在充当"规划者"——三把椅子里"验证"和"执行循环"腾空了，"规划"没有。
+- 下一修复：让模型自己把大 goal 拆解成子目标序列（复用 `SpawnAgent` 递归委派原语，对应
+  Claude Code 的 `/batch`），每个子目标可能各自走一次 L4 的小循环。
+
+**L6 触发器（intake 评分队列 + cron 守护）**
+- 朴素方案：人自己在终端敲 `oh -p "goal" ...`，goal 是人脑现想的一句话，"现在要跑这个"
+  完全靠人手动决定、手动触发。
+- 暴露问题：① 没人在，就不会有新循环被触发——`oh` 不会自己醒来检查"现在有没有该做的
+  事"，真无人值守连"触发"这件事本身也得自动化；② goal 从哪来是个黑箱，没有稳定、结构化
+  的来源（issue/PR/idea 散落各处，人得自己翻）；③ 候选多了要排优先级，不然重要的会被拖到
+  最后。
+- 下一修复：intake 评分队列（异构来源统一入队，启发式规则打分——源头基础分 + 标签 +
+  新鲜度衰减，**不靠模型判断**，零 token、确定性、可解释）+ cron 守护（定期扫队列，把
+  排名最高的候选自动喂给 L4）。
+
+**L7 worktree 物理隔离**
+- 朴素方案：L4 每轮 attempt 直接调 `_run_ask`，`cwd` 就是用户敲命令时所在的真实工程目录，
+  agent 在这个目录里原地改文件。
+- 暴露问题：① 半成品会叠加——attempt 1 没过验证，attempt 2 是在"已经改乱的工作树"上继续
+  改，不是从干净状态重新开始；② 没有"作废重来"机制——改动原地叠加，没法简单回到干净状态；
+  ③ 爆炸半径没兜底——无人值守场景下撞上限，工作区已经被改脏，得手动清理；④ 没法并行——
+  多个 attempt/多个 goal 同时跑会互相踩踏同一批文件。
+- 下一修复：每次（或每个 session）新开一个 git worktree（共享 `.git` 对象库、独立工作
+  目录/分支），每轮/每个 session 都从干净基线开始；失败了直接删 worktree，真实目录完全
+  没被碰过；天然支持并行；只有验证通过的改动才 merge 回真实分支。
+- **补一句区分**：这跟 `--sandbox`（execution 层的 Docker/gVisor 隔离，L2 已有）是两个不同
+  维度——`--sandbox` 隔离的是"命令跑在什么容器里"，容器里挂载的还是同一份 cwd 文件系统；
+  worktree 隔离的是"改动落在哪个 git 工作树"。L4 现在两层都没绑定，即使开 `--sandbox`，
+  agent 改的还是同一份实际仓库文件。
+
+**L8 人机交接边界**
+- 朴素方案：改动完停在工作区里，不会自动 commit；commit 这一步靠执行者（目前是 Claude
+  Code 本身）自觉遵守"人审 diff → 问要不要 commit → 说了才 commit"，**不是代码层面的硬
+  约束**。
+- 暴露问题：① 全靠执行者自觉——换一个不遵守这条约定的执行者（比如 L6 触发的全自动 loop，
+  没有人过一遍 diff 才 commit 这一步），系统可能会一路 commit 下去，没人真正看过改了什么；
+  ② 没有一份"不管谁下指令都碰不了"的不可逆动作清单（force push / 自动 release 等），目前
+  只是文档层面的软约束，不是像 L2 Tier1 红线那样撬不动的硬约束。
+- 下一修复：upstream 的做法是 PR-not-merge（loop 跑完验证过 → commit+push+开 PR → 按
+  label 决定自动合还是等人 review）——但**这个仓库没有 PR 工作流**（直接在 main 上迭代，
+  没有 fork/开分支给 PR 审），"开 PR 当交接点"这个具体机制没有对应物可挂。要落地得换一个
+  不依赖 PR 的载体：把"commit/push 这类动作永远走一个显式确认门"做成代码层面的硬约束
+  （类似 L2 Tier1 那种红线），而不是像现在这样靠执行者自觉遵守。
+
+**L9 状态机 + journal**
+- 朴素方案：整个 repair loop 是一次性、同步的一次函数调用，全程状态只活在内存里的局部
+  变量，跑完了只在最后 echo 一个 json，中途没有任何东西落盘。
+- 暴露问题：① 进程一断，全部丢失——机器重启/进程被 kill/手滑 Ctrl-C，"跑了几轮、上一轮
+  发生了什么"全部消失，没法"从第 N 轮继续"，只能从头重来；② 黑盒，没法中途观测——没地方
+  查"现在跑到哪了"，这跟"无人值守"场景是矛盾的；③ 无法防重复触发——L6 的 cron 真按点
+  触发时，同一个 goal 被触发两次，没有机制识别"已经在跑了，别重复启动"。
+- 下一修复：显式状态机（`queued → running → verifying → repairing → completed/failed`），
+  每次状态变化落盘成 append-only journal，每轮验证报告也存成可读文件。核心原则：**只要是
+  无人盯着跑的东西，状态就必须外置到进程之外**。
+
+**L4 已知限制①：`--sandbox` 场景每轮重启容器**
+- 这是设计 L4 时用 AskUserQuestion 问过、选了"每次迭代重新调用 `_run_ask`"（而非"整个
+  session 只装一次 sandbox/MCP pool"的深度重构）之后的必然代价：每轮都重新拉起一次容器
+  （image inspect/pull + create + start），N 轮下来容器启停开销可能占大头。接受原因：
+  深度重构要把 `_run_ask` 约 230 行装配逻辑拆成可复用 helper，回归面大；效率不是 epic
+  锁定的不变量（fresh context/fail-closed/迭代上限硬栏才是）。
+
+**L4 已知限制②：`--resume`/`--max-iter` 互斥**
+- code review 揪出：同时传两者会导致每轮偷偷把上一轮刚写的 snapshot 加载回来，破坏
+  "fresh context"这条核心不变量。当时选择直接在校验层禁止组合（报错退出 2），而不是设计
+  更精细的"resume 只作用于第一轮"融合语义——这个组合场景本身没有验证过真有需求，属于
+  YAGNI，宁可禁止组合报清晰错误，也不要悄悄跑出违反设计初衷的行为。
+
+### 9.2 依赖/耦合分析：哪些能并行，哪些不能
+
+**Track A——相互独立，可以并行**（新文件/新模块，不碰 `_run_ask`/`_run_repair_loop` 内部）：
+
+| 模块 | 落点 | 为什么独立 |
+|---|---|---|
+| L5 规划器 | 新文件（自拆逻辑）+ 薄 CLI 接线 | 只是"调用现成的 L4 N 次，每次喂不同子目标"，不需要改 `_run_repair_loop` 内部 |
+| L6 触发器 | 全新子系统（intake 队列 + cron），新 CLI 子命令 | 最终只是"程序化地调 `oh ask -p ...`"，不碰 `ask` 命令内部 |
+| L8 人机交接边界 | `permissions/` 层加一条不可覆盖的红线 | 落在权限模块，不是 loop 控制流 |
+
+**Track B——同一块肌肉，必须一次统筹地做，不能拆给独立并行任务**：
+
+| 模块 | 为什么耦合 |
+|---|---|
+| L4 限制①（sandbox 重启） | 要解决就得把 `_run_ask` 的装配逻辑拆成"整个 session 只建一次"——最底层的重构 |
+| L7 worktree 隔离 | 本质是同一个重构的另一面：不止"复用 sandbox"，还要"复用/隔离 worktree"，落点是同一个装配函数 |
+| L9 状态机 + journal | 要在 `_run_repair_loop` 每一轮的状态转换点插入落盘调用——直接改同一个循环体 |
+| L4 限制②（resume/max-iter） | 范围更小，但也是改 `_run_repair_loop` 的 prompt 构造逻辑，同一片代码 |
+
+四个如果各起一个独立 `/goal` 并行跑，会同时改同一段代码——不只是"合并冲突"，是四套互不
+知情的设计会互相打架（L7 想包一层 worktree、L9 想在同一循环里插状态钩子，两边对"循环体
+该重构成什么样"各有主张）。这一组该合成一次统筹设计（先做"整个 session 只装配一次执行
+环境"的底层重构，L7/L9/限制②都长在这个新底座上），不是四个并行任务。
+
+### 9.3 执行顺序决定（2026-07-01）
+
+- **Track A 先做，且先从 L6 + L8 起**（L5 看这两个跑完的结果再决定要不要现在做）。
+- **Track B 等 Track A 落地后再回头做**，作为一次统筹设计，不拆分并行。
+
+### 9.4 L6 + L8 已实现（2026-07 update）——真正验证了并行 `/goal` 可行
+
+**L6（intake 队列，`services/autopilot.py` + `oh autopilot enqueue/list/run-next`）**：
+Card model + 确定性打分（source_kind 基础分 + label 加分 - 按小时线性衰减）+ 原子整文件
+重写（tempfile+os.replace）。MVP 只做 manual 来源，不建真 cron 守护/`gh` 集成——配合系统
+crontab 调 `run-next` 即可。
+
+**L8（不可逆 git 动作红线，`permissions/tier_based.py`）**：Bash 工具调用如果是 `git
+commit`/`git push`（含 `-C`/`--no-pager` 等 global option 变体、shell 元字符切分后的链式
+调用），无条件 DENY——不受 allow 规则/acceptEdits/headless posture 影响，跟 Tier1 路径红线
+同一优先级。`--dry-run` 除外（不改变仓库状态，不算"不可逆"）。
+
+**执行方式**：两个模块的设计放进同一份 native Plan Mode plan，RED 测试由主 loop 顺序写完，
+GREEN 交**两个真正并行**的 `claude -p "/goal ..."` 后台进程（各自独立 prompt，同时起、
+独立跑）——这是本 epic 第一次实际验证"并行 /goal"这件事本身可行：两个模块不碰同一文件，
+各自的 `/goal` 进程互不干扰，都在几分钟内独立跑绿，最后合并审查零冲突。
+
+**高强度 workflow code review 分别对两个模块起了一轮**（各自独立审），共发现 7 个问题，
+全部修复：
+- L8：① `tokens[0]/tokens[1]` 硬编码位置的匹配漏掉了 `git -C dir commit`/`git --no-pager
+  push`/`git -c k=v commit` 这类带 global option 的**普通**调用（不是对抗性绕过，是常见
+  写法）——改成扫过 git global option 找到真正 subcommand 的写法，同时把 shell 元字符切分
+  加上换行符（多行命令场景）。② 反过来又发现 `git commit --dry-run` 被误伤（dry-run 不
+  改状态，不该拦）——加了显式排除（注意 `-n` 对 commit 是 `--no-verify` 不是 dry-run，
+  没有被误当成别名）。
+- L6：③ `run-next` 没有 catch `_run_repair_loop` 可能抛出的异常，一旦抛出 card 会卡在
+  `running` 状态永远出不来；④ `enqueue` 允许空 `--verify`（autopilot 还没有
+  `--goal-condition` 选项），保证了③会在普通用法下必然触发——两个合起来是"正常使用就会
+  卡死"级别的 bug，不是边角情况；⑤ `enqueue_card` 的 source_ref 去重不看 card 状态，重跑
+  失败任务时会一直返回那张旧的 failed 卡，永远排不上新的一次尝试；⑥ 队列文件的
+  读-改-写没有锁，并发 `enqueue`/`run-next`（比如 cron 触发的和手动的撞一起）会用
+  last-write-wins 静默丢卡——加了 `fcntl` 排他锁包住 load→mutate→save 整个周期；
+  ⑦ `load_queue` 解析 queue.json 没有任何异常处理，手改坏了文件会让所有 autopilot 命令
+  崩出裸 traceback——改成清晰的 `ValueError` 消息。
+
+全量测试 2358 passed，`mypy --strict` 123 文件全过，`ruff` 全过。
+
+— 2026-06 plan（capability 级 · 留档不删；§7 为 2026-06 参照系回填，§8 为 2026-07 L3′ 落地
+回填，§9 为 2026-07 剩余项问题链 + 并行策略回填，§9.4 为 L6+L8 落地回填）
