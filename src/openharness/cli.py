@@ -147,6 +147,7 @@ from openharness.skills.store import EmptySkillStore, FilesystemSkillStore, Skil
 from openharness.tools import LoadSkillTool, create_default_tool_registry
 from openharness.tools.web_fetch import WebFetch
 from openharness.tools.web_search import TavilySearchProvider, WebSearch
+from openharness.verification.gate import maybe_run_verification
 
 # Default per-call output cap. Phase 1 originally shipped 1024 (no tools),
 # but with tool-use ship (Phase 2) and especially Agent / Write tool calls
@@ -450,6 +451,8 @@ async def _run_ask(
     llm_focus_state_override: bool | None = None,
     output_format: OutputFormat = "text",
     print_mode: bool = False,
+    verify: list[str] | None = None,
+    verify_timeout: float = 600.0,
 ) -> str | None:
     """Build the QueryContext, run the loop, render the events.
 
@@ -946,11 +949,22 @@ async def _run_ask(
             # Run-level exit code still maps from stop_reason (T2), so a
             # non-end_turn run prints the json AND exits non-zero.
             collected = await collect_print_result(events)
-            typer.echo(json.dumps(build_result_obj(collected, session_id=new_run_id())))
+            verification = await maybe_run_verification(verify, cwd=env.cwd, timeout=verify_timeout)
+            typer.echo(
+                json.dumps(
+                    build_result_obj(collected, session_id=new_run_id(), verification=verification)
+                )
+            )
             return collected.stop_reason
         if output_format == "stream-json":
             # T4: one JSON object per event, terminated by a result object.
-            return await render_stream_json(events, session_id=new_run_id())
+            return await render_stream_json(
+                events,
+                session_id=new_run_id(),
+                cwd=env.cwd,
+                verify=verify,
+                verify_timeout=verify_timeout,
+            )
         final_event = await render_stream(events)
         return final_event.stop_reason if final_event is not None else None
 
@@ -1651,6 +1665,22 @@ def ask(
             "are machine-readable (land in L1 T3 / T4)."
         ),
     ),
+    verify: list[str] | None = typer.Option(
+        None,
+        "--verify",
+        help=(
+            "Headless print-mode-only verification command (argv-form "
+            "string). Repeatable — each occurrence appends a step, run in "
+            "order. Requires -p/--print and --output-format json or "
+            "stream-json (loop-runtime L3; T2 parses + validates only, "
+            "execution lands in T3/T4)."
+        ),
+    ),
+    verify_timeout: float = typer.Option(
+        600.0,
+        "--verify-timeout",
+        help="Timeout in seconds for each --verify step (default 600).",
+    ),
     log_level: LogLevel | None = typer.Option(
         None,
         "--log-level",
@@ -1887,6 +1917,22 @@ def ask(
         )
         raise typer.Exit(code=2)
 
+    # loop-runtime L3: ``--verify`` needs a headless run (T2 scope: flag +
+    # validation + threading only; execution lands in T3/T4).
+    if verify and not print_mode:
+        typer.echo(
+            "--verify only applies in headless print mode (-p/--print).",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if verify and output_format == "text":
+        typer.echo(
+            "--verify requires --output-format json or stream-json "
+            "(nowhere to surface the result in text mode).",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
     permission_mode_override: PermissionMode | None = None
     if dry_run:
         permission_mode_override = PermissionMode.DRY_RUN
@@ -1930,6 +1976,8 @@ def ask(
                 llm_focus_state_override=llm_focus_state,
                 output_format=output_format,
                 print_mode=print_mode,
+                verify=verify,
+                verify_timeout=verify_timeout,
             )
         )
     except ValidationError as exc:

@@ -26,10 +26,12 @@ without modification.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rich.console import Console
@@ -45,14 +47,16 @@ from openharness.protocols.stream_events import (
     ToolExecutionCompletedEvent,
     ToolExecutionStartedEvent,
 )
+from openharness.verification.gate import maybe_run_verification
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Sequence
     from typing import TextIO
 
     from rich.console import ConsoleOptions, RenderResult
 
     from openharness.protocols.stream_events import ApiStreamEvent
+    from openharness.verification.gate import VerificationResult
 
 
 # Per D12.6: cap tool output rendered to terminal so a 12k-char Bash dump
@@ -229,7 +233,12 @@ async def collect_print_result(events: AsyncIterator[ApiStreamEvent]) -> PrintRe
     )
 
 
-def build_result_obj(result: PrintResult, *, session_id: str) -> dict[str, object]:
+def build_result_obj(
+    result: PrintResult,
+    *,
+    session_id: str,
+    verification: VerificationResult | None = None,
+) -> dict[str, object]:
     """Single source of truth for the headless json ``result`` object shape
     (loop-runtime L1 T3 + T4). ``cost_usd`` stays null until a pricing layer
     lands (T0: v1 has no cost computation)."""
@@ -245,6 +254,15 @@ def build_result_obj(result: PrintResult, *, session_id: str) -> dict[str, objec
         "cost_usd": None,
         "num_turns": result.num_turns,
         "session_id": session_id,
+        "verification": (
+            None
+            if verification is None
+            else {
+                "passed": verification.passed,
+                "steps": [dataclasses.asdict(s) for s in verification.steps],
+                "feedback": verification.feedback,
+            }
+        ),
     }
 
 
@@ -253,6 +271,9 @@ async def render_stream_json(
     *,
     session_id: str,
     stdout: TextIO | None = None,
+    verify: Sequence[str] | None = None,
+    verify_timeout: float = 600.0,
+    cwd: Path | None = None,
 ) -> str | None:
     """Stream each engine event as ONE newline-delimited JSON object, then a
     final ``result`` object (loop-runtime L1 T4). Returns the terminal
@@ -324,7 +345,9 @@ async def render_stream_json(
     result = _print_result(
         final, input_tokens=input_tokens, output_tokens=output_tokens, num_turns=num_turns
     )
-    _emit(build_result_obj(result, session_id=session_id))
+    effective_cwd = cwd if cwd is not None else Path.cwd()
+    verification = await maybe_run_verification(verify, cwd=effective_cwd, timeout=verify_timeout)
+    _emit(build_result_obj(result, session_id=session_id, verification=verification))
     return result.stop_reason
 
 

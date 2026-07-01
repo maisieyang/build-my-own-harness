@@ -9,9 +9,7 @@
 ## The module loop（一个模块怎么走）
 
 0. **参照系** → `reverse-spec`（已完成 → `REFERENCE.md`）。
-1. **设计** → 上游 `interview-me`（想清楚模块角色 / 核心要素 / trade-off 立场）→ `/plan`（拆成 `tasks/<module>-plan.md`：任务清单，capability 级，不下沉实现，留档不删，这是发散完能回来的锚）。
-2. **实现** → 见下「Solo coding loop」。
-3. **回顾** →  debrief → 挖隐式决策 / 对照 REFERENCE §3 自评 / 行业对比
+1. **实现** → 见下「Solo coding loop」。
 
 横切盲区：prompt / memory / 概率性行为这层，确定性 GREEN 覆盖不到——改到它就靠判断兜。（`eval` 是将来给这层的尺，现仍 draft，**不设成完成门**。）
 
