@@ -47,7 +47,7 @@ from openharness.protocols.stream_events import (
     ToolExecutionCompletedEvent,
     ToolExecutionStartedEvent,
 )
-from openharness.verification.gate import maybe_run_verification
+from openharness.verification.gate import VerificationResult, maybe_run_verification
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Sequence
@@ -56,7 +56,7 @@ if TYPE_CHECKING:
     from rich.console import ConsoleOptions, RenderResult
 
     from openharness.protocols.stream_events import ApiStreamEvent
-    from openharness.verification.gate import VerificationResult
+    from openharness.verification.repair import GateResult
 
 
 # Per D12.6: cap tool output rendered to terminal so a 12k-char Bash dump
@@ -233,15 +233,63 @@ async def collect_print_result(events: AsyncIterator[ApiStreamEvent]) -> PrintRe
     )
 
 
+_TRANSCRIPT_TOOL_OUTPUT_PREVIEW = 2000
+
+
+async def collect_transcript(events: AsyncIterator[ApiStreamEvent]) -> tuple[PrintResult, str]:
+    """Like :func:`collect_print_result`, but also builds a readable
+    multi-turn transcript of assistant text AND tool calls/results across
+    every turn.
+
+    The L3' semantic judge needs to see what the agent actually DID -- an
+    earlier version fed it only the final turn's text (``PrintResult.text``),
+    which silently hid all tool activity: an agent that did the work via
+    tools but replied tersely would be judged on no evidence, and an agent
+    that lied confidently in its final summary would be judged on that lie
+    alone. This drains the same event stream once and returns both the
+    normal :class:`PrintResult` (unchanged shape) and a plain-text transcript.
+    """
+    input_tokens = 0
+    output_tokens = 0
+    num_turns = 0
+    final: ApiMessageCompleteEvent | None = None
+    lines: list[str] = []
+    async for event in events:
+        if isinstance(event, ApiTextDeltaEvent):
+            lines.append(event.text)
+        elif isinstance(event, ToolExecutionStartedEvent):
+            lines.append(f"\n[tool call: {event.tool_name}({event.tool_input!r})]\n")
+        elif isinstance(event, ToolExecutionCompletedEvent):
+            status = "error" if event.is_error else "ok"
+            output = event.output[:_TRANSCRIPT_TOOL_OUTPUT_PREVIEW]
+            lines.append(f"[tool result ({status}): {output}]\n")
+        elif isinstance(event, ApiMessageCompleteEvent):
+            final = event
+            num_turns += 1
+            input_tokens += event.usage.input_tokens
+            output_tokens += event.usage.output_tokens
+    result = _print_result(
+        final, input_tokens=input_tokens, output_tokens=output_tokens, num_turns=num_turns
+    )
+    return result, "".join(lines)
+
+
 def build_result_obj(
     result: PrintResult,
     *,
     session_id: str,
-    verification: VerificationResult | None = None,
+    verification: GateResult | None = None,
 ) -> dict[str, object]:
     """Single source of truth for the headless json ``result`` object shape
     (loop-runtime L1 T3 + T4). ``cost_usd`` stays null until a pricing layer
-    lands (T0: v1 has no cost computation)."""
+    lands (T0: v1 has no cost computation).
+
+    ``verification`` accepts either L3's hard ``VerificationResult`` (which
+    has per-step detail) or L3''s soft ``SemanticGateResult`` (feedback only,
+    no ``.steps``) -- checked via ``isinstance(verification, VerificationResult)``
+    rather than ``hasattr``/``getattr(..., default)``, both of which would
+    silently swallow any AttributeError raised during attribute access, not
+    just genuine absence."""
     return {
         "type": "result",
         "result": result.text,
@@ -259,7 +307,11 @@ def build_result_obj(
             if verification is None
             else {
                 "passed": verification.passed,
-                "steps": [dataclasses.asdict(s) for s in verification.steps],
+                "steps": (
+                    [dataclasses.asdict(s) for s in verification.steps]
+                    if isinstance(verification, VerificationResult)
+                    else []
+                ),
                 "feedback": verification.feedback,
             }
         ),

@@ -81,6 +81,7 @@ from openharness._stream_render import (
     PrintResult,
     build_result_obj,
     collect_print_result,
+    collect_transcript,
     render_stream,
     render_stream_json,
 )
@@ -149,8 +150,9 @@ from openharness.skills.store import EmptySkillStore, FilesystemSkillStore, Skil
 from openharness.tools import LoadSkillTool, create_default_tool_registry
 from openharness.tools.web_fetch import WebFetch
 from openharness.tools.web_search import TavilySearchProvider, WebSearch
-from openharness.verification.gate import VerificationResult, maybe_run_verification
-from openharness.verification.repair import build_repair_prompt
+from openharness.verification.gate import maybe_run_verification
+from openharness.verification.repair import GateResult, build_repair_prompt
+from openharness.verification.semantic_gate import maybe_run_semantic_verification
 
 # Default per-call output cap. Phase 1 originally shipped 1024 (no tools),
 # but with tool-use ship (Phase 2) and especially Agent / Write tool calls
@@ -429,11 +431,15 @@ def _load_memory_index_for_injection(memory_dir: Path) -> str | None:
 class AskOutcome:
     """loop-runtime L4: unified return shape for _run_ask -- text/json/stream-json
     branches all hand results back through this instead of a bare stop_reason.
-    verification/print_result are only populated by the json branch."""
+    verification/print_result are only populated by the json branch.
+
+    ``verification`` is typed as the minimal ``GateResult`` protocol (not the
+    concrete ``VerificationResult``) so either L3's hard command gate or
+    L3''s soft semantic-judge gate can populate it interchangeably."""
 
     stop_reason: str | None
     print_result: PrintResult | None = None
-    verification: VerificationResult | None = None
+    verification: GateResult | None = None
 
 
 async def _run_ask(
@@ -467,6 +473,8 @@ async def _run_ask(
     print_mode: bool = False,
     verify: list[str] | None = None,
     verify_timeout: float = 600.0,
+    goal_condition: str | None = None,
+    goal_condition_timeout: float = 60.0,
     suppress_echo: bool = False,
 ) -> AskOutcome:
     """Build the QueryContext, run the loop, render the events.
@@ -480,6 +488,11 @@ async def _run_ask(
     Not exception-handling aware -- the synchronous Typer command wraps
     this and translates exceptions into user-facing exit codes.
     """
+    if verify and goal_condition:
+        raise ValueError(
+            "verify and goal_condition are mutually exclusive -- choose one "
+            "gate (hard command check or soft LLM judge) per run"
+        )
     settings = _load_settings()
     model = model_override or settings.model
     permission_mode = (
@@ -963,8 +976,25 @@ async def _run_ask(
             # T3: drain silently, aggregate, emit ONE result object on stdout.
             # Run-level exit code still maps from stop_reason (T2), so a
             # non-end_turn run prints the json AND exits non-zero.
-            collected = await collect_print_result(events)
-            verification = await maybe_run_verification(verify, cwd=env.cwd, timeout=verify_timeout)
+            # loop-runtime L3' (soft gate): the judge needs to see tool
+            # calls/results, not just the final turn's text, so it gets its
+            # own drain (collect_transcript) that also captures tool
+            # activity. The hard --verify gate only needs PrintResult, so it
+            # keeps the cheaper collect_print_result drain.
+            if goal_condition:
+                collected, transcript = await collect_transcript(events)
+                verification: GateResult | None = await maybe_run_semantic_verification(
+                    goal_condition,
+                    transcript,
+                    api_client=client,
+                    model=model,
+                    timeout=goal_condition_timeout,
+                )
+            else:
+                collected = await collect_print_result(events)
+                verification = await maybe_run_verification(
+                    verify, cwd=env.cwd, timeout=verify_timeout
+                )
             if not suppress_echo:
                 typer.echo(
                     json.dumps(
@@ -998,11 +1028,15 @@ async def _run_repair_loop(
     max_iter: int,
     verify: list[str],
     verify_timeout: float,
+    goal_condition: str | None = None,
+    goal_condition_timeout: float = 60.0,
     **run_ask_kwargs: Any,
 ) -> tuple[AskOutcome, int, bool]:
     """loop-runtime L4 T4: outer repair loop -- fresh-context re-invocation of
-    ``_run_ask`` per attempt, with the prior attempt's failed verification
-    threaded into the next prompt via :func:`build_repair_prompt`.
+    ``_run_ask`` per attempt, with the prior attempt's failed gate result
+    threaded into the next prompt via :func:`build_repair_prompt`. The gate
+    itself is either L3's hard ``--verify`` commands or L3''s soft
+    ``--goal-condition`` judge -- CLI validation guarantees exactly one is set.
 
     Stops on the first attempt that both completes cleanly (``end_turn``) and
     passes verification, or when ``max_iter`` is reached -- whichever comes
@@ -1015,10 +1049,15 @@ async def _run_repair_loop(
     usage/num_turns SUMMED across every attempt (not just the last one), so
     tokens spent on earlier failed attempts aren't silently dropped.
     """
-    if not verify:
+    if not verify and not goal_condition:
         raise ValueError(
-            "_run_repair_loop requires non-empty verify commands "
-            "(nothing to gate the repair loop on)"
+            "_run_repair_loop requires either non-empty verify commands or a "
+            "goal_condition (nothing to gate the repair loop on)"
+        )
+    if verify and goal_condition:
+        raise ValueError(
+            "verify and goal_condition are mutually exclusive -- choose one "
+            "gate (hard command check or soft LLM judge) per run"
         )
 
     outcome: AskOutcome | None = None
@@ -1031,12 +1070,14 @@ async def _run_repair_loop(
         if outcome is None:
             prompt = goal
         else:
-            assert outcome.verification is not None  # guaranteed: verify is non-empty
+            assert outcome.verification is not None  # guaranteed: a gate is set
             prompt = build_repair_prompt(goal, attempt, outcome.verification)
         outcome = await _run_ask(
             prompt,
             verify=verify,
             verify_timeout=verify_timeout,
+            goal_condition=goal_condition,
+            goal_condition_timeout=goal_condition_timeout,
             output_format="json",
             print_mode=True,
             suppress_echo=True,
@@ -1784,7 +1825,28 @@ def ask(
         help=(
             "loop-runtime L4: outer repair-loop iteration cap. Default 1 (no "
             "looping — identical to L3 single-shot behavior). Requires --verify "
-            "and --output-format json."
+            "or --goal-condition and --output-format json."
+        ),
+    ),
+    goal_condition: str | None = typer.Option(
+        None,
+        "--goal-condition",
+        help=(
+            "loop-runtime L3' (soft gate): a natural-language completion "
+            "condition, judged by an independent LLM after each attempt "
+            "(pass/fail + reason) instead of a command's exit code. Mutually "
+            "exclusive with --verify. Requires -p/--print, --output-format "
+            "json (stream-json not wired for this gate yet), and --max-iter "
+            "> 1 to drive a repair loop."
+        ),
+    ),
+    goal_condition_timeout: float = typer.Option(
+        60.0,
+        "--goal-condition-timeout",
+        help=(
+            "Timeout in seconds for the --goal-condition judge call (default "
+            "60). Separate from --verify-timeout, which is sized for shell "
+            "commands, not an LLM round-trip."
         ),
     ),
     log_level: LogLevel | None = typer.Option(
@@ -2039,11 +2101,34 @@ def ask(
         )
         raise typer.Exit(code=2)
 
-    # loop-runtime L4 T3: ``--max-iter`` needs ``--verify`` (T3 scope: flag +
-    # validation only; the actual repair loop lands in T4).
-    if max_iter > 1 and not verify:
+    # loop-runtime L3' (soft gate): mirrors --verify's validation shape.
+    if goal_condition and not print_mode:
         typer.echo(
-            "--max-iter requires --verify (nothing to gate the repair loop on).",
+            "--goal-condition only applies in headless print mode (-p/--print).",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if goal_condition and output_format != "json":
+        typer.echo(
+            "--goal-condition only supports --output-format json "
+            "(stream-json is not wired for this gate yet).",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if verify and goal_condition:
+        typer.echo(
+            "--verify and --goal-condition are mutually exclusive -- choose "
+            "one gate (hard command check or soft LLM judge) per run.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    # loop-runtime L4 T3: ``--max-iter`` needs a gate to repair against
+    # (T3 scope: flag + validation only; the actual repair loop lands in T4).
+    if max_iter > 1 and not verify and not goal_condition:
+        typer.echo(
+            "--max-iter requires --verify or --goal-condition (nothing to "
+            "gate the repair loop on).",
             err=True,
         )
         raise typer.Exit(code=2)
@@ -2111,6 +2196,8 @@ def ask(
                     max_iter=max_iter,
                     verify=verify or [],
                     verify_timeout=verify_timeout,
+                    goal_condition=goal_condition,
+                    goal_condition_timeout=goal_condition_timeout,
                     **common_run_ask_kwargs,
                 )
             )
@@ -2122,6 +2209,8 @@ def ask(
                     print_mode=print_mode,
                     verify=verify,
                     verify_timeout=verify_timeout,
+                    goal_condition=goal_condition,
+                    goal_condition_timeout=goal_condition_timeout,
                     **common_run_ask_kwargs,
                 )
             )

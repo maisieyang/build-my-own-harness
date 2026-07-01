@@ -119,3 +119,71 @@ class TestBuildRepairPromptZeroStepsEdgeCase:
         prompt = build_repair_prompt("goal", attempt=2, verification=verification)
         assert "goal" in prompt
         assert "no verification steps configured" in prompt
+
+
+class _StubSemanticResult:
+    """Minimal GateResult-shaped stub with no ``.steps`` -- mirrors
+    ``SemanticGateResult`` (loop-runtime L3') without importing it, to prove
+    ``build_repair_prompt`` accepts anything satisfying the Protocol, not
+    just ``VerificationResult``."""
+
+    def __init__(self, *, passed: bool, feedback: str) -> None:
+        self.passed = passed
+        self.feedback = feedback
+
+
+class TestBuildRepairPromptWithoutStepsDetail:
+    """A gate result without ``.steps`` (e.g. the L3' semantic judge) must
+    fall back to feedback-only formatting -- the same code path as L3's
+    zero-steps case -- instead of crashing on a missing attribute."""
+
+    def test_semantic_result_without_steps_uses_feedback_only(self) -> None:
+        result = _StubSemanticResult(passed=False, feedback="the README was not updated")
+        prompt = build_repair_prompt("update the README", attempt=2, verification=result)
+        assert "update the README" in prompt
+        assert "attempt 2" in prompt
+        assert "the README was not updated" in prompt
+
+    def test_semantic_result_passed_does_not_claim_failure(self) -> None:
+        result = _StubSemanticResult(passed=True, feedback="condition satisfied")
+        prompt = build_repair_prompt("goal", attempt=2, verification=result)
+        assert "failed" not in prompt.lower()
+
+    def test_semantic_result_failed_does_not_claim_verification_could_not_run(self) -> None:
+        """Review finding: a genuinely-failed judge verdict (judge ran fine,
+        just scored the condition unmet) was mislabeled 'Verification could
+        not run' -- false, since nothing about the judge call itself failed.
+        Must be worded as a condition-not-met case instead."""
+        result = _StubSemanticResult(passed=False, feedback="README was not touched")
+        prompt = build_repair_prompt("update the README", attempt=2, verification=result)
+        assert "could not run" not in prompt.lower()
+        assert "README was not touched" in prompt
+        assert "not yet satisfied" in prompt.lower() or "not met" in prompt.lower()
+
+
+class _ImposterWithStepsAttribute:
+    """Not a ``VerificationResult`` -- but happens to expose a ``.steps``
+    attribute of its own. Review finding: ``hasattr``/``getattr(..., default)``
+    both swallow ANY AttributeError raised during attribute access, not just
+    genuine absence, and (more subtly) either would ALSO duck-type this
+    imposter into the hard-gate's per-step formatting path just because it
+    happens to have a same-named attribute. The check must be nominal
+    (``isinstance(x, VerificationResult)``), not duck-typed, so an unrelated
+    type can never be misrouted, and a real ``AttributeError`` from a buggy
+    property (if ``VerificationResult`` itself ever had one) would propagate
+    normally rather than being caught by ``hasattr``/``getattr``."""
+
+    def __init__(self, *, passed: bool, feedback: str, steps: tuple[object, ...]) -> None:
+        self.passed = passed
+        self.feedback = feedback
+        self.steps = steps
+
+
+class TestBuildRepairPromptUsesNominalTypeCheck:
+    def test_non_verification_result_with_steps_attribute_uses_feedback_only(self) -> None:
+        result = _ImposterWithStepsAttribute(
+            passed=False, feedback="not a real hard gate", steps=("should not be used",)
+        )
+        prompt = build_repair_prompt("goal", attempt=2, verification=result)
+        assert "not a real hard gate" in prompt
+        assert "should not be used" not in prompt

@@ -47,7 +47,8 @@
 | **L1** | 无头入口（print mode） | —（前置） | §3.9 扩展 | v1 `cli` | `oh -p "<goal>"`：非交互、不开 REPL、读一个 goal、跑完吐**结构化结果**（json / stream-json）、**退出码区分成/败**。被脚本和外层 loop 调用的原子。 |
 | **L2** | 权限·loop 策略 | **把关** | §3.5 扩展 | L1 + phase 3/7 | 无 TTY 时**不弹窗**：按声明式 policy 放行（allowlist / acceptEdits / 只拦不可逆）；危险/不可逆动作仍留闸或直接禁；**沙箱兜底**复用 phase 7。默认 **fail-closed**。 |
 | **L3** | 验证闸（exit condition） | **验证** | 新（≈§3.8 evaluator） | L1 | 跑一个**可执行 check**（命令 / grader agent），读结果，产出「达标 / 未达标 + 反馈文本」。这是 loop 的**停止判据**，必须确定性可读，不靠模型自我感觉。 |
-| **L4** | 外层 loop（Ralph 式） | **规划/编排** | §3.1 + §3.8 | L2 + L3 | 拿 goal → 跑内层 engine → 过 L3 验证闸 → 未达标则**新开 context、把验证反馈重喂** → 直到达标 / 撞**迭代或预算上限**。撞上限即停并报告。 |
+| **L3′** | 语义验证闸（soft gate） | **验证**（与 L3 平级） | 新（≈§3.8 evaluator，对标 CC `/goal`） | L1 | 跟 L3 平级的第二种验证闸：`--goal-condition` 吃自然语言完成条件，由**独立 LLM 裁判**读 transcript 判 yes/no + 理由——给判不了退出码的语义/主观标准用（文档完整性、格式规范）。跟 L3 互斥，二选一喂给 L4。**已实现**，见 `loop-runtime-L3-goal-plan.md`。 |
+| **L4** | 外层 loop（Ralph 式） | **规划/编排** | §3.1 + §3.8 | L2 + L3/L3′ | 拿 goal → 跑内层 engine → 过 L3 或 L3′ 验证闸 → 未达标则**新开 context、把验证反馈重喂** → 直到达标 / 撞**迭代或预算上限**。撞上限即停并报告。 |
 
 后置（MVP 之后，按需）：
 
@@ -144,4 +145,11 @@ L2←`permissions/checker`、L3←`_run_verification_steps`、L4←`run_card`+`_
 
 **4) module loop 第 0 步（参照系）就此完成**，下一步仍从 L1 起（§6）。
 
-— 2026-06 plan（capability 级 · 留档不删；§7 为 2026-06 参照系回填）
+---
+
+## 8. L3′ 已实现（2026-07 update）
+
+真正的 `/goal`（语义 condition + LLM 裁判）已建成——见 §2 表格新增的 L3′ 行，实现记录、
+锁定立场、任务分解、冒烟验证全在独立文档：[`loop-runtime-L3-goal-plan.md`](./loop-runtime-L3-goal-plan.md)（跟 L1/L2 各自有独立 `-plan.md` 是同一惯例）。
+
+— 2026-06 plan（capability 级 · 留档不删；§7 为 2026-06 参照系回填，§8 为 2026-07 L3′ 落地回填）

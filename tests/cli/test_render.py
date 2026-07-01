@@ -28,6 +28,7 @@ from rich.console import Console
 
 from openharness._stream_render import (
     MAX_OUTPUT_PREVIEW,
+    collect_transcript,
     render_stream,
     render_stream_json,
 )
@@ -568,3 +569,49 @@ class TestRenderStreamJson:
         lines = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
         assert lines[-1]["type"] == "error"
         assert "boom" in lines[-1]["error"]
+
+
+class TestCollectTranscript:
+    """Review finding: the L3' semantic judge was fed only the final turn's
+    text (PrintResult.text), hiding all tool activity -- an agent that did
+    real work via tools but replied tersely got judged on no evidence, and
+    one that lied in its final summary got judged on the lie alone.
+    collect_transcript captures tool calls/results too."""
+
+    async def test_includes_tool_call_and_result(self) -> None:
+        events: list[ApiStreamEvent] = [
+            ToolExecutionStartedEvent(
+                tool_use_id="t1", tool_name="Bash", tool_input={"command": "pytest -q"}
+            ),
+            ToolExecutionCompletedEvent(
+                tool_use_id="t1", tool_name="Bash", output="5 passed", is_error=False
+            ),
+            ApiTextDeltaEvent(text="Done."),
+            _final_event("Done."),
+        ]
+        result, transcript = await collect_transcript(_async_iter(events))
+        assert result.text == "Done."
+        assert "Bash" in transcript
+        assert "pytest -q" in transcript
+        assert "5 passed" in transcript
+
+    async def test_marks_tool_errors_distinctly(self) -> None:
+        events: list[ApiStreamEvent] = [
+            ToolExecutionStartedEvent(tool_use_id="t1", tool_name="Bash", tool_input={}),
+            ToolExecutionCompletedEvent(
+                tool_use_id="t1", tool_name="Bash", output="command not found", is_error=True
+            ),
+            _final_event("failed"),
+        ]
+        _, transcript = await collect_transcript(_async_iter(events))
+        assert "error" in transcript
+        assert "command not found" in transcript
+
+    async def test_print_result_shape_matches_collect_print_result(self) -> None:
+        """collect_transcript's PrintResult half must stay identical in shape
+        to collect_print_result's -- only the extra transcript is new."""
+        events: list[ApiStreamEvent] = [ApiTextDeltaEvent(text="hi"), _final_event("hi")]
+        result, _ = await collect_transcript(_async_iter(events))
+        assert result.text == "hi"
+        assert result.stop_reason == "end_turn"
+        assert result.num_turns == 1
