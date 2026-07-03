@@ -3,9 +3,9 @@
 > **上游**：`loop-runtime-plan.md`（epic capability 地图，§9.2 的耦合分析促成了本次统一
 > 设计，§9.6/§9.7 记录本模块的批准+落地摘要）。
 > **纪律**：TDD 是脊梁，本模块按下面的 TDD 垂直切片（Wave 0-3）走 RED→GREEN。
-> **状态**：**已实现（2026-07-03，四个 Wave 全部落地 + 三轮 workflow code review + 三次
-> commit）**。loop-runtime 主线 epic 至此收口。留档不删——这份 plan 本身就是设计阶段沉淀
-> 下来的资产，下次不用重新摸一遍代码就能接上实现。
+> **状态**：**已实现（2026-07-03，四个 Wave + 可选 T8 全部落地 + 五轮 workflow code
+> review + 五次 commit）**。loop-runtime 主线 epic 至此收口。留档不删——这份 plan 本身
+> 就是设计阶段沉淀下来的资产，下次不用重新摸一遍代码就能接上实现。
 
 ---
 
@@ -247,7 +247,7 @@ seed_verification)`），只是循环的**入口状态**从磁盘重建，不是
 | T5 | `_run_repair_loop` journal 接线（`journal`/`start_attempt`/`seed_verification`/`sub_goal_label`） | 循环在正确节点写 `attempt_started`/`attempt_finished`；`start_attempt=3` 不重跑前两轮 | 否——跟 §9.2 早就点名的"同一块肌肉"，T3+T4 落地后单人顺序做 |
 | T6 | `ask()` 接线：`--isolate` flag + 校验 + 三分支合并成 `_dispatch_ask` + JSON `"run"` 字段 | `--isolate --max-iter 2` → JSON 有非空 `run.worktree_path`；两个 flag 都不带 → JSON 没有 `run` 键（跟今天字节级一致） | 否——T5 之后顺序做 |
 | T7 | `--resume-run <id>` | 校验矩阵：`+--resume`→exit 2；`+--decompose`→exit 2；id 查不到→exit 1；goal 冲突→exit 2；`--isolate` 冲突→warn+以状态为准 | 否——T6 之后顺序做 |
-| T8（可选/stretch） | `oh run show <run-id>` 只读查看器 | 打印 `state.json` + journal 尾部 | 能——随时可做，不阻塞别的 |
+| T8（可选/stretch，**已做**） | `oh run show <run-id>` 只读查看器 | 只读 journal 重建摘要 + journal 尾部（不读 `state.json`——Wave 3 发现生产代码根本不写它） | 能——随时可做，不阻塞别的 |
 
 **并行执行安排**（沿用 L6+L8 的两个真并行 `/goal` 先例）：Wave 0 = T0 独做；Wave 1 = T1
 ∥ T2（两个后台 `/goal`）；Wave 2 = T3 ∥ T4（两个后台 `/goal`）；Wave 3 = T5→T6→T7
@@ -329,8 +329,29 @@ uv run pytest -q && uv run mypy --strict src/ && uv run ruff check
   正确（`feedback` 内容一致），只是措辞不如未中断的连续跑法详细；要修需要 journal
   多存一层 step 级细节，目前 schema 没留这个口子，明确记录为已知限制不是漏做。
 
-全量测试 2466 passed（比 Track A 结束时的 2448 增加 18；注：中间还经过好几轮
-新增测试和小修，实际数字以最终 commit 为准），`mypy --strict` 129 文件全过，`ruff`
-全过。
+全量测试 2466 passed，`mypy --strict` 129 文件全过，`ruff` 全过。
 
-**Track B 全部完成，loop-runtime 主线 epic 收口。**
+- **T8**（`e0e6b62`，可选/stretch，用户明确要求"也做"）：`oh run show <run-id>` 只读
+  查看器（text/json 两种格式）。设计时主动应用 Wave 3 刚学到的教训——**不读
+  `state.json`**（生产代码从来不写它），只读 journal 重建摘要，跟 `--resume-run` 共用
+  同一套重建逻辑。为此把 journal 重建逻辑从 `--resume-run` 的内联代码里抽成两个共享
+  helper 落进 `services/run_journal.py`：`get_run_started_event`（找+校验
+  `run_started` 事件，缺字段就 fail-closed 报错，不是 KeyError 崩溃）+
+  `get_run_status`（按 journal 事件在文件里的**顺序**推断状态——`run_resumed` 事件如果
+  出现在最后一个 `run_finished` 之后，说明这个 run 正在被 resume、还没跑完，不能报旧
+  session 遗留的终态）。Code review 发现 7 个问题，6 个修复：状态推断没考虑
+  `run_resumed`（用 `get_run_status` 修）；`--isolate` 单独用（没有 journal）时
+  `run show` 报"找不到 run"容易让人误以为 run 没跑过（改了帮助文本+报错文案）；journal
+  条目缺字段会让命令裸 `KeyError` 崩溃而不是干净退出 1（`get_run_started_event` 强制
+  校验必需字段）；`run_id` 直接拼进 `get_run_dir` 没做路径穿越校验（`get_run_dir` 加了
+  拒绝 `/`/`\`/`..` 的检查，`--resume-run` 也顺带受益，因为它也有一样的口子）；
+  `run_show`跟`--resume-run`各自重复实现同一套重建逻辑（抽共享 helper 解决）；
+  `None`/`?` 占位符渲染混淆了"字段真的是 null"和"`run_started` 事件缺失"两种情况
+  （改成后者直接 fail-closed，不再用占位符掩盖）。**接受未修**：
+  `open_run_session`finally 块里 `run_finished` 事件的写入被 `contextlib.suppress`
+  包着，真遇到写入失败会让状态永远卡在"running"——这是 Wave 2/3 就定下的"每个清理步骤
+  独立 best-effort、互不阻塞"设计权衡的自然延伸，不是新引入的回归，记录为已知限制。
+
+全量测试 2487 passed，`mypy --strict` 129 文件全过，`ruff` 全过。
+
+**Track B（含可选 T8）全部完成，loop-runtime 主线 epic 收口。**
