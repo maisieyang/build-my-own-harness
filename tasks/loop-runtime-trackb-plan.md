@@ -1,10 +1,11 @@
 # loop-runtime Track B — worktree 隔离 + sandbox 复用 + journal + run 级 resume（统一设计）
 
 > **上游**：`loop-runtime-plan.md`（epic capability 地图，§9.2 的耦合分析促成了本次统一
-> 设计，§9.6 记录本模块的落地摘要）。
+> 设计，§9.6/§9.7 记录本模块的批准+落地摘要）。
 > **纪律**：TDD 是脊梁，本模块按下面的 TDD 垂直切片（Wave 0-3）走 RED→GREEN。
-> **状态**：**设计已批准（2026-07-03，native Plan Mode），实现未开始**。留档不删——这份
-> plan 本身就是设计阶段沉淀下来的资产，下次不用重新摸一遍代码就能接上实现。
+> **状态**：**已实现（2026-07-03，四个 Wave 全部落地 + 三轮 workflow code review + 三次
+> commit）**。loop-runtime 主线 epic 至此收口。留档不删——这份 plan 本身就是设计阶段沉淀
+> 下来的资产，下次不用重新摸一遍代码就能接上实现。
 
 ---
 
@@ -283,3 +284,53 @@ uv run pytest -q && uv run mypy --strict src/ && uv run ruff check
    commit（大概率仍是每个 Wave 一个 commit，参照 L6+L8/L5 的粒度）。
 5. 结果沉淀回 `loop-runtime-plan.md` §9.6——Track B 全部完成，loop-runtime 主线
    epic 收口。
+
+---
+
+## 8. 落地记录（2026-07-03）
+
+按 Wave 0→3 顺序全部落地，三次 commit：
+
+- **Wave 0**（`919e4a7`）：T0，`_resolve_sandbox_config`/`SandboxConfig` 从 `_run_ask`
+  抽出。同一提交里落了本文档 + §9.6 摘要回填。
+- **Wave 1**（`017d20d`）：T1（`services/worktree.py`）+ T2（`services/run_journal.py`）
+  ——两个真正并行的 `/goal` 后台进程（T1 中途因一次瞬时 API 断连静默 no-op 过一次，靠
+  独立验证发现并重跑，不是靠信任退出码）。Code review 发现 8 个问题，全部修复：
+  `load_state`/`load_journal` 接受了错类型/非对象 JSON 却不报错；`write_state` 完全没上
+  锁；`worktree.py` 只 catch 了 `FileNotFoundError`（漏了 `PermissionError` 等其它
+  `OSError`）；dirty-check 和 `worktree add` 之间的 TOCTOU 窗口没收紧。顺带抽出
+  `services/file_lock.py` 共享锁 helper，`autopilot.py` 也切过去用。
+- **Wave 2**（`98d92e2`）：T3（`_run_ask` 的 `cwd_override`/`execution_env_override`）+
+  T4（`services/run_session.py` 的 `RunSession`/`open_run_session`）——两个并行 `/goal`。
+  Code review 发现 6 个问题：`open_run_session` 的 setup 步骤在 `try` 外面，某一步失败
+  会漏掉前面已建资源的清理；`finally` 里三步清理没有互相隔离，一步失败会挡住其余步骤；
+  `git status --porcelain` 的退出码没检查，失败当成"确认干净"直接删了 worktree；
+  `cwd_override` 只改了 `env.cwd`，没改 `_run_ask` 里更早构建的
+  command/bundle/hook-plugin store（它们仍读真实 `Path.cwd()`），悄悄破坏隔离保证。全部
+  修复。
+- **Wave 3**（`3c43ddc`，单人顺序做，不并行）：T5（`_run_repair_loop` 的
+  `journal`/`start_attempt`/`seed_verification`/`sub_goal_label`）→ T6（`_dispatch_ask`
+  收敛三条 `asyncio.run` + `--isolate` flag + `"run"` JSON 字段）→ T7（`--resume-run`
+  flag）。T6 落地时抓到一个真实回归：`--sandbox`单独用（不带 `--isolate`/`--max-iter`）
+  被意外路由进了 `open_run_session`，导致既有 `TestSandboxFlags` 测试因为连不上真 Docker
+  而挂——修成"只有 `isolate` 或 `journal_enabled` 时才让 `--sandbox` 走 session 路径"。
+  Code review 抓到的最严重问题：**`--resume-run` 依赖的 `state.json` 写入路径
+  （`RunJournal.write_state`）在生产代码里从来没被调用过**——所有 6 个测试都是靠
+  测试自己手写 `state.json` 的 fixture 才通过，真实中断的 run 永远无法 resume。修法是把
+  `--resume-run` 的状态重建完全改成只读 journal.jsonl（`run_started`/`attempt_finished`
+  事件已经在生产环境真实写入），不再依赖 `state.json`，并补了一个端到端回归测试——先跑一次
+  真实耗尽 attempt 的 repair loop（不手写 fixture），再对**那次真实 run** 调
+  `--resume-run`，证明整条链路真的通。另外修了：`existing_worktree` 复用跳过了
+  `create_worktree` 自带的校验（补 `verify_existing_worktree`）；resume 会往同一份
+  journal 里重复追加一条 `run_started`（改成 `run_resumed`）；`--isolate` 覆盖警告在普通
+  无 flag 的 resume 上会误报（去掉警告，静默按 resume 状态为准）；`result_obj["run"]`
+  的拼装代码三处重复（抽成 `_attach_run_json_field`）。**接受未修**：resume 后重建的
+  gate 反馈固定用软判官形状（`SemanticGateResult`），不区分原本是硬闸还是软闸——语义仍
+  正确（`feedback` 内容一致），只是措辞不如未中断的连续跑法详细；要修需要 journal
+  多存一层 step 级细节，目前 schema 没留这个口子，明确记录为已知限制不是漏做。
+
+全量测试 2466 passed（比 Track A 结束时的 2448 增加 18；注：中间还经过好几轮
+新增测试和小修，实际数字以最终 commit 为准），`mypy --strict` 129 文件全过，`ruff`
+全过。
+
+**Track B 全部完成，loop-runtime 主线 epic 收口。**

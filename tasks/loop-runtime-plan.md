@@ -289,6 +289,23 @@ Wave 0-3 排序，Wave 1（T1 worktree ∥ T2 journal）和 Wave 2（T3 override
 run_session）各自能真并行 `/goal`，Wave 3（T5→T6→T7）因为都改
 `_run_repair_loop`/`ask()` 同一段代码，必须单人顺序做。
 
+### 9.7 Track B 已实现（2026-07-03 update）——loop-runtime 主线 epic 收口
+
+按 §9.6 的设计，Wave 0→3 全部落地，三次 commit（`919e4a7`/`017d20d`/`98d92e2`/
+`3c43ddc`），每个 Wave 后都过了一轮高强度 workflow code review 并修复发现的问题
+（Wave 1 修 8 个、Wave 2 修 6 个、Wave 3 修 5 个 + 1 个记录为已知限制不修）。最严重的
+一次发现在 Wave 3：`--resume-run` 设计时依赖的 `state.json` 持久化路径
+（`RunJournal.write_state`）在生产代码里其实从未被调用过——6 个测试全靠测试自己手写
+`state.json` fixture 才通过绿灯，真实中断的 run 永远无法 resume；修法是把 `--resume-run`
+改成完全只读 append-only 的 `journal.jsonl`（生产环境确实在写），并补了一个端到端回归
+测试——先跑一次真实耗尽 attempt 的 repair loop（不用任何测试 fixture），再对**那次真实
+run** 调 `--resume-run`，证明整条链路真的打通，而不是只在手工搭建的场景下"看起来能跑"。
+
+全量测试 2466 passed，`mypy --strict` 129 文件全过，`ruff` 全过。完整落地记录见
+[`loop-runtime-trackb-plan.md`](./loop-runtime-trackb-plan.md) §8。
+
+**Track A + Track B 全部完成——loop-runtime 主线 epic（L1-L9 + L3'）至此收口。**
+
 — 2026-06 plan（capability 级 · 留档不删；§7 为 2026-06 参照系回填，§8 为 2026-07 L3′ 落地
 回填，§9 为 2026-07 剩余项问题链 + 并行策略回填，§9.6 为 2026-07 Track B 统一设计批准
-回填）
+回填，§9.7 为 2026-07 Track B 落地回填 · epic 收口）
