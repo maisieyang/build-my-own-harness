@@ -17,8 +17,6 @@ another's write via last-write-wins on the atomic whole-file rewrite.
 
 from __future__ import annotations
 
-import contextlib
-import fcntl
 import json
 import os
 import tempfile
@@ -28,8 +26,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from openharness.services.file_lock import exclusive_file_lock
+
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Sequence
+    from collections.abc import Callable, Sequence
 
 _BASE_SCORE_BY_SOURCE_KIND: dict[str, int] = {"manual": 50}
 _URGENCY_LABEL_BONUS: dict[str, int] = {"urgent": 30, "bug": 20}
@@ -154,35 +154,18 @@ def save_queue(queue_path: Path, cards: list[Card]) -> None:
             tmp_path.unlink(missing_ok=True)
 
 
-@contextlib.contextmanager
-def _queue_lock(queue_path: Path) -> Iterator[None]:
-    """Exclusive ``fcntl`` lock on a sibling ``.lock`` file.
-
-    Serializes concurrent read-modify-write cycles (``enqueue_card``, status
-    transitions) across processes -- without this, two processes racing
-    (e.g. a crontab-fired ``run-next`` vs. a manual ``enqueue``) can silently
-    drop one another's write, since ``save_queue``'s atomic rewrite only
-    guarantees the FINAL write itself is torn-free, not that the
-    read-then-write cycle around it is race-free.
-    """
-    queue_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = queue_path.with_suffix(queue_path.suffix + ".lock")
-    with open(lock_path, "w", encoding="utf-8") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-
-
 def with_queue_lock(queue_path: Path, mutator: Callable[[list[Card]], list[Card]]) -> list[Card]:
     """Load, mutate, and atomically save the queue under an exclusive lock.
 
     ``mutator`` receives the current card list and returns the new one.
-    The single lock held across load→mutate→save is what actually closes
-    the race window that ``save_queue``'s atomicity alone doesn't cover.
+    The single lock held across load→mutate→save (via
+    :func:`~openharness.services.file_lock.exclusive_file_lock`) is what
+    actually closes the race window that ``save_queue``'s atomicity alone
+    doesn't cover -- without this, two processes racing (e.g. a
+    crontab-fired ``run-next`` vs. a manual ``enqueue``) can silently drop
+    one another's write.
     """
-    with _queue_lock(queue_path):
+    with exclusive_file_lock(queue_path):
         cards = load_queue(queue_path)
         cards = mutator(cards)
         save_queue(queue_path, cards)
