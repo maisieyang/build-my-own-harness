@@ -511,6 +511,8 @@ async def _run_ask(
     verify_timeout: float = 600.0,
     goal_condition: str | None = None,
     goal_condition_timeout: float = 60.0,
+    cwd_override: Path | None = None,
+    execution_env_override: ExecutionEnvironment | None = None,
     suppress_echo: bool = False,
 ) -> AskOutcome:
     """Build the QueryContext, run the loop, render the events.
@@ -657,7 +659,7 @@ async def _run_ask(
     if not no_commands:
         base_command_store = FilesystemCommandStore(
             global_dir=Path.home() / ".openharness" / "commands",
-            project_dir=Path.cwd() / ".openharness" / "commands",
+            project_dir=(cwd_override or Path.cwd()) / ".openharness" / "commands",
         )
         command_store = LayeredStore(
             base=base_command_store,
@@ -681,7 +683,7 @@ async def _run_ask(
     if invoked_command is not None and invoked_command.mode is not None:
         base_bundle_store = FilesystemBundleStore(
             global_dir=Path.home() / ".openharness" / "bundles",
-            project_dir=Path.cwd() / ".openharness" / "bundles",
+            project_dir=(cwd_override or Path.cwd()) / ".openharness" / "bundles",
         )
         bundle_store = LayeredStore(
             base=base_bundle_store,
@@ -711,7 +713,7 @@ async def _run_ask(
         plugin_hook_catalog.update(discover_plugin_hooks())
         fs_catalog = discover_filesystem_hook_plugins(
             global_dir=Path.home() / ".openharness" / "hooks",
-            project_dir=Path.cwd() / ".openharness" / "hooks",
+            project_dir=(cwd_override or Path.cwd()) / ".openharness" / "hooks",
         )
         for fs_name, fs_spec in fs_catalog.items():
             if fs_name not in plugin_hook_catalog:
@@ -770,6 +772,8 @@ async def _run_ask(
         # same name. ``--no-skills`` swaps in :class:`EmptySkillStore` for
         # testing / debug; default scans both layers.
         env = detect_environment()
+        if cwd_override is not None:
+            env = replace(env, cwd=cwd_override)
         base_skill_store: SkillStore
         if no_skills:
             base_skill_store = EmptySkillStore()
@@ -883,8 +887,14 @@ async def _run_ask(
         # ``--no-sandbox``(default)→ HostExecution singleton.
         # ``--sandbox`` → enter the substrate context here; BashTool
         # routes through it via ``QueryContext.execution_env``.
+        # Track B T3: ``execution_env_override`` takes priority over both
+        # -- when given, SandboxExecution is never constructed even if
+        # ``sandbox_enabled`` is also True (services/run_session.py owns
+        # one long-lived sandbox per RUN and passes it in here per attempt).
         execution_env: ExecutionEnvironment
-        if sandbox_enabled:
+        if execution_env_override is not None:
+            execution_env = execution_env_override
+        elif sandbox_enabled:
             execution_env = await stack.enter_async_context(
                 SandboxExecution(
                     cwd=env.cwd,
