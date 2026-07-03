@@ -265,86 +265,30 @@ epic 剩下的部分。每一项"为什么要做"用同一条链子讲：**朴�
 - **Track A 先做，且先从 L6 + L8 起**（L5 看这两个跑完的结果再决定要不要现在做）。
 - **Track B 等 Track A 落地后再回头做**，作为一次统筹设计，不拆分并行。
 
-### 9.4 L6 + L8 已实现（2026-07 update）——真正验证了并行 `/goal` 可行
+### 9.6 Track B 统一设计已批准（2026-07-03 update）
 
-**L6（intake 队列，`services/autopilot.py` + `oh autopilot enqueue/list/run-next`）**：
-Card model + 确定性打分（source_kind 基础分 + label 加分 - 按小时线性衰减）+ 原子整文件
-重写（tempfile+os.replace）。MVP 只做 manual 来源，不建真 cron 守护/`gh` 集成——配合系统
-crontab 调 `run-next` 即可。
+Track A（L5/L6/L8）已全部落地。Track B 四项（L7 worktree 隔离 + L4 限制①sandbox 复用 +
+L9 状态机/journal + L4 限制②resume/max-iter 融合）经三个并行 Explore agent 摸底 +
+一个 Plan agent 出稿 + native Plan Mode 批准，设计已定稿，实现未开始。完整设计见独立文档
+[`loop-runtime-trackb-plan.md`](./loop-runtime-trackb-plan.md)（跟 L1/L2/L3'/L5 各自有
+独立 `-plan.md` 同一惯例）。
 
-**L8（不可逆 git 动作红线，`permissions/tier_based.py`）**：Bash 工具调用如果是 `git
-commit`/`git push`（含 `-C`/`--no-pager` 等 global option 变体、shell 元字符切分后的链式
-调用），无条件 DENY——不受 allow 规则/acceptEdits/headless posture 影响，跟 Tier1 路径红线
-同一优先级。`--dry-run` 除外（不改变仓库状态，不算"不可逆"）。
-
-**执行方式**：两个模块的设计放进同一份 native Plan Mode plan，RED 测试由主 loop 顺序写完，
-GREEN 交**两个真正并行**的 `claude -p "/goal ..."` 后台进程（各自独立 prompt，同时起、
-独立跑）——这是本 epic 第一次实际验证"并行 /goal"这件事本身可行：两个模块不碰同一文件，
-各自的 `/goal` 进程互不干扰，都在几分钟内独立跑绿，最后合并审查零冲突。
-
-**高强度 workflow code review 分别对两个模块起了一轮**（各自独立审），共发现 7 个问题，
-全部修复：
-- L8：① `tokens[0]/tokens[1]` 硬编码位置的匹配漏掉了 `git -C dir commit`/`git --no-pager
-  push`/`git -c k=v commit` 这类带 global option 的**普通**调用（不是对抗性绕过，是常见
-  写法）——改成扫过 git global option 找到真正 subcommand 的写法，同时把 shell 元字符切分
-  加上换行符（多行命令场景）。② 反过来又发现 `git commit --dry-run` 被误伤（dry-run 不
-  改状态，不该拦）——加了显式排除（注意 `-n` 对 commit 是 `--no-verify` 不是 dry-run，
-  没有被误当成别名）。
-- L6：③ `run-next` 没有 catch `_run_repair_loop` 可能抛出的异常，一旦抛出 card 会卡在
-  `running` 状态永远出不来；④ `enqueue` 允许空 `--verify`（autopilot 还没有
-  `--goal-condition` 选项），保证了③会在普通用法下必然触发——两个合起来是"正常使用就会
-  卡死"级别的 bug，不是边角情况；⑤ `enqueue_card` 的 source_ref 去重不看 card 状态，重跑
-  失败任务时会一直返回那张旧的 failed 卡，永远排不上新的一次尝试；⑥ 队列文件的
-  读-改-写没有锁，并发 `enqueue`/`run-next`（比如 cron 触发的和手动的撞一起）会用
-  last-write-wins 静默丢卡——加了 `fcntl` 排他锁包住 load→mutate→save 整个周期；
-  ⑦ `load_queue` 解析 queue.json 没有任何异常处理，手改坏了文件会让所有 autopilot 命令
-  崩出裸 traceback——改成清晰的 `ValueError` 消息。
-
-全量测试 2358 passed，`mypy --strict` 123 文件全过，`ruff` 全过。
-
-### 9.5 L5 已实现（2026-07 update）——Track A 收尾
-
-**L5（规划器，`services/decompose.py` + `ask --decompose`）**：`decompose_goal()` 一次性
-`summarize()` 调用，把大 goal 拆成有序子目标数组，解析骨架照抄 L3' 语义闸的 fail-closed
-写法（剥围栏 → `json.loads` → 非数组/空数组/超过 8 项/含非字符串或空白项，任何一种都
-`ok=False`，绝不静默回退去跑原 goal）。`--decompose` 复用 `-p`/`--output-format json`/
-`--verify`/`--goal-condition` 已有校验形状；`_run_decomposed_loop` 顺序对每个子目标各调一次
-现成的 `_run_repair_loop`（fresh context、共用父命令同一个闸），fail-fast——第一个不
-succeeded 的子目标之后不再跑。结果 JSON 加法式扩展一个 `decompose` 字段
-（`sub_goals`/`feedback`/`results`），退出码 = 分解成功且所有子目标都 succeeded 才是 0。
-
-**执行方式**：延续既定流程——本 plan 经 native Plan Mode 批准后，RED 测试（T1 纯函数 →
-T2 flag 校验 → T3 编排本体，T2/T3 合并进同一个 `tests/cli/test_decompose.py`）由主 loop
-写完确认见红，GREEN 交单个 `claude -p "/goal ..."` 后台进程（这次不并行，压缩到 3480
-字符内一次交付 T1+T2+T3 全部三层）。
-
-**高强度 workflow code review 发现 6 个问题，全部修复**：
-- ①（最严重）`--decompose` 没有像 `--max-iter` 那样挡掉 `--resume`/`--resume-id`——
-  resume 的会话历史会静默混进每个子目标的每次 repair 尝试，破坏"fresh context"承诺；
-  加了同款校验。
-- ② 结果 JSON 顶层的 `usage`/`num_turns` 只反映**最后一个**子目标的开销，不是所有跑过的
-  子目标累加——多步骤 decompose 场景下会静默漏算大部分 token 花费；改成对
-  `sub_goal_runs` 里每个 `print_result` 求和（跟 `_run_repair_loop` 自己"跨 attempt 求和"
-  的既有约定看齐）。
-- ③ `_strip_markdown_fence`：开了围栏但没闭合（比如被 `max_tokens` 截断）时，旧实现无
-  条件切掉最后一行，把本该能解析的内容当成非法响应丢弃；改成只在最后一行确实是
-  ```` ``` ```` 时才切。
-- ④ decompose 失败时，`decompose_result.feedback`（具体失败原因：解析失败/空数组/超项数
-  等）从没进过输出 JSON，stderr 只提示"看 JSON 里的 decompose 字段"但字段里其实什么都
-  没有；加了 `feedback` 键。
-- ⑤ 子目标数组校验只查每项是不是 `str`，没查是否空字符串/纯空白——模型返回
-  `["", "干活"]` 会把空字符串当真实子目标喂给 `_run_repair_loop`，白烧一次 API 调用；
-  加了非空校验。
-- ⑥ `_strip_markdown_fence` 跟 `verification/semantic_gate.py` 里的同名函数逐字重复
-  （两边都有完整测试覆盖，不是 `eval/scorers.py` 那种"未测试代码不能碰"情形）——抽成
-  共享的 `services/structured_response.py`，③ 的修复只改一处，两个调用方都受益。
-
-全量测试 2386 passed（新增 28 个），`mypy --strict` 125 文件全过，`ruff` 全过。
-
-**Track A（L5/L6/L8）至此全部完成**。Track B（L4 sandbox 每轮重启容器、L7 worktree 物理
-隔离、L9 状态机+journal、L4 `--resume`/`--max-iter` 互斥深度融合）仍按 §9.3 的决定推迟，
-留待作为一次统筹设计处理，不在没有用户明确要求的情况下开工。
+**核心决策摘要**：新增 `services/run_session.py::open_run_session(...)` 作为四项耦合的
+公共宿主（worktree + sandbox 容器的 `AsyncExitStack` 从 `_run_ask`/`_run_repair_loop`
+提到 `ask()` 的分发点）；`_run_ask` 只新增 `cwd_override`/`execution_env_override` 两个
+通用参数（不是四个专用参数），靠既有的 `**run_ask_kwargs` 透传机制免费传播到每个
+attempt/子目标；新建 `services/worktree.py`（git worktree，fail-closed on 脏工作区）+
+`services/run_journal.py`（append-only JSONL + 原子 `state.json`，机制抄
+`autopilot.py`/`snapshot.py`，拓扑不抄）；L4 限制②不做"融合"，另开正交的
+`--resume-run <id>` flag（resume 一次 run 的循环入口状态，不是 resume 会话历史）；
+`--isolate` 跟 loop 场景**解耦**（参照 Claude Code 自己 `Agent`/`Workflow` 工具的
+`isolation: "worktree"` 设计校准），任意 `-p` 调用都能单独开；worktree 清理策略精化为
+"没改动自动清理、有改动永不自动删"（因为 L8 已无条件拒绝 `git commit`/`push`，worktree
+里只会是未提交改动，没有"要不要自动合并"这个问题）。TDD 切片 T0-T7（+ 可选 T8）按
+Wave 0-3 排序，Wave 1（T1 worktree ∥ T2 journal）和 Wave 2（T3 override ∥ T4
+run_session）各自能真并行 `/goal`，Wave 3（T5→T6→T7）因为都改
+`_run_repair_loop`/`ask()` 同一段代码，必须单人顺序做。
 
 — 2026-06 plan（capability 级 · 留档不删；§7 为 2026-06 参照系回填，§8 为 2026-07 L3′ 落地
-回填，§9 为 2026-07 剩余项问题链 + 并行策略回填，§9.4 为 L6+L8 落地回填，§9.5 为 L5 落地
-回填 · Track A 收尾）
+回填，§9 为 2026-07 剩余项问题链 + 并行策略回填，§9.6 为 2026-07 Track B 统一设计批准
+回填）

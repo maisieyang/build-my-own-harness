@@ -443,6 +443,41 @@ class AskOutcome:
     verification: GateResult | None = None
 
 
+@dataclass(frozen=True)
+class SandboxConfig:
+    """loop-runtime Track B T0: resolved sandbox configuration -- extracted
+    out of ``_run_ask`` so ``services/run_session.py`` can resolve it once
+    per run instead of once per attempt."""
+
+    enabled: bool
+    image: str
+    network: str
+    memory: str
+    cpus: float
+    runtime: str
+
+
+def _resolve_sandbox_config(
+    settings: Settings,
+    *,
+    sandbox_override: bool | None,
+    sandbox_image_override: str | None,
+    sandbox_network_override: str | None,
+    sandbox_memory_override: str | None,
+    sandbox_cpus_override: float | None,
+    sandbox_runtime_override: str | None,
+) -> SandboxConfig:
+    """CLI flag overrides Settings, per field (P7b-T2 precedent)."""
+    return SandboxConfig(
+        enabled=sandbox_override if sandbox_override is not None else settings.sandbox_enabled,
+        image=sandbox_image_override or settings.sandbox_image,
+        network=sandbox_network_override or settings.sandbox_network,
+        memory=sandbox_memory_override or settings.sandbox_memory,
+        cpus=sandbox_cpus_override if sandbox_cpus_override is not None else settings.sandbox_cpus,
+        runtime=sandbox_runtime_override or settings.sandbox_runtime,
+    )
+
+
 async def _run_ask(
     prompt: str,
     *,
@@ -511,15 +546,24 @@ async def _run_ask(
     auto_truncate = (
         auto_truncate_override if auto_truncate_override is not None else settings.auto_truncate
     )
-    # P7b-T2: sandbox configuration — CLI flag overrides Settings.
-    sandbox_enabled = sandbox_override if sandbox_override is not None else settings.sandbox_enabled
-    sandbox_image = sandbox_image_override or settings.sandbox_image
-    sandbox_network = sandbox_network_override or settings.sandbox_network
-    sandbox_memory = sandbox_memory_override or settings.sandbox_memory
-    sandbox_cpus = (
-        sandbox_cpus_override if sandbox_cpus_override is not None else settings.sandbox_cpus
+    # P7b-T2 (Track B T0: extracted to _resolve_sandbox_config so
+    # services/run_session.py can resolve it once per run instead of once
+    # per attempt): sandbox configuration — CLI flag overrides Settings.
+    sandbox_config = _resolve_sandbox_config(
+        settings,
+        sandbox_override=sandbox_override,
+        sandbox_image_override=sandbox_image_override,
+        sandbox_network_override=sandbox_network_override,
+        sandbox_memory_override=sandbox_memory_override,
+        sandbox_cpus_override=sandbox_cpus_override,
+        sandbox_runtime_override=sandbox_runtime_override,
     )
-    sandbox_runtime = sandbox_runtime_override or settings.sandbox_runtime
+    sandbox_enabled = sandbox_config.enabled
+    sandbox_image = sandbox_config.image
+    sandbox_network = sandbox_config.network
+    sandbox_memory = sandbox_config.memory
+    sandbox_cpus = sandbox_config.cpus
+    sandbox_runtime = sandbox_config.runtime
     # P5e-T3: plugin hook discovery is opt-in. CLI flag overrides
     # Settings. When OFF, ``discover_plugin_hooks()`` is never called
     # and bundle ``hooks:`` resolves only against BUILTIN_HOOKS — even
