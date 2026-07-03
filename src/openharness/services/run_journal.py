@@ -39,7 +39,15 @@ def get_run_dir(cwd: Path, run_id: str) -> Path:
     (basename + sha1[:12] of resolved cwd), under a sibling ``runs/`` tree.
     ``Path.home()`` evaluated at call time (NOT module scope) so the
     HOME-isolation fixture in ``tests/conftest.py`` takes effect.
+
+    Review fix (Track B T8): ``run_id`` is user-controlled (CLI flags like
+    ``--resume-run``/``oh run show`` pass it through directly) -- reject
+    any value containing a path separator or ``..`` segment rather than
+    joining it in unsanitized, which would let a crafted run_id escape the
+    intended ``runs/`` tree entirely.
     """
+    if "/" in run_id or "\\" in run_id or run_id in ("..", "."):
+        raise ValueError(f"invalid run_id {run_id!r}: must not contain path separators")
     resolved = Path(cwd).resolve()
     digest = sha1(str(resolved).encode("utf-8")).hexdigest()[:12]
     return Path.home() / ".openharness" / "runs" / f"{resolved.name}-{digest}" / run_id
@@ -186,3 +194,63 @@ def load_journal(run_dir: Path) -> list[dict[str, Any]]:
             )
         events.append(parsed)
     return events
+
+
+def get_run_started_event(events: list[dict[str, Any]], *, run_id: str) -> dict[str, Any]:
+    """Find and validate a run's original ``run_started`` event -- the
+    single source of truth for ``goal``/``worktree_path``/``branch_name``,
+    shared by every reader of the journal (``--resume-run``, ``oh run
+    show``) so there's exactly one fail-closed reconstruction to keep in
+    sync with the journal schema, not one copy per caller.
+
+    Raises ``ValueError`` (fail-closed) if no ``run_started`` event exists
+    at all, or if it's missing a required field -- never silently
+    substitutes a placeholder for genuinely corrupted/truncated input.
+    """
+    started = next((e for e in events if e.get("event") == "run_started"), None)
+    if started is None:
+        raise ValueError(
+            f"no 'run_started' event found for run {run_id!r} -- journal may be "
+            "corrupted or truncated"
+        )
+    for field in ("goal", "worktree_path", "branch_name"):
+        if field not in started:
+            raise ValueError(
+                f"'run_started' event for run {run_id!r} is missing required field "
+                f"{field!r} -- journal may be corrupted or schema-drifted"
+            )
+    return started
+
+
+def get_run_status(events: list[dict[str, Any]]) -> str:
+    """Derive the run's current status from journal event ORDER (list
+    position = chronological order, since the journal is append-only).
+
+    A ``run_resumed`` event that occurs AFTER the last ``run_finished``
+    means the run is actively executing again right now -- reports
+    "running", not the stale terminal status left over from the PRIOR
+    session (which --resume-run does not overwrite; it only appends new
+    events).
+
+    Known limitation: ``open_run_session``'s cleanup wraps its own
+    ``run_finished`` append in ``contextlib.suppress(Exception)`` (a
+    deliberate best-effort choice -- one cleanup step failing must not
+    block the others). If that specific write fails (disk full, lock
+    contention), a run that actually terminated will report "running"
+    forever, since there's no other signal a journal reader can use to
+    detect termination. Accepted for MVP; the write failure mode itself
+    is rare and this module has no way to distinguish it from a
+    genuinely still-running process without adding liveness-probing
+    machinery (e.g. a PID/heartbeat file) that isn't built yet.
+    """
+    run_finished_indices = [i for i, e in enumerate(events) if e.get("event") == "run_finished"]
+    run_resumed_indices = [i for i, e in enumerate(events) if e.get("event") == "run_resumed"]
+    if run_resumed_indices and (
+        not run_finished_indices or run_resumed_indices[-1] > run_finished_indices[-1]
+    ):
+        return "running"
+    if run_finished_indices:
+        last_finished = events[run_finished_indices[-1]]
+        status = last_finished.get("status")
+        return status if isinstance(status, str) else "unknown"
+    return "running"

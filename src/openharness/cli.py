@@ -147,7 +147,12 @@ from openharness.protocols import (
     TextBlock,
 )
 from openharness.services.decompose import DecomposeResult, decompose_goal
-from openharness.services.run_journal import get_run_dir, load_journal
+from openharness.services.run_journal import (
+    get_run_dir,
+    get_run_started_event,
+    get_run_status,
+    load_journal,
+)
 from openharness.services.run_session import RunSession, open_run_session
 from openharness.services.session_memory import get_session_memory_dir
 from openharness.services.worktree import WorktreeHandle
@@ -2572,23 +2577,24 @@ def ask(
     resume_seed_verification: GateResult | None = None
     resume_existing_worktree: WorktreeHandle | None = None
     if resume_run_id is not None:
-        resume_run_dir = get_run_dir(Path.cwd(), resume_run_id)
         try:
+            resume_run_dir = get_run_dir(Path.cwd(), resume_run_id)
             resume_events = load_journal(resume_run_dir)
         except ValueError as exc:
             typer.echo(f"--resume-run: {exc}", err=True)
             raise typer.Exit(code=1) from exc
-        resume_started_events = [
-            e for e in resume_events if e["event"] in ("run_started", "run_resumed")
-        ]
-        if not resume_started_events:
+        if not resume_events:
             typer.echo(
                 f"--resume-run: no run found with id {resume_run_id!r} (no journal at "
                 f"{resume_run_dir}).",
                 err=True,
             )
             raise typer.Exit(code=1)
-        resume_original_started = next(e for e in resume_events if e["event"] == "run_started")
+        try:
+            resume_original_started = get_run_started_event(resume_events, run_id=resume_run_id)
+        except ValueError as exc:
+            typer.echo(f"--resume-run: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
         resumed_goal = resume_original_started["goal"]
         resumed_worktree_path = resume_original_started["worktree_path"]
         resumed_branch_name = resume_original_started["branch_name"]
@@ -4495,6 +4501,100 @@ def autopilot_run_next() -> None:
         typer.echo(f"Card {card.id} failed after {_attempts} attempt(s).", err=True)
         raise typer.Exit(code=1)
     typer.echo(f"Card {card.id} completed after {_attempts} attempt(s).")
+
+
+# ----- oh run (T8: read-only run inspector) ----------------------------------
+
+run_app = typer.Typer(
+    name="run",
+    help="Inspect loop-runtime Track B runs (journal-backed repair-loop state) for the current cwd.",
+)
+app.add_typer(run_app, name="run")
+
+
+@run_app.command("show", help="Show a run's reconstructed state + journal.")
+def run_show(
+    run_id: str = typer.Argument(
+        ...,
+        help=(
+            "Run ID, from a prior --max-iter>1 or --decompose run's emitted "
+            "'run.run_id' field (a plain --isolate-only run with neither of "
+            "those has no journal to show -- journal is independent of "
+            "--isolate, gated on --max-iter>1/--decompose only)."
+        ),
+    ),
+    format: str = typer.Option(
+        "text", "--format", "-f", help="Output format: text (default) or json."
+    ),
+    tail: int = typer.Option(
+        20, "--tail", min=1, help="Number of most recent journal events to show (text format only)."
+    ),
+) -> None:
+    """Reconstructs the run's summary purely from its append-only
+    ``journal.jsonl`` -- there is no separate persisted-state file this
+    depends on (Wave 3's review found ``state.json`` is never actually
+    written in production; ``--resume-run`` was rebuilt to depend only on
+    the journal, and this command follows the same lesson). Uses the
+    shared ``get_run_started_event``/``get_run_status`` helpers so this
+    command and ``--resume-run`` reconstruct the journal identically.
+    """
+    try:
+        run_dir = get_run_dir(Path.cwd(), run_id)
+        events = load_journal(run_dir)
+    except ValueError as exc:
+        typer.echo(f"run journal at ~/.openharness/runs/.../{run_id} is malformed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if not events:
+        typer.echo(
+            f"No run found with id {run_id!r} (no journal at {run_dir}). Note: a run "
+            "only gets a journal if it used --max-iter>1 or --decompose -- a plain "
+            "--isolate-only run has none to show.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    try:
+        started = get_run_started_event(events, run_id=run_id)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    status = get_run_status(events)
+    attempt_finished_events = [e for e in events if e.get("event") == "attempt_finished"]
+
+    if format == "json":
+        import json as _json
+
+        typer.echo(
+            _json.dumps(
+                {
+                    "run_id": run_id,
+                    "goal": started["goal"],
+                    "worktree_path": started["worktree_path"],
+                    "branch_name": started["branch_name"],
+                    "status": status,
+                    "attempts": len(attempt_finished_events),
+                    "events": events,
+                }
+            )
+        )
+        return
+
+    typer.echo(f"run_id:        {run_id}")
+    typer.echo(f"goal:          {started['goal']}")
+    typer.echo(f"worktree_path: {started['worktree_path']}")
+    typer.echo(f"branch_name:   {started['branch_name']}")
+    typer.echo(f"status:        {status}")
+    typer.echo(f"attempts:      {len(attempt_finished_events)}")
+    if attempt_finished_events:
+        last = attempt_finished_events[-1]
+        typer.echo(
+            f"last_attempt:  #{last['attempt']} succeeded={last['succeeded']} "
+            f"stop_reason={last['stop_reason']}"
+        )
+    typer.echo("")
+    typer.echo(f"journal (last {tail} of {len(events)} events):")
+    for event in events[-tail:]:
+        typer.echo(f"  {event}")
 
 
 # --------------------------------------------------------------------------- #

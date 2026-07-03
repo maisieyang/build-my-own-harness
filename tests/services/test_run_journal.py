@@ -23,6 +23,8 @@ from openharness.services.run_journal import (
     RunState,
     generate_run_id,
     get_run_dir,
+    get_run_started_event,
+    get_run_status,
     load_journal,
     load_state,
 )
@@ -82,6 +84,21 @@ class TestGetRunDir:
         assert ".openharness" in run_dir.parts
         assert "runs" in run_dir.parts
         assert not run_dir.is_relative_to(cwd)
+
+    def test_path_traversal_run_id_rejected(self, tmp_path: Path) -> None:
+        """Review fix: run_id is user-controlled (--resume-run/oh run
+        show) -- must never be joined in unsanitized, or a crafted value
+        could escape the intended runs/ tree."""
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        with pytest.raises(ValueError, match="run_id"):
+            get_run_dir(cwd, "../../../../etc")
+
+    def test_bare_slash_run_id_rejected(self, tmp_path: Path) -> None:
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        with pytest.raises(ValueError, match="run_id"):
+            get_run_dir(cwd, "sub/dir")
 
 
 class TestRunJournalAppendAndState:
@@ -268,3 +285,93 @@ class TestRunStateIsFrozen:
         state = _state("run-1")
         with pytest.raises(dataclasses.FrozenInstanceError):
             state.attempt = 5  # type: ignore[misc]
+
+
+class TestGetRunStartedEvent:
+    """Review fix: shared, fail-closed reconstruction of the run's
+    original run_started event -- used by both --resume-run and
+    `oh run show` so there's exactly one place to keep in sync with the
+    journal schema."""
+
+    def test_finds_run_started_event(self) -> None:
+        events = [
+            {"event": "run_started", "goal": "fix it", "worktree_path": None, "branch_name": None},
+            {"event": "attempt_started", "attempt": 1},
+        ]
+        started = get_run_started_event(events, run_id="run-1")
+        assert started["goal"] == "fix it"
+
+    def test_missing_run_started_fails_closed(self) -> None:
+        events = [{"event": "attempt_started", "attempt": 1}]
+        with pytest.raises(ValueError, match="run_started"):
+            get_run_started_event(events, run_id="run-1")
+
+    def test_empty_events_fails_closed(self) -> None:
+        with pytest.raises(ValueError, match="run_started"):
+            get_run_started_event([], run_id="run-1")
+
+    def test_run_started_missing_required_field_fails_closed(self) -> None:
+        events = [{"event": "run_started", "goal": "fix it"}]  # missing worktree_path/branch_name
+        with pytest.raises(ValueError, match="missing required field"):
+            get_run_started_event(events, run_id="run-1")
+
+    def test_picks_original_run_started_not_a_run_resumed(self) -> None:
+        events = [
+            {
+                "event": "run_started",
+                "goal": "original goal",
+                "worktree_path": None,
+                "branch_name": None,
+            },
+            {"event": "attempt_finished", "attempt": 1},
+            {"event": "run_finished", "status": "failed"},
+            {
+                "event": "run_resumed",
+                "goal": "original goal",
+                "worktree_path": None,
+                "branch_name": None,
+            },
+        ]
+        started = get_run_started_event(events, run_id="run-1")
+        assert started["event"] == "run_started"
+        assert started["goal"] == "original goal"
+
+
+class TestGetRunStatus:
+    """Review fix: status derivation must account for event ORDER so a
+    run_resumed event after the last run_finished reports "running", not
+    a stale terminal status from the prior session."""
+
+    def test_no_events_reports_running(self) -> None:
+        assert get_run_status([]) == "running"
+
+    def test_no_run_finished_reports_running(self) -> None:
+        events = [{"event": "run_started"}, {"event": "attempt_started", "attempt": 1}]
+        assert get_run_status(events) == "running"
+
+    def test_run_finished_reports_its_status(self) -> None:
+        events = [{"event": "run_started"}, {"event": "run_finished", "status": "completed"}]
+        assert get_run_status(events) == "completed"
+
+    def test_run_resumed_after_run_finished_reports_running(self) -> None:
+        """The core review fix: a run_resumed event AFTER the last
+        run_finished means the run is actively executing again -- must
+        not report the stale terminal status."""
+        events = [
+            {"event": "run_started"},
+            {"event": "run_finished", "status": "failed"},
+            {"event": "run_resumed"},
+            {"event": "attempt_started", "attempt": 3},
+        ]
+        assert get_run_status(events) == "running"
+
+    def test_run_finished_after_run_resumed_reports_new_status(self) -> None:
+        """Once the RESUMED session itself finishes, its own (later)
+        run_finished event is authoritative."""
+        events = [
+            {"event": "run_started"},
+            {"event": "run_finished", "status": "failed"},
+            {"event": "run_resumed"},
+            {"event": "run_finished", "status": "completed"},
+        ]
+        assert get_run_status(events) == "completed"

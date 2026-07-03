@@ -185,6 +185,37 @@ class TestResumeRunValidation:
 
         assert result.exit_code == 1
 
+    def test_path_traversal_run_id_exits_1(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Review fix: --resume-run's run_id must never escape the
+        intended runs/ tree (shared fix with `oh run show`)."""
+        _set_minimum_env(monkeypatch)
+        _init_repo_and_chdir(monkeypatch, tmp_path)
+        stub = _StubApiClient(events_per_turn=[_hello_world_events()])
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_module.app,
+            [
+                "ask",
+                "-p",
+                "--resume-run",
+                "../../../../etc",
+                "--verify",
+                "true",
+                "--max-iter",
+                "3",
+                "--output-format",
+                "json",
+                "go",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "run_id" in result.stderr
+
     def test_mismatched_goal_exits_2(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         _set_minimum_env(monkeypatch)
         repo = _init_repo_and_chdir(monkeypatch, tmp_path)
