@@ -73,6 +73,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from openharness.protocols.stream_events import ApiStreamEvent
+    from openharness.services.run_journal import RunJournal
 from openai import AsyncOpenAI
 from pydantic import ValidationError
 
@@ -146,14 +147,20 @@ from openharness.protocols import (
     TextBlock,
 )
 from openharness.services.decompose import DecomposeResult, decompose_goal
+from openharness.services.run_journal import get_run_dir, load_journal
+from openharness.services.run_session import RunSession, open_run_session
 from openharness.services.session_memory import get_session_memory_dir
+from openharness.services.worktree import WorktreeHandle
 from openharness.skills.store import EmptySkillStore, FilesystemSkillStore, SkillStore
 from openharness.tools import LoadSkillTool, create_default_tool_registry
 from openharness.tools.web_fetch import WebFetch
 from openharness.tools.web_search import TavilySearchProvider, WebSearch
 from openharness.verification.gate import maybe_run_verification
 from openharness.verification.repair import GateResult, build_repair_prompt
-from openharness.verification.semantic_gate import maybe_run_semantic_verification
+from openharness.verification.semantic_gate import (
+    SemanticGateResult,
+    maybe_run_semantic_verification,
+)
 
 # Default per-call output cap. Phase 1 originally shipped 1024 (no tools),
 # but with tool-use ship (Phase 2) and especially Agent / Write tool calls
@@ -1085,6 +1092,10 @@ async def _run_repair_loop(
     verify_timeout: float,
     goal_condition: str | None = None,
     goal_condition_timeout: float = 60.0,
+    journal: RunJournal | None = None,
+    start_attempt: int = 1,
+    seed_verification: GateResult | None = None,
+    sub_goal_label: str | None = None,
     **run_ask_kwargs: Any,
 ) -> tuple[AskOutcome, int, bool]:
     """loop-runtime L4 T4: outer repair loop -- fresh-context re-invocation of
@@ -1114,19 +1125,31 @@ async def _run_repair_loop(
             "verify and goal_condition are mutually exclusive -- choose one "
             "gate (hard command check or soft LLM judge) per run"
         )
+    if start_attempt < 1:
+        raise ValueError("_run_repair_loop's start_attempt must be >= 1")
+    if start_attempt > 1 and seed_verification is None:
+        raise ValueError(
+            "_run_repair_loop requires seed_verification when start_attempt > 1 "
+            "(resuming mid-loop needs the prior attempt's gate result to build "
+            "the first repair prompt)"
+        )
 
     outcome: AskOutcome | None = None
-    attempt = 0
+    attempt = start_attempt - 1
     total_input_tokens = 0
     total_output_tokens = 0
     total_num_turns = 0
     while True:
         attempt += 1
-        if outcome is None:
-            prompt = goal
-        else:
+        if outcome is not None:
             assert outcome.verification is not None  # guaranteed: a gate is set
             prompt = build_repair_prompt(goal, attempt, outcome.verification)
+        elif seed_verification is not None:
+            prompt = build_repair_prompt(goal, attempt, seed_verification)
+        else:
+            prompt = goal
+        if journal is not None:
+            journal.append("attempt_started", attempt=attempt, sub_goal=sub_goal_label)
         outcome = await _run_ask(
             prompt,
             verify=verify,
@@ -1147,6 +1170,20 @@ async def _run_repair_loop(
             and outcome.verification is not None
             and outcome.verification.passed
         )
+        if journal is not None:
+            journal.append(
+                "attempt_finished",
+                attempt=attempt,
+                sub_goal=sub_goal_label,
+                stop_reason=outcome.stop_reason,
+                gate_passed=outcome.verification.passed
+                if outcome.verification is not None
+                else None,
+                gate_feedback=outcome.verification.feedback
+                if outcome.verification is not None
+                else None,
+                succeeded=succeeded,
+            )
         if succeeded or attempt >= max_iter:
             if outcome.print_result is not None:
                 outcome = replace(
@@ -1199,12 +1236,186 @@ async def _run_decomposed_loop(
             verify_timeout=verify_timeout,
             goal_condition=goal_condition,
             goal_condition_timeout=goal_condition_timeout,
+            sub_goal_label=sub_goal,
             **run_ask_kwargs,
         )
         sub_goal_runs.append((outcome, attempts, succeeded))
         if not succeeded:
             break
     return decompose_result, sub_goal_runs
+
+
+def _build_run_json_field(session: RunSession | None) -> dict[str, Any] | None:
+    """loop-runtime Track B T6: shape of the emitted json's ``"run"`` key,
+    additive across all three ``ask()`` dispatch branches (single-shot /
+    repair loop / decompose). ``None`` when no session was ever opened
+    (today's byte-identical default path -- no --isolate, no --max-iter>1,
+    no --decompose)."""
+    if session is None:
+        return None
+    return {
+        "run_id": session.run_id,
+        "worktree_path": str(session.worktree.path) if session.worktree is not None else None,
+        "branch_name": session.worktree.branch if session.worktree is not None else None,
+        "journal_path": (
+            str(session.journal.run_dir / "journal.jsonl") if session.journal is not None else None
+        ),
+        "status": session.status,
+    }
+
+
+def _attach_run_json_field(result_obj: dict[str, Any], session: RunSession | None) -> None:
+    """Review fix (cleanup): the single call site for folding ``"run"``
+    into a result object -- was copy-pasted across all three ``ask()``
+    dispatch branches (decompose / max_iter>1 / single-shot-with-session)."""
+    run_info = _build_run_json_field(session)
+    if run_info is not None:
+        result_obj["run"] = run_info
+
+
+async def _dispatch_ask(
+    prompt: str,
+    *,
+    decompose: bool,
+    max_iter: int,
+    isolate: bool,
+    verify: list[str] | None,
+    verify_timeout: float,
+    goal_condition: str | None,
+    goal_condition_timeout: float,
+    output_format: OutputFormat,
+    print_mode: bool,
+    common_run_ask_kwargs: dict[str, Any],
+    resume_run_id: str | None = None,
+    resume_start_attempt: int = 1,
+    resume_seed_verification: GateResult | None = None,
+    resume_existing_worktree: WorktreeHandle | None = None,
+) -> tuple[
+    AskOutcome | None,
+    int,
+    bool,
+    DecomposeResult | None,
+    list[tuple[AskOutcome, int, bool]],
+    RunSession | None,
+]:
+    """loop-runtime Track B T6: the single ``asyncio.run`` entry point that
+    replaces the three previously-independent dispatch branches
+    (decompose / max_iter>1 / single-shot). Opens ONE ``open_run_session``
+    (worktree + sandbox + journal) shared across the whole run -- every
+    sub-goal of a decompose invocation, or every attempt of a repair loop,
+    reuses the same worktree cwd and the same long-lived sandbox
+    container, instead of each attempt bootstrapping its own.
+
+    Returns ``session`` alongside the existing return values so ``ask()``
+    can fold the ``"run"`` json field into whichever branch's result
+    object it builds.
+    """
+    settings = _load_settings()
+    sandbox_config = _resolve_sandbox_config(
+        settings,
+        sandbox_override=common_run_ask_kwargs["sandbox_override"],
+        sandbox_image_override=common_run_ask_kwargs["sandbox_image_override"],
+        sandbox_network_override=common_run_ask_kwargs["sandbox_network_override"],
+        sandbox_memory_override=common_run_ask_kwargs["sandbox_memory_override"],
+        sandbox_cpus_override=common_run_ask_kwargs["sandbox_cpus_override"],
+        sandbox_runtime_override=common_run_ask_kwargs["sandbox_runtime_override"],
+    )
+    # loop-runtime Track B §4.3: journal is an independent, default-on axis
+    # for any repair-loop/decompose run -- NOT gated behind --isolate.
+    journal_enabled = decompose or max_iter > 1
+
+    # A plain single-shot call (no --isolate, no repair loop/decompose) has
+    # exactly one attempt -- there's no "reuse across attempts" for
+    # open_run_session to buy, so --sandbox alone must NOT route through
+    # it: _run_ask's own long-standing inline sandbox construction already
+    # handles that case correctly (and is what TestSandboxFlags's existing
+    # test suite mocks). Force sandbox "disabled" for the open_run_session
+    # call itself in that case so it stays a true no-op (returns None) and
+    # _run_ask's inline branch fires exactly as it always has.
+    session_sandbox_config = (
+        sandbox_config if (isolate or journal_enabled) else replace(sandbox_config, enabled=False)
+    )
+
+    outcome: AskOutcome | None = None
+    attempts = 1
+    loop_succeeded = False
+    decompose_result: DecomposeResult | None = None
+    sub_goal_runs: list[tuple[AskOutcome, int, bool]] = []
+
+    async with open_run_session(
+        cwd=Path.cwd(),
+        isolate=isolate,
+        journal_enabled=journal_enabled,
+        sandbox_config=session_sandbox_config,
+        goal=prompt,
+        run_id=resume_run_id,
+        existing_worktree=resume_existing_worktree,
+    ) as session:
+        session_kwargs = dict(common_run_ask_kwargs)
+        journal = None
+        if session is not None:
+            session_kwargs["cwd_override"] = session.cwd_override
+            session_kwargs["execution_env_override"] = session.execution_env_override
+            journal = session.journal
+
+        if decompose:
+            decompose_result, sub_goal_runs = await _run_decomposed_loop(
+                prompt,
+                verify=verify or [],
+                verify_timeout=verify_timeout,
+                goal_condition=goal_condition,
+                goal_condition_timeout=goal_condition_timeout,
+                max_iter=max_iter,
+                journal=journal,
+                **session_kwargs,
+            )
+            if sub_goal_runs:
+                outcome, attempts, loop_succeeded = sub_goal_runs[-1]
+        elif max_iter > 1:
+            outcome, attempts, loop_succeeded = await _run_repair_loop(
+                prompt,
+                max_iter=max_iter,
+                verify=verify or [],
+                verify_timeout=verify_timeout,
+                goal_condition=goal_condition,
+                goal_condition_timeout=goal_condition_timeout,
+                journal=journal,
+                start_attempt=resume_start_attempt,
+                seed_verification=resume_seed_verification,
+                **session_kwargs,
+            )
+        else:
+            # suppress_echo when a session exists: session.status (needed
+            # in the "run" field) is only known AFTER this call returns,
+            # so ask() builds+echoes the final json itself in that case
+            # instead of letting _run_ask do it internally mid-call.
+            outcome = await _run_ask(
+                prompt,
+                output_format=output_format,
+                print_mode=print_mode,
+                verify=verify,
+                verify_timeout=verify_timeout,
+                goal_condition=goal_condition,
+                goal_condition_timeout=goal_condition_timeout,
+                suppress_echo=session is not None,
+                **session_kwargs,
+            )
+
+        if session is not None:
+            if decompose:
+                session_success = (
+                    decompose_result is not None
+                    and decompose_result.ok
+                    and bool(sub_goal_runs)
+                    and all(s for _, _, s in sub_goal_runs)
+                )
+            elif max_iter > 1:
+                session_success = loop_succeeded
+            else:
+                session_success = outcome is not None and outcome.stop_reason == "end_turn"
+            session.status = "completed" if session_success else "failed"
+
+    return outcome, attempts, loop_succeeded, decompose_result, sub_goal_runs, session
 
 
 # --------------------------------------------------------------------------- #
@@ -1962,6 +2173,32 @@ def ask(
             "sub-goal's repair loop."
         ),
     ),
+    isolate: bool = typer.Option(
+        False,
+        "--isolate",
+        help=(
+            "loop-runtime Track B (L7): run in a fresh git worktree instead "
+            "of mutating the live cwd. Not tied to --max-iter/--decompose -- "
+            "a plain single-shot run can opt in too. Requires -p/--print and "
+            "--output-format json. Repo must be a git working tree with no "
+            "uncommitted changes at start. The worktree is auto-removed if "
+            "unchanged; kept (path/branch reported in the emitted json's "
+            "'run' field) if it has any diff, regardless of success/failure."
+        ),
+    ),
+    resume_run_id: str | None = typer.Option(
+        None,
+        "--resume-run",
+        help=(
+            "loop-runtime Track B (L4 limitation ②): resume a prior "
+            "repair-loop RUN (attempt count, worktree, journal) by its "
+            "run_id from the emitted json's 'run' field -- NOT the same as "
+            "--resume/--resume-id, which replay CONVERSATION history "
+            "instead. Mutually exclusive with --resume/--resume-id and "
+            "--decompose. The positional prompt must match the resumed "
+            "run's original goal exactly (fail-closed on mismatch)."
+        ),
+    ),
     log_level: LogLevel | None = typer.Option(
         None,
         "--log-level",
@@ -2217,6 +2454,23 @@ def ask(
         )
         raise typer.Exit(code=2)
 
+    # loop-runtime Track B (L7): ``--isolate`` mirrors the same shape but is
+    # deliberately NOT gated behind --max-iter>1/--decompose (decoupled
+    # from loop scope per the approved design -- a plain single-shot run
+    # can opt into worktree isolation too).
+    if isolate and not print_mode:
+        typer.echo(
+            "--isolate only applies in headless print mode (-p/--print).",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if isolate and output_format != "json":
+        typer.echo(
+            "--isolate only supports --output-format json.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
     # loop-runtime L3: ``--verify`` needs a headless run (T2 scope: flag +
     # validation + threading only; execution lands in T3/T4).
     if verify and not print_mode:
@@ -2254,6 +2508,152 @@ def ask(
             err=True,
         )
         raise typer.Exit(code=2)
+
+    # loop-runtime Track B (L4 limitation ②): ``--resume-run`` is a NEW,
+    # orthogonal axis -- it replays repair-loop RUN state (attempt count,
+    # worktree, journal), not conversation history like --resume/
+    # --resume-id. Deliberately NOT a fusion of the two (see design
+    # rationale in tasks/loop-runtime-trackb-plan.md §3.4.2). Checked
+    # ahead of --max-iter's own --resume/--resume-id check below so a run
+    # combining --resume-run with a conflict that --max-iter would ALSO
+    # reject surfaces the --resume-run-specific message first.
+    if resume_run_id is not None and (resume or resume_id is not None):
+        typer.echo(
+            "--resume-run is incompatible with --resume/--resume-id -- "
+            "--resume-run replays repair-loop RUN state (attempt count, "
+            "worktree, journal), while --resume/--resume-id replay "
+            "CONVERSATION history; combining them would inject full prior "
+            "message history into every fresh repair attempt, breaking the "
+            "loop's fresh-context guarantee.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if resume_run_id is not None and decompose:
+        typer.echo(
+            "--resume-run is incompatible with --decompose -- resuming a "
+            "specific sub-goal boundary inside a multi-sub-goal decompose "
+            "run is a bigger design that isn't supported yet.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if resume_run_id is not None and not print_mode:
+        typer.echo(
+            "--resume-run only applies in headless print mode (-p/--print).",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if resume_run_id is not None and output_format != "json":
+        typer.echo(
+            "--resume-run only supports --output-format json.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if resume_run_id is not None and not verify and not goal_condition:
+        typer.echo(
+            "--resume-run requires --verify or --goal-condition (nothing to "
+            "gate the resumed repair loop on).",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    # Runtime (not static) resume-state loading: reconstructs
+    # start_attempt/seed_verification/existing worktree from the resumed
+    # run's own journal.jsonl -- NOT a separate persisted-state file (the
+    # journal's "run_started" event already carries goal/worktree_path/
+    # branch_name, and "attempt_finished" events carry gate results; a
+    # single source of truth avoids depending on a second write path that
+    # could silently fall out of sync with what the journal records). A
+    # pure sync file read (no event loop needed yet) -- kept in this
+    # synchronous section so failures here use the same
+    # typer.Exit(code=1) "runtime problem" convention as --isolate's
+    # WorktreeError translation, not code=2 (reserved for static
+    # flag-combination errors above).
+    resume_start_attempt = 1
+    resume_seed_verification: GateResult | None = None
+    resume_existing_worktree: WorktreeHandle | None = None
+    if resume_run_id is not None:
+        resume_run_dir = get_run_dir(Path.cwd(), resume_run_id)
+        try:
+            resume_events = load_journal(resume_run_dir)
+        except ValueError as exc:
+            typer.echo(f"--resume-run: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        resume_started_events = [
+            e for e in resume_events if e["event"] in ("run_started", "run_resumed")
+        ]
+        if not resume_started_events:
+            typer.echo(
+                f"--resume-run: no run found with id {resume_run_id!r} (no journal at "
+                f"{resume_run_dir}).",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        resume_original_started = next(e for e in resume_events if e["event"] == "run_started")
+        resumed_goal = resume_original_started["goal"]
+        resumed_worktree_path = resume_original_started["worktree_path"]
+        resumed_branch_name = resume_original_started["branch_name"]
+        if prompt != resumed_goal:
+            typer.echo(
+                "--resume-run: the given prompt does not match the resumed "
+                f"run's original goal ({resumed_goal!r}) -- refusing to guess "
+                "which one is authoritative.",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        finished_events = [e for e in resume_events if e["event"] == "attempt_finished"]
+        if not finished_events:
+            typer.echo(
+                f"--resume-run: run {resume_run_id!r} has no completed attempts to resume from.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        last_finished = finished_events[-1]
+        # loop-runtime Track B review note: the journal only ever stores
+        # the flattened passed/feedback pair (not a hard gate's per-step
+        # stdout/stderr), so the resumed attempt's first repair prompt
+        # uses generic judge-style wording regardless of whether the
+        # original gate was --verify or --goal-condition. Still factually
+        # correct (feedback carries the real failure summary either way)
+        # -- just less detailed than an uninterrupted continuation would
+        # have been. Accepted for MVP; richer reconstruction would need
+        # the journal to also persist per-step detail, which isn't
+        # currently captured.
+        resume_seed_verification = SemanticGateResult(
+            passed=bool(last_finished["gate_passed"]),
+            feedback=last_finished["gate_feedback"] or "",
+        )
+        resume_start_attempt = int(last_finished["attempt"]) + 1
+        if resume_start_attempt > max_iter:
+            typer.echo(
+                f"--resume-run: resumed run already reached --max-iter={max_iter} "
+                f"(last completed attempt {resume_start_attempt - 1}) -- nothing "
+                "left to resume; pass a higher --max-iter to allow further attempts.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        # isolate is inherited from the resumed run's own worktree
+        # presence (a structural fact -- either the worktree exists or it
+        # doesn't -- not a fresh choice the resuming invocation gets to
+        # make); --isolate has no --no-isolate counterpart to distinguish
+        # "explicitly false" from "not passed", so silently using the
+        # resumed value (no warning) avoids a false-positive "ignoring
+        # your flag" message on the common no-flag resume invocation.
+        isolate = resumed_worktree_path is not None
+        if resumed_worktree_path is not None:
+            worktree_path = Path(resumed_worktree_path)
+            if not worktree_path.exists():
+                typer.echo(
+                    f"--resume-run: the resumed run's worktree no longer exists at "
+                    f"{worktree_path} -- it may have been cleaned up or moved.",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            resume_existing_worktree = WorktreeHandle(
+                path=worktree_path,
+                branch=resumed_branch_name or "",
+                base_ref="",
+                repo_root=Path.cwd(),
+            )
 
     # loop-runtime L4 T3: ``--max-iter`` needs a gate to repair against
     # (T3 scope: flag + validation only; the actual repair loop lands in T4).
@@ -2294,6 +2694,7 @@ def ask(
             err=True,
         )
         raise typer.Exit(code=2)
+
     permission_mode_override: PermissionMode | None = None
     if dry_run:
         permission_mode_override = PermissionMode.DRY_RUN
@@ -2338,46 +2739,31 @@ def ask(
     loop_succeeded = False
     decompose_result: DecomposeResult | None = None
     sub_goal_runs: list[tuple[AskOutcome, int, bool]] = []
+    session: RunSession | None = None
     try:
-        if decompose:
-            decompose_result, sub_goal_runs = asyncio.run(
-                _run_decomposed_loop(
-                    prompt,
-                    verify=verify or [],
-                    verify_timeout=verify_timeout,
-                    goal_condition=goal_condition,
-                    goal_condition_timeout=goal_condition_timeout,
-                    max_iter=max_iter,
-                    **common_run_ask_kwargs,
-                )
+        # loop-runtime Track B T6: ONE asyncio.run entry point (was three
+        # independent ones, one per branch) so all three branches can share
+        # a single open_run_session (worktree/sandbox/journal) for the
+        # whole run.
+        outcome, attempts, loop_succeeded, decompose_result, sub_goal_runs, session = asyncio.run(
+            _dispatch_ask(
+                prompt,
+                decompose=decompose,
+                max_iter=max_iter,
+                isolate=isolate,
+                verify=verify,
+                verify_timeout=verify_timeout,
+                goal_condition=goal_condition,
+                goal_condition_timeout=goal_condition_timeout,
+                output_format=output_format,
+                print_mode=print_mode,
+                common_run_ask_kwargs=common_run_ask_kwargs,
+                resume_run_id=resume_run_id,
+                resume_start_attempt=resume_start_attempt,
+                resume_seed_verification=resume_seed_verification,
+                resume_existing_worktree=resume_existing_worktree,
             )
-            if sub_goal_runs:
-                outcome, attempts, loop_succeeded = sub_goal_runs[-1]
-        elif max_iter > 1:
-            outcome, attempts, loop_succeeded = asyncio.run(
-                _run_repair_loop(
-                    prompt,
-                    max_iter=max_iter,
-                    verify=verify or [],
-                    verify_timeout=verify_timeout,
-                    goal_condition=goal_condition,
-                    goal_condition_timeout=goal_condition_timeout,
-                    **common_run_ask_kwargs,
-                )
-            )
-        else:
-            outcome = asyncio.run(
-                _run_ask(
-                    prompt,
-                    output_format=output_format,
-                    print_mode=print_mode,
-                    verify=verify,
-                    verify_timeout=verify_timeout,
-                    goal_condition=goal_condition,
-                    goal_condition_timeout=goal_condition_timeout,
-                    **common_run_ask_kwargs,
-                )
-            )
+        )
     except ValidationError as exc:
         # Configuration error (Settings missing OPENHARNESS_API_KEY etc.):
         # name the missing fields without dumping a stack trace.
@@ -2496,6 +2882,7 @@ def ask(
                 )
             ],
         }
+        _attach_run_json_field(result_obj, session)
         typer.echo(json.dumps(result_obj))
         if not decompose_result.ok or not all(succeeded_flags):
             typer.echo(
@@ -2519,10 +2906,35 @@ def ask(
             outcome.print_result, session_id=new_run_id(), verification=outcome.verification
         )
         result_obj["attempts"] = attempts
+        _attach_run_json_field(result_obj, session)
         typer.echo(json.dumps(result_obj))
         if not loop_succeeded:
             typer.echo(
                 f"repair loop did not pass verification within --max-iter={max_iter} attempts",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        return
+
+    # loop-runtime Track B T6: single-shot (max_iter==1, no decompose) WITH
+    # a session opened (--isolate and/or -- in practice journal_enabled is
+    # False here since it's gated on max_iter>1/decompose -- so this is
+    # specifically the --isolate-alone case). _dispatch_ask suppressed
+    # _run_ask's own internal echo so session.status (known only after the
+    # call returns) can be folded into the "run" field here.
+    if session is not None:
+        import json
+
+        assert outcome is not None
+        assert outcome.print_result is not None
+        result_obj = build_result_obj(
+            outcome.print_result, session_id=new_run_id(), verification=outcome.verification
+        )
+        _attach_run_json_field(result_obj, session)
+        typer.echo(json.dumps(result_obj))
+        if outcome.stop_reason != "end_turn":
+            typer.echo(
+                f"run did not complete cleanly (stop_reason={outcome.stop_reason or 'none'})",
                 err=True,
             )
             raise typer.Exit(code=1)

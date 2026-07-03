@@ -106,6 +106,22 @@ async def create_worktree(
     )
 
 
+async def verify_existing_worktree(handle: WorktreeHandle) -> None:
+    """Review fix (Track B T7 ``--resume-run``): confirm a caller-supplied
+    ``WorktreeHandle`` (reconstructed from persisted state, not returned by
+    :func:`create_worktree`) still points at a real, registered git
+    worktree before reusing it -- ``create_worktree``'s own validation is
+    bypassed when a handle is supplied directly, so a stale or
+    concurrently-``git worktree remove``d path must fail closed here
+    instead of surfacing as an opaque error deep inside the resumed run.
+    """
+    if not handle.path.exists():
+        raise WorktreeError(f"worktree path {handle.path} no longer exists")
+    returncode, _, stderr = await _run_git(["rev-parse", "--is-inside-work-tree"], cwd=handle.path)
+    if returncode != 0:
+        raise WorktreeError(f"{handle.path} is no longer a registered git worktree: {stderr}")
+
+
 async def remove_worktree(handle: WorktreeHandle, *, force: bool = False) -> None:
     args = ["worktree", "remove"]
     if force:

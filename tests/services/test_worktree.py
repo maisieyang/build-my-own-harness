@@ -22,6 +22,7 @@ from openharness.services.worktree import (
     WorktreeHandle,
     create_worktree,
     remove_worktree,
+    verify_existing_worktree,
 )
 
 
@@ -132,6 +133,42 @@ class TestCreateWorktreeSuccess:
             assert not handle.path.is_relative_to(repo)
         finally:
             await remove_worktree(handle, force=True)
+
+
+class TestVerifyExistingWorktree:
+    """Review fix (Track B T7): reused WorktreeHandles (reconstructed from
+    persisted state, not returned by create_worktree) must be validated
+    before use -- a stale/removed path must fail closed as WorktreeError."""
+
+    async def test_valid_worktree_passes(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        handle = await create_worktree(repo, run_id="test-run-7", worktrees_root=tmp_path / "wt")
+
+        await verify_existing_worktree(handle)  # must not raise
+
+        await remove_worktree(handle, force=True)
+
+    async def test_nonexistent_path_fails_closed(self, tmp_path: Path) -> None:
+        handle = WorktreeHandle(
+            path=tmp_path / "never-existed",
+            branch="openharness/run/ghost",
+            base_ref="",
+            repo_root=tmp_path,
+        )
+        with pytest.raises(WorktreeError):
+            await verify_existing_worktree(handle)
+
+    async def test_removed_worktree_fails_closed(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        handle = await create_worktree(repo, run_id="test-run-8", worktrees_root=tmp_path / "wt")
+        await remove_worktree(handle, force=True)
+
+        with pytest.raises(WorktreeError):
+            await verify_existing_worktree(handle)
 
 
 class TestRemoveWorktree:

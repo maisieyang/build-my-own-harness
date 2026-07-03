@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from openharness.execution.sandbox import SandboxExecution
-from openharness.services.run_journal import RunJournal, generate_run_id, get_run_dir
-from openharness.services.worktree import create_worktree, remove_worktree
+from openharness.services.run_journal import RunJournal, generate_run_id, get_run_dir, load_journal
+from openharness.services.worktree import create_worktree, remove_worktree, verify_existing_worktree
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -52,8 +52,23 @@ async def open_run_session(
     isolate: bool,
     journal_enabled: bool,
     sandbox_config: SandboxConfig,
+    goal: str = "",
     run_id: str | None = None,
+    existing_worktree: WorktreeHandle | None = None,
 ) -> AsyncIterator[RunSession | None]:
+    """``existing_worktree``: loop-runtime Track B T7 (``--resume-run``) --
+    when given (and ``isolate``), reuse this already-on-disk worktree
+    instead of calling ``create_worktree`` (still independently
+    revalidated via ``verify_existing_worktree`` -- a caller-supplied
+    handle skips ``create_worktree``'s own validation, so a stale or
+    concurrently-removed worktree must still fail closed here). The
+    caller (``ask()``) reconstructs the handle from the resumed run's
+    journal, not ``create_worktree``'s return value.
+
+    ``goal``: recorded on the ``run_started``/``run_resumed`` journal
+    event so ``--resume-run`` can later validate the resumed goal without
+    depending on a separate persisted-state file.
+    """
     if not isolate and not journal_enabled and not sandbox_config.enabled:
         yield None
         return
@@ -76,14 +91,30 @@ async def open_run_session(
     # checks, so it safely no-ops for whatever wasn't actually created.
     try:
         if isolate:
-            handle = await create_worktree(cwd, run_id=resolved_run_id)
+            if existing_worktree is not None:
+                await verify_existing_worktree(existing_worktree)
+                handle = existing_worktree
+            else:
+                handle = await create_worktree(cwd, run_id=resolved_run_id)
             session.worktree = handle
             session.cwd_override = handle.path
 
         if journal_enabled:
             journal = RunJournal(get_run_dir(cwd, resolved_run_id), resolved_run_id)
             session.journal = journal
-            journal.append("run_started", attempt=None)
+            # A resumed run's journal already has a "run_started" event --
+            # append "run_resumed" instead so a single journal.jsonl never
+            # ends up with two "run_started" markers (which would make it
+            # look like two runs concatenated in one file to any future
+            # tooling reconstructing run duration/count from the journal).
+            is_resume = any(e["event"] == "run_started" for e in load_journal(journal.run_dir))
+            journal.append(
+                "run_resumed" if is_resume else "run_started",
+                attempt=None,
+                goal=goal,
+                worktree_path=str(session.worktree.path) if session.worktree is not None else None,
+                branch_name=session.worktree.branch if session.worktree is not None else None,
+            )
 
         if sandbox_config.enabled:
             sandbox = SandboxExecution(

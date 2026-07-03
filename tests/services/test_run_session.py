@@ -276,6 +276,59 @@ class TestOpenRunSessionWorktree:
         assert not worktree_path.exists()
 
 
+class TestOpenRunSessionExistingWorktreeReuse:
+    """loop-runtime Track B T7: ``--resume-run`` reopens an ALREADY
+    existing worktree (from a prior, crashed/exhausted run) instead of
+    creating a new one via ``create_worktree``."""
+
+    async def test_existing_worktree_is_reused_not_recreated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from openharness.services import worktree as worktree_module
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+
+        # Simulate a prior run's worktree already on disk (as if created by
+        # an earlier open_run_session call that then crashed).
+        prior_worktree_root = tmp_path / "prior-worktree"
+        subprocess.run(
+            ["git", "worktree", "add", "-b", "openharness/run/prior-run", str(prior_worktree_root)],
+            cwd=repo,
+            check=True,
+        )
+        existing_handle = WorktreeHandle(
+            path=prior_worktree_root,
+            branch="openharness/run/prior-run",
+            base_ref="",
+            repo_root=repo,
+        )
+
+        create_worktree_calls: list[object] = []
+        real_create_worktree = worktree_module.create_worktree
+
+        async def _spying_create_worktree(*args: object, **kwargs: object) -> object:
+            create_worktree_calls.append((args, kwargs))
+            return await real_create_worktree(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(run_session_module, "create_worktree", _spying_create_worktree)
+
+        async with open_run_session(
+            cwd=repo,
+            isolate=True,
+            journal_enabled=False,
+            sandbox_config=_sandbox_config(enabled=False),
+            existing_worktree=existing_handle,
+        ) as session:
+            assert session is not None
+            assert session.worktree is existing_handle
+            assert session.cwd_override == prior_worktree_root
+            session.status = "completed"
+
+        assert create_worktree_calls == []  # create_worktree never called
+
+
 class TestOpenRunSessionSandbox:
     async def test_sandbox_enabled_constructs_exactly_once(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
