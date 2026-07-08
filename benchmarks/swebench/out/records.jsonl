@@ -1,0 +1,1 @@
+{"instance_id": "psf__requests-2317", "status": "completed", "stop_reason": "end_turn", "exit_code": 0, "num_turns": 13, "input_tokens": 66701, "output_tokens": 7385, "duration_s": 154.98, "detail": null, "patch_lines": 13, "model_name_or_path": "openharness-0.4.0+qwen3.7-max"}
