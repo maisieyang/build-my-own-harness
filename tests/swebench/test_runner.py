@@ -172,6 +172,29 @@ class TestRunInstance:
         assert result.status == "timeout"
         assert result.model_patch == "partial diff\n"
 
+    def test_api_transport_failure_gets_own_status(self, tmp_path: Path) -> None:
+        """全量前发现: DashScope mid-stream disconnects were lumped into
+        invalid-envelope — taxonomy needs environment noise separated from
+        parse problems. The oh CLI renders every API-layer death as
+        'Request failed (HTTP ...' on stderr; key on that."""
+
+        def invoke(inv: Invocation) -> InvocationResult:
+            return InvocationResult(
+                exit_code=1,
+                stdout="",
+                stderr=(
+                    "Request failed (HTTP unknown): Unexpected error: peer "
+                    "closed connection without sending complete message body"
+                ),
+            )
+
+        result = run_instance(
+            make_instance(), tmp_path, RunConfig(), invoke=invoke, extract=lambda ws: ""
+        )
+
+        assert result.status == "api-failed"
+        assert "peer closed" in (result.detail or "")
+
     def test_invalid_envelope_is_differentiated_not_raised(self, tmp_path: Path) -> None:
         def invoke(inv: Invocation) -> InvocationResult:
             return InvocationResult(exit_code=1, stdout="Error: boom, no json here", stderr="trace")

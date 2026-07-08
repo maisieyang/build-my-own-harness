@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from openharness.swebench.batch import BatchPaths, run_batch
+from openharness.swebench.batch import BatchPaths, prune_failed, run_batch
 from openharness.swebench.model import SWEBenchInstance
 from openharness.swebench.runner import InvocationResult, RunConfig
 from openharness.swebench.workspace import WorkspaceError
@@ -130,6 +130,47 @@ class TestRunBatch:
         row = read_jsonl(paths.predictions_path)[0]
         assert "qwen3.7-max" in row["model_name_or_path"]
         assert "default" not in row["model_name_or_path"]
+
+    def test_retry_failed_prunes_then_rerun_picks_them_up(self, tmp_path: Path) -> None:
+        """A/B round needed hand-surgery on the jsonl files to retry the 3
+        transport-failed instances — prune_failed is that surgery as a
+        first-class op: drop every non-completed instance's rows from BOTH
+        tracks so the normal resume path re-runs exactly those."""
+        paths = make_paths(tmp_path)
+        flaky_calls: list[str] = []
+
+        def flaky_invoke(inv: Invocation) -> InvocationResult:
+            flaky_calls.append("x")
+            if len(flaky_calls) == 2:  # second instance dies mid-stream
+                return InvocationResult(
+                    exit_code=1, stdout="", stderr="Request failed (HTTP unknown): peer closed"
+                )
+            return good_invoke(inv)
+
+        kwargs: dict[str, Any] = {
+            "ensure_cache": lambda root, repo: root / "fake.git",
+            "prepare": lambda cache, commit, dest: None,
+            "extract": lambda ws: "d\n",
+        }
+        instances = [make_instance(1), make_instance(2), make_instance(3)]
+        run_batch(instances, paths, RunConfig(), invoke=flaky_invoke, **kwargs)
+
+        pruned = prune_failed(paths)
+
+        assert pruned == {"acme__widget-2"}
+        assert len(read_jsonl(paths.predictions_path)) == 2
+        assert len(read_jsonl(paths.records_path)) == 2
+
+        summary = run_batch(instances, paths, RunConfig(), invoke=good_invoke, **kwargs)
+
+        assert summary.total == 1  # only the pruned instance re-ran
+        assert summary.skipped == 2
+        records = read_jsonl(paths.records_path)
+        assert len(records) == 3
+        assert all(r["status"] == "completed" for r in records)
+
+    def test_prune_failed_on_missing_files_is_noop(self, tmp_path: Path) -> None:
+        assert prune_failed(make_paths(tmp_path)) == set()
 
     def test_resume_skips_already_predicted_instances(self, tmp_path: Path) -> None:
         paths = make_paths(tmp_path)

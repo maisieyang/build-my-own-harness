@@ -14,7 +14,7 @@ from pathlib import Path
 
 import typer
 
-from openharness.swebench.batch import BatchPaths, run_batch
+from openharness.swebench.batch import BatchPaths, prune_failed, run_batch
 from openharness.swebench.errors import SWEBenchError
 from openharness.swebench.fetch import fetch_dataset
 from openharness.swebench.model import load_instances
@@ -136,6 +136,15 @@ def run(
             "小批 showed real fixes at 8-19 turns against oh's 20 default)."
         ),
     ),
+    retry_failed: bool = typer.Option(
+        False,
+        "--retry-failed",
+        help=(
+            "Before running, drop every non-completed instance's rows from "
+            "predictions/records so resume re-runs exactly those. Only use "
+            "when no other batch is appending to the output files."
+        ),
+    ),
     root: Path = typer.Option(
         _ROOT,
         "--root",
@@ -159,6 +168,10 @@ def run(
         predictions_path=root / "out" / "predictions.jsonl",
         records_path=root / "out" / "records.jsonl",
     )
+    if retry_failed:
+        pruned = prune_failed(paths)
+        typer.echo(f"retry-failed: pruned {len(pruned)} instance(s) for re-run")
+
     pinned_model, env_overrides = _pin_config(model)
     base_env = {**os.environ, **env_overrides} if env_overrides is not None else None
     config = RunConfig(model=pinned_model, sandbox=sandbox, timeout_s=timeout, max_turns=max_turns)

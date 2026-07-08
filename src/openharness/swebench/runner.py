@@ -221,9 +221,13 @@ def run_instance(
 
     envelope = _parse_envelope(result.stdout)
     if envelope is None:
+        # "Request failed (HTTP ..." is the oh CLI's rendering of every
+        # API-layer death (transport disconnects, 4xx/5xx). Environment
+        # noise must not be lumped with parse problems in the taxonomy.
+        api_failed = "Request failed (HTTP" in result.stderr
         return InstanceRunResult(
             instance_id=instance.instance_id,
-            status="invalid-envelope",
+            status="api-failed" if api_failed else "invalid-envelope",
             model_patch=patch,
             exit_code=result.exit_code,
             duration_s=duration_s,

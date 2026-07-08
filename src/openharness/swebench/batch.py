@@ -97,6 +97,39 @@ def load_completed_ids(predictions_path: Path) -> set[str]:
     return ids
 
 
+def prune_failed(paths: BatchPaths) -> set[str]:
+    """Drop every non-``completed`` instance's rows from BOTH tracks so the
+    normal resume path re-runs exactly those (the A/B round did this by
+    hand-editing jsonl; ``--retry-failed`` makes it a first-class op).
+
+    Never run this while a batch is appending to the files. Returns the
+    pruned instance ids.
+    """
+    if not paths.records_path.is_file():
+        return set()
+    failed: set[str] = set()
+    for line in paths.records_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if isinstance(row, dict) and row.get("status") != "completed":
+            instance_id = row.get("instance_id")
+            if isinstance(instance_id, str):
+                failed.add(instance_id)
+    if not failed:
+        return set()
+    for path in (paths.predictions_path, paths.records_path):
+        if not path.is_file():
+            continue
+        kept = [
+            line
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and json.loads(line).get("instance_id") not in failed
+        ]
+        path.write_text("".join(row + "\n" for row in kept), encoding="utf-8")
+    return failed
+
+
 def _append_jsonl(path: Path, obj: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
