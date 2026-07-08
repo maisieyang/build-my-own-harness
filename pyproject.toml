@@ -249,6 +249,10 @@ branch = true
 omit = [
     "src/openharness/__main__.py",
     "src/openharness/eval/*",
+    # swebench/ is the benchmark adapter (decisions/40 D40.1) — same
+    # experimental posture as eval/: tests run in CI, excluded from the
+    # stable-core coverage gate until it graduates.
+    "src/openharness/swebench/*",
 ]
 
 [tool.coverage.report]

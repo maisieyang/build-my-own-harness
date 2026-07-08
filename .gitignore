@@ -62,3 +62,11 @@ docs/ideas/resume-*.md
 # Private conversation transcripts dropped at repo root (e.g.,
 # personal-life reflections) — not project narrative
 /conversation_*.md
+
+# SWE-bench adapter (decisions/40): cache + workspaces + dataset are
+# re-derivable working state; out/*.jsonl (predictions + records) are the
+# run evidence — explicitly un-ignored past the global *.jsonl rule.
+benchmarks/swebench/cache/
+benchmarks/swebench/workspaces/
+benchmarks/swebench/dataset/
+!benchmarks/swebench/out/*.jsonl

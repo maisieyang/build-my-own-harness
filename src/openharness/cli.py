@@ -4503,6 +4503,13 @@ def autopilot_run_next() -> None:
     typer.echo(f"Card {card.id} completed after {_attempts} attempt(s).")
 
 
+# ----- oh bench (D40: benchmark adapters; sub-app lives in swebench/cli.py) --
+
+from openharness.swebench.cli import bench_app  # noqa: E402
+
+app.add_typer(bench_app, name="bench")
+
+
 # ----- oh run (T8: read-only run inspector) ----------------------------------
 
 run_app = typer.Typer(
