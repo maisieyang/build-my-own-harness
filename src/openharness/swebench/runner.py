@@ -39,6 +39,10 @@ class RunConfig:
     model: str | None = None
     sandbox: bool = False
     timeout_s: float = 1800.0
+    # 小批 finding: real fixes ran 8-19 turns against oh's 20 default —
+    # astropy-14182 died on the cap. 40 gives headroom without letting a
+    # stuck run burn tokens forever (the wall-clock timeout still bounds it).
+    max_turns: int = 40
     oh_command: tuple[str, ...] = ("oh",)
 
 
@@ -98,6 +102,8 @@ def build_argv(prompt: str, config: RunConfig) -> list[str]:
         "json",
         "--no-skills",
         "--no-commands",
+        "--max-turns",
+        str(config.max_turns),
     ]
     if config.model is not None:
         argv += ["--model", config.model]
@@ -179,7 +185,7 @@ def run_instance(
     taxonomy keeps its raw material. A timed-out run still extracts the
     partial patch: best-effort work is a legitimate submission.
     """
-    prompt = build_prompt(instance)
+    prompt = build_prompt(instance, executable=config.sandbox)
     env = build_env(os.environ if base_env is None else base_env, sandbox=config.sandbox)
     invocation = Invocation(
         argv=build_argv(prompt, config),

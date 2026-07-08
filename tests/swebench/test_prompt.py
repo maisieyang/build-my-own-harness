@@ -62,3 +62,29 @@ class TestBuildPrompt:
 
         assert "/Users/" not in prompt
         assert "/home/" not in prompt
+
+
+class TestExecutableEnvironmentStatement:
+    """小批 finding (D40 M1): without Bash the model wrote repro/test
+    scripts it could never run — 3/5 patches polluted, tokens wasted. The
+    prompt must state the actual capability surface: non-executable by
+    default, executable when the run carries --sandbox."""
+
+    def test_default_declares_non_executable_and_forbids_scratch_files(self) -> None:
+        prompt = build_prompt(make_instance())
+        lowered = prompt.lower()
+
+        assert "cannot execute" in lowered
+        assert "do not create" in lowered
+
+    def test_sandbox_run_drops_the_non_executable_statement(self) -> None:
+        prompt = build_prompt(make_instance(), executable=True)
+        lowered = prompt.lower()
+
+        assert "cannot execute" not in lowered
+
+    def test_firewall_holds_in_both_modes(self) -> None:
+        for executable in (False, True):
+            prompt = build_prompt(make_instance(), executable=executable)
+            assert GOLD_PATCH_SENTINEL not in prompt
+            assert F2P_SENTINEL not in prompt

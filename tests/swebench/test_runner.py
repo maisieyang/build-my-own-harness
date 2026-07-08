@@ -71,6 +71,15 @@ class TestBuildArgv:
     def test_no_model_flag_when_default(self) -> None:
         assert "--model" not in build_argv("g", RunConfig())
 
+    def test_max_turns_default_40_and_overridable(self) -> None:
+        """小批 finding: astropy-14182 died on the 20-turn cap (astropy-6938
+        finished at 19 — right against it). SWE-bench tasks need headroom."""
+        argv = build_argv("g", RunConfig())
+        assert argv[argv.index("--max-turns") + 1] == "40"
+
+        argv = build_argv("g", RunConfig(max_turns=60))
+        assert argv[argv.index("--max-turns") + 1] == "60"
+
 
 class TestBuildEnv:
     def test_write_tools_allowed_bash_denied_without_sandbox(self) -> None:

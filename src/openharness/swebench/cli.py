@@ -127,6 +127,15 @@ def run(
         "--timeout",
         help="Per-instance wall-clock timeout in seconds.",
     ),
+    max_turns: int = typer.Option(
+        40,
+        "--max-turns",
+        min=1,
+        help=(
+            "Agent-loop turn cap passed to `oh ask --max-turns` (default 40: "
+            "小批 showed real fixes at 8-19 turns against oh's 20 default)."
+        ),
+    ),
     root: Path = typer.Option(
         _ROOT,
         "--root",
@@ -152,7 +161,7 @@ def run(
     )
     pinned_model, env_overrides = _pin_config(model)
     base_env = {**os.environ, **env_overrides} if env_overrides is not None else None
-    config = RunConfig(model=pinned_model, sandbox=sandbox, timeout_s=timeout)
+    config = RunConfig(model=pinned_model, sandbox=sandbox, timeout_s=timeout, max_turns=max_turns)
     summary = run_batch(instances, paths, config, base_env=base_env, on_progress=typer.echo)
 
     status_line = ", ".join(f"{k}={v}" for k, v in sorted(summary.by_status.items())) or "none"
