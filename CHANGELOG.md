@@ -15,6 +15,28 @@ records + framework-level lessons), see
 
 ## [Unreleased]
 
+### Added — SWE-bench Lite adapter (benchmark track M1, decisions/40)
+
+`oh bench swebench fetch / run` — drive the shipped `oh` CLI over
+SWE-bench Lite and emit sb-cli-ready `predictions.jsonl` plus a
+per-instance `records.jsonl` (the failure-taxonomy raw material).
+The adapter is a *consumer* of the harness (subprocess-driven, D40.2):
+headless fail-closed permissions with explicit `Edit/Write` allow rules
+(`Bash(*)` only under `--sandbox`, D40.6), memory/snapshot forced off,
+answer-leaking dataset fields (gold patch / hidden tests / hints)
+firewalled out of prompt, argv, env, and repr (D40.3 红线, sentinel-
+tested). Batch runs are serial, failure-isolated, and resumable; model
+AND endpoint/key are resolved once at bench cwd and pinned into the
+child env so records never lie about what ran (D40.8). Smoke-verified
+end-to-end: qwen3.7-max produced a non-empty, `git apply --check`-clean
+patch on `psf__requests-2317`.
+
+### Fixed
+
+- `openharness.__version__` drift: hardcoded `0.3.0` while pyproject/
+  CHANGELOG were at 0.4.0 — surfaced by the adapter stamping the wrong
+  version into `model_name_or_path`.
+
 Phase 19 (M2 of CC Skill 接入) closes G1 — the per-file `cp`
 friction Phase 18 M1 left behind. CC plugin directories
 (`.claude-plugin/plugin.json` + `skills/<n>/SKILL.md` tree) are now
