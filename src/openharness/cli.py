@@ -526,6 +526,7 @@ async def _run_ask(
     cwd_override: Path | None = None,
     execution_env_override: ExecutionEnvironment | None = None,
     suppress_echo: bool = False,
+    max_turns: int = 20,
 ) -> AskOutcome:
     """Build the QueryContext, run the loop, render the events.
 
@@ -942,6 +943,10 @@ async def _run_ask(
             cwd=env.cwd,
             model=model,
             max_tokens=max_tokens,
+            # --max-turns (D40 M1 小批 finding): the loop cap was hard-fixed
+            # at the dataclass default while LoopLimitExceeded's message
+            # already promised this knob.
+            max_turns=max_turns,
             permission_mode=permission_mode,
             skill_store=skill_store,
             # P6-T1 (D16.5): propagate the sub-agent recursion cap from
@@ -2135,6 +2140,17 @@ def ask(
         "--verify-timeout",
         help="Timeout in seconds for each --verify step (default 600).",
     ),
+    max_turns: int = typer.Option(
+        20,
+        "--max-turns",
+        min=1,
+        help=(
+            "Agent-loop turn cap per attempt (default 20). This is the knob "
+            "LoopLimitExceeded's remediation message points at — raise it "
+            "for long multi-step tasks (surfaced by the SWE-bench adapter, "
+            "D40 M1, where real fixes ran 8-19 turns and one died on the cap)."
+        ),
+    ),
     max_iter: int = typer.Option(
         1,
         "--max-iter",
@@ -2738,6 +2754,7 @@ def ask(
         "resume": resume or resume_id is not None,
         "resume_id": resume_id,
         "llm_focus_state_override": llm_focus_state,
+        "max_turns": max_turns,
     }
 
     outcome: AskOutcome | None = None
