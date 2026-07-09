@@ -178,3 +178,43 @@ class TestSupportsStreamingMessagesProtocol:
 
         client: SupportsStreamingMessages = _MinimalClient()
         assert callable(client.stream_message)
+
+
+# ============================================================================
+# extra_body passthrough (RUNLOG 节点 8: DashScope thinking-mode default flip)
+# ============================================================================
+
+
+class TestExtraBodyPassthrough:
+    """Provider-specific request-body fields (e.g. DashScope
+    ``enable_thinking``) ride through a generic ``extra_body`` — no
+    provider-specific branches in the harness."""
+
+    async def test_extra_body_forwarded_to_sdk(self) -> None:
+        sdk = _FakeAsyncOpenAI(
+            chat_completions=_FakeChatCompletions(responses=[_TEXT_ONLY_CHUNKS]),
+        )
+        client = OpenAICompatibleApiClient(
+            sdk=sdk,  # type: ignore[arg-type]
+            extra_body={"enable_thinking": False},
+        )
+
+        async for _ in client.stream_message(_simple_request()):
+            pass
+
+        kwargs = sdk.chat_completions.last_kwargs
+        assert kwargs is not None
+        assert kwargs["extra_body"] == {"enable_thinking": False}
+
+    async def test_no_extra_body_key_when_unset(self) -> None:
+        sdk = _FakeAsyncOpenAI(
+            chat_completions=_FakeChatCompletions(responses=[_TEXT_ONLY_CHUNKS]),
+        )
+        client = OpenAICompatibleApiClient(sdk=sdk)  # type: ignore[arg-type]
+
+        async for _ in client.stream_message(_simple_request()):
+            pass
+
+        kwargs = sdk.chat_completions.last_kwargs
+        assert kwargs is not None
+        assert "extra_body" not in kwargs

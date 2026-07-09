@@ -152,9 +152,13 @@ class OpenAICompatibleApiClient:
         *,
         sdk: AsyncOpenAI,
         retry_policy: RetryPolicy = DEFAULT_POLICY,
+        extra_body: dict[str, Any] | None = None,
     ) -> None:
         self._sdk = sdk
         self._retry_policy = retry_policy
+        # Provider-specific request-body fields (Settings.extra_body),
+        # merged into every create() call via the SDK's extra_body kwarg.
+        self._extra_body = extra_body
 
     async def stream_message(
         self,
@@ -174,6 +178,8 @@ class OpenAICompatibleApiClient:
         ultimately fails after retries.
         """
         openai_kwargs = to_openai_request(request)
+        if self._extra_body is not None:
+            openai_kwargs["extra_body"] = dict(self._extra_body)
 
         retry_events: list[ApiRetryEvent] = []
 

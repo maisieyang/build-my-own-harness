@@ -4,6 +4,7 @@ pinned via the same settings chain the child ``oh ask`` would use."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -71,6 +72,26 @@ class TestPinConfig:
         assert overrides is not None
         assert overrides["OPENHARNESS_MODEL"] == "deepseek-v3.2"
         assert overrides["OPENHARNESS_BASE_URL"] == "https://example.invalid/v1"
+
+    def test_extra_body_forwarded_to_child_env(self) -> None:
+        """RUNLOG 节点 8: extra_body (e.g. enable_thinking=false) must ride
+        the same pin channel as key/model — the child's workspace cwd can't
+        see the project .env, so an unforwarded extra_body silently vanishes
+        and the batch runs in a different (thinking-on) condition."""
+        env_file = Path.home() / ".openharness" / ".env"
+        env_file.parent.mkdir(parents=True, exist_ok=True)
+        env_file.write_text(
+            "OPENHARNESS_API_KEY=sk-test\n"
+            "OPENHARNESS_BASE_URL=https://example.invalid/v1\n"
+            "OPENHARNESS_MODEL=m\n"
+            'OPENHARNESS_EXTRA_BODY={"enable_thinking": false}\n',
+            encoding="utf-8",
+        )
+
+        _, overrides = _pin_config(None)
+
+        assert overrides is not None
+        assert json.loads(overrides["OPENHARNESS_EXTRA_BODY"]) == {"enable_thinking": False}
 
     def test_unresolvable_settings_fall_back_to_no_overrides(self) -> None:
         # no .env anywhere, no OPENHARNESS_* vars (conftest isolation):

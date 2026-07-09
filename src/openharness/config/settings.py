@@ -402,6 +402,16 @@ class Settings(BaseSettings):
         default="qwen3.7-max",
         description="Default model name; overridden by CLI --model.",
     )
+    extra_body: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Provider-specific request-body fields (JSON object) merged "
+            "into every chat.completions call via the SDK's extra_body — "
+            "e.g. '{\"enable_thinking\": false}' to disable DashScope qwen "
+            "thinking mode. Generic passthrough: the harness carries no "
+            "per-provider branches."
+        ),
+    )
     permission_mode: PermissionMode = Field(
         default=PermissionMode.DEFAULT,
         description=(

@@ -485,3 +485,25 @@ class TestAutopilotSettings:
         monkeypatch.setenv("OPENHARNESS_AUTOPILOT__QUEUE_PATH", "/tmp/custom-queue.json")
         settings = Settings()
         assert str(settings.autopilot.queue_path) == "/tmp/custom-queue.json"
+
+
+class TestExtraBodySetting:
+    """OPENHARNESS_EXTRA_BODY: provider-specific request-body JSON merged
+    into every chat.completions call (RUNLOG 节点 8)."""
+
+    def test_parses_json_object_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://example.invalid/v1")
+        monkeypatch.setenv("OPENHARNESS_EXTRA_BODY", '{"enable_thinking": false}')
+
+        settings = Settings()
+
+        assert settings.extra_body == {"enable_thinking": False}
+
+    def test_defaults_to_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://example.invalid/v1")
+
+        settings = Settings()
+
+        assert settings.extra_body is None

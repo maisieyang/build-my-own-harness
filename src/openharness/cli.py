@@ -276,7 +276,7 @@ def _build_client(settings: Settings) -> OpenAICompatibleApiClient:
         api_key=settings.api_key,
         base_url=settings.base_url,
     )
-    return OpenAICompatibleApiClient(sdk=sdk)
+    return OpenAICompatibleApiClient(sdk=sdk, extra_body=settings.extra_body)
 
 
 def _maybe_register_web_tools(

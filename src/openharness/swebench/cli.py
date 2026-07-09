@@ -9,6 +9,7 @@ everything else unchanged).
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -62,11 +63,17 @@ def _pin_config(cli_model: str | None) -> tuple[str | None, dict[str, str] | Non
     except ValidationError:
         return cli_model, None
     model = cli_model if cli_model is not None else settings.model
-    return model, {
+    overrides = {
         "OPENHARNESS_API_KEY": settings.api_key,
         "OPENHARNESS_BASE_URL": settings.base_url,
         "OPENHARNESS_MODEL": model,
     }
+    if settings.extra_body is not None:
+        # Same drift trap as key/model (RUNLOG 节点 1): the child's workspace
+        # cwd can't see the project .env — an unforwarded extra_body silently
+        # vanishes and the batch runs in a different condition (节点 8).
+        overrides["OPENHARNESS_EXTRA_BODY"] = json.dumps(settings.extra_body)
+    return model, overrides
 
 
 @swebench_app.command()
