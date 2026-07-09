@@ -89,9 +89,35 @@
 - **事件**：retry 批次首个信号：`django-11019` 二次 timeout（两轮各顶满 900 秒；
   两轮环境不同——一次正常网络有钱、一次是本轮——排除环境因素）。
 - **初步归因**：模型侧收敛失败（啃不动或循环），非 harness/环境。失败分类学的第一个
-  "模型责任"预定样本。同型嫌疑：`django-11564`（同为旧轮 timeout）。
+  "模型责任"预定样本。同型嫌疑 `django-11564` 随后**确认**：同样二轮 timeout（2/2），
+  两个惯犯的复现模式一致——qwen3.7-max 在这两题上稳定跑不完。第三个同型样本
+  `django-11797`：这轮撞的是**新的 40 轮顶**（412s 烧完 40 轮，零 diff 产出；上轮撞
+  20 轮顶）——证明不是预算不够而是模型收敛失败，加轮次只是加倍烧钱。顺带正面验证：
+  engine 日志里 `max_turns=40`，`--max-turns` 旋钮确认通到引擎。
 - **待验证节点**：`django-11910` 是第一个纯欠费失败题——它 completed 与否是
   "充值生效"的判决信号。
+
+### 节点 8 — 思考模式伏击：provider 在战役中途翻转了模型默认行为
+
+- **事件**：充值后重启，前 4 题全灭（2 timeout 惯犯 + 1 turn-cap + **11910 非惯犯也
+  timeout**：900s、零 patch、stderr 零警告）。"零警告的满时长死亡"不像模型笨，像每轮
+  极慢——直接探针 API：健康（3.4s 往返），**但响应带 `reasoning_content`**。
+- **判别实验**（同一问题 A/B）：默认（思考开）48.0s / 9,176 思考字符 / 2,559
+  completion tokens；`enable_thinking: false` 1.4s / 22 tokens。**34× 延迟、100× 输出
+  token**——agent 大上下文回合下每轮分钟级，900s 装不下，且输出按 ¥18/M 计费在成倍烧钱。
+- **根因**：DashScope 在战役中途（充值/套餐变动窗口）把 qwen3.7-max 的默认翻转为思考
+  模式。昨天 16 题快速完成 = 当时思考未开。**实验条件被 provider 单方面改了。**
+- **暴露（harness 第 5 个真缺口）**：oh 没有 provider 特有请求参数的透传通道——
+  `enable_thinking` 无处安放，benchmark 被堵死。
+- **调整**（`6e31c6b`）：`OPENHARNESS_EXTRA_BODY`（JSON）→ `Settings.extra_body` →
+  client 并入 SDK `extra_body`。**通用透传，不进任何 per-provider 分支**（对齐
+  design-for-strong-model 的契约观）。`_pin_config` 随 key/model 一起注入子进程——
+  与节点 1 同一个漂移陷阱，一次修对。
+- **教训**：
+  1. 云端模型的默认行为是**会被 provider 中途改掉的实验变量**——长战役要么显式钉死
+     每个行为开关，要么在 records 里留能事后发现漂移的信号（本次靠"零警告满时长"形态
+     + 直接探针破案）；
+  2. 诊断路径值得复用：形态反常 → 绕过全栈直接探 API → 最小 A/B 判别实验。
 
 ---
 
@@ -99,7 +125,16 @@
 
 | 维度 | 数 |
 |---|---|
-| adapter 冲出的 harness 真 bug | 4（版本漂移、配置源漂移、--max-turns 缺失、retry 不覆盖流中断） |
+| adapter 冲出的 harness 真 bug/缺口 | 5（版本漂移、配置源漂移、--max-turns 缺失、retry 不覆盖流中断、无 provider 参数透传） |
 | prompt/策略修复经 A/B 验证 | 2（能力面声明、轮次上限），全部量化命中 |
-| 运维教训 | 4（nohup/caffeinate/余额预检/监控回放） |
+| 运维/实验教训 | 5（nohup/caffeinate/余额预检/监控回放/**provider 中途翻转模型默认行为**） |
 | 被验证的设计决策 | 3（失败也提取 patch、差异化 status、resume 幂等） |
+
+## 当前状态（2026-07-09 暂停点）
+
+- 批次**已暂停**（用户指令：等信号再开始）。24/300 completed 且干净；本轮 5 个失败
+  （2 惯犯 timeout、1 惯犯 turn-cap、11910/11964 疑似思考模式受害者）**尚未 prune**。
+- 思考模式修复已就位未实战：`.env` 已配 `OPENHARNESS_EXTRA_BODY={"enable_thinking": false}`。
+- 恢复命令：`nohup uv run oh bench swebench run --retry-failed --timeout 900 >> benchmarks/swebench/full-run.log 2>&1 &`
+  （caffeinate 需确认存活）。恢复后第一件事：**验证首题 completed 且时长回到 ~2 分钟级**
+  ——那是 extra_body 链路在真实批次里生效的判决。
