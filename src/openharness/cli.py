@@ -2087,7 +2087,7 @@ def ask(
         None,
         "--model",
         "-m",
-        help="Model name; overrides OPENHARNESS_MODEL and the qwen-plus default.",
+        help="Model name; overrides OPENHARNESS_MODEL and the qwen3.7-max default.",
     ),
     max_tokens: int = typer.Option(
         DEFAULT_MAX_TOKENS,
@@ -3132,7 +3132,7 @@ _CONFIG_TEMPLATE = """\
 
 # OPENHARNESS_API_KEY="sk-..."
 # OPENHARNESS_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
-# OPENHARNESS_MODEL="qwen-plus"
+# OPENHARNESS_MODEL="qwen3.7-max"
 
 # Permissions
 # OPENHARNESS_DENY_PATHS="secrets/**,*.env"

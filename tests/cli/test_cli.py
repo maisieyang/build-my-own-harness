@@ -159,7 +159,7 @@ class TestHappyPath:
 
         assert result.exit_code == 0
         assert stub.last_request is not None
-        assert stub.last_request.model == "qwen-plus"
+        assert stub.last_request.model == "qwen3.7-max"
 
     def test_env_model_overrides_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_minimum_env(monkeypatch)

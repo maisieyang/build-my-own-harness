@@ -80,12 +80,21 @@ for an OSS learning harness; would revisit for a public release.
 
 **Trade-off**: One more dep; one more concept to learn. Both small.
 
-### D5.3 — Default model: **`qwen-plus`**
+### D5.3 — Default model: **`qwen3.7-max`** (updated 2026-07-09; originally `qwen-plus`)
 
-- Balanced between `qwen-turbo` (cheap, weaker) and `qwen-max` (expensive,
-  strongest)
+- Original (2026-04-29): `qwen-plus` — balanced between `qwen-turbo` (cheap,
+  weaker) and `qwen-max` (expensive, strongest) for the Phase 1 test target
+- **Update 2026-07-09**: default switched to `qwen3.7-max`. Rationale: the
+  harness's later layers (memory contract, slash-skill envelope, repair-loop
+  autopilot) were repeatedly observed to need a stronger main LLM than
+  qwen-plus (see D36 memory pivot, Phase 16 gating eval); qwen3.7-max is the
+  model those evals already target, so the default should match what the
+  system is actually built against
 - Documented in `Settings` as the default; users can override via env
   (`OPENHARNESS_MODEL`) or CLI (`--model`)
+- Context window: 262,144 tokens (user-confirmed 2026-07-09), registered in
+  `services/compact.py` `_MODEL_CONTEXT_WINDOWS` so compaction thresholds
+  use the real window instead of the 32k fallback.
 
 ### D5.4 — `--model` flag: **supported**
 

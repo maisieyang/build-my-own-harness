@@ -19,8 +19,8 @@ relies on:
   protocol-layer validation — every "bad input" path raises the same
   exception family. See D5.2.
 
-* **Sensible default for ``model``**: ``qwen-plus`` balances cost and
-  capability for the Phase 1 test target. CLI ``--model`` and
+* **Sensible default for ``model``**: ``qwen3.7-max`` — the strongest
+  Qwen flagship available on the default endpoint. CLI ``--model`` and
   ``OPENHARNESS_MODEL`` both override it. See D5.3.
 """
 
@@ -399,7 +399,7 @@ class Settings(BaseSettings):
         description="OpenAI-compatible base URL (required).",
     )
     model: str = Field(
-        default="qwen-plus",
+        default="qwen3.7-max",
         description="Default model name; overridden by CLI --model.",
     )
     permission_mode: PermissionMode = Field(

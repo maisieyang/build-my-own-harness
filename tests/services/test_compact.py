@@ -103,6 +103,9 @@ class TestL0Estimation:
     def test_known_model_returns_published_window(self) -> None:
         assert get_context_window("qwen-plus") == 32_000
         assert get_context_window("gpt-4o") == 128_000
+        # Settings default model (D5.3, updated 2026-07-09) must not fall
+        # back to the conservative 32k default.
+        assert get_context_window("qwen3.7-max") == 262_144
 
     def test_unknown_model_returns_default(self) -> None:
         assert get_context_window("totally-fake-model-9000") == 32_000

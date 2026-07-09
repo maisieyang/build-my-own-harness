@@ -89,6 +89,7 @@ _MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "gpt-4-turbo": 128_000,
     "qwen-plus": 32_000,
     "qwen-max": 32_000,
+    "qwen3.7-max": 262_144,
     "qwen-turbo": 8_000,
     "claude-3-opus": 200_000,
     "claude-3-5-sonnet": 200_000,

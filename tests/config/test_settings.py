@@ -5,7 +5,7 @@ environment variables. It defines four user-facing contracts:
 
 1. **Required**: the user must provide an API key + base URL, or get a clear
    ``ValidationError`` naming the missing field.
-2. **Optional default**: ``model`` defaults to ``qwen-plus`` (per
+2. **Optional default**: ``model`` defaults to ``qwen3.7-max`` (per
    ``decisions/05-cli.md`` D5.3) but can be overridden via env var.
 3. **Provider-neutral prefix**: env vars are namespaced under
    ``OPENHARNESS_`` regardless of which Provider the base URL points to
@@ -57,14 +57,14 @@ class TestRequiredFieldsLoading:
 class TestDefaults:
     """``model`` has a sensible default; the user only needs to set the key + URL."""
 
-    def test_default_model_is_qwen_plus(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_default_model_is_qwen37_max(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")
         monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://example.com/v1")
         # OPENHARNESS_MODEL deliberately not set.
 
         settings = Settings()
 
-        assert settings.model == "qwen-plus"
+        assert settings.model == "qwen3.7-max"
 
     def test_default_permission_mode_is_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from openharness.permissions import PermissionMode
