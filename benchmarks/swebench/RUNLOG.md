@@ -146,11 +146,46 @@
   轮次周转飞快。与 11019 的平反构成一反一正：**同样的失败表象，条件控制后一个是环境
   受害者、一个是真·模型失败**。11797/11564 = 首两个带条件戳的"模型责任"样本。
 
-## 当前状态（2026-07-09 暂停点）
+### 节点 10（2026-07-10/11）— 第二次欠费 + 误诊链 + 选择性补跑
 
-- 批次**已暂停**（用户指令：等信号再开始）。24/300 completed 且干净；本轮 5 个失败
-  （2 惯犯 timeout、1 惯犯 turn-cap、11910/11964 疑似思考模式受害者）**尚未 prune**。
-- 思考模式修复已就位未实战：`.env` 已配 `OPENHARNESS_EXTRA_BODY={"enable_thinking": false}`。
-- 恢复命令：`nohup uv run oh bench swebench run --retry-failed --timeout 900 >> benchmarks/swebench/full-run.log 2>&1 &`
-  （caffeinate 需确认存活）。恢复后第一件事：**验证首题 completed 且时长回到 ~2 分钟级**
-  ——那是 extra_body 链路在真实批次里生效的判决。
+- **事件**：全量推进中两次网络抖动窗口损耗若干题；尾段 13 题连环 api-failed。
+  误诊链：传输窗口 → 题目特异（payload 大小假设被数据证伪：失败题 problem_statement
+  反而偏小）→ 读完整 detail 定案：**第二次 Arrearage（欠费）**。免费探活端点
+  （`/models` 返回 200）再次掩盖计费状态——上次的坑换马甲重踩。
+- **教训升级**：预检必须用**一次真实计费调用**，探活/连通性/余额是三个独立维度。
+- **收官策略（用户决策点）**：13 题失败拆成"9 个已定型 turn-cap（重跑期望转化 ~0.6 题）
+  + 4 个从未公平尝试（期望转化 ~3.5 题）"——充值 ¥30 重跑的价值主要是**归因数据完整性**
+  而非分数。用户充值后重跑：4 django 转化 3 个 completed，9 sympy 全部 2/2 定型。
+
+### 节点 11（2026-07-11）— 收官统计 + 提交战役 + 官方评测服务故障
+
+- **本地终盘**：300/300，**268 completed（89.3%）**，32 turn-cap（含 16 个带 partial
+  patch，照常提交）。284/300 非空 patch。模型署名全量一致
+  `openharness-0.4.0+qwen3.7-max`。总花费 ~¥250-260（含思考模式事故与重试损耗）。
+- **段间失败分布（能力边界证据）**：sympy 16/23 轮次内失败率最高（成功率 ~61%），
+  django ~90%，其余仓库零星——符合"符号数学 = 中档模型硬边界"预期。
+- **提交战役**：sb-cli（Python requests/urllib）到 `api.swebench.com` 被 TLS 指纹级
+  掐断（SSL EOF），而 curl 同机畅通。读 sb-cli 源码复刻 API（`POST /submit`，
+  x-api-key，per-instance payload），**curl 版提交器 300/300 全部 accepted**。
+  教训：**官方工具不可用 ≠ 官方服务不可用**，API 形状在源码里。
+- **官方评测服务故障（阻塞点）**：报告返回 300 全 "failed runs"（0 evaluated）。
+  判别实验：**提交官方 gold patch（保证 apply + resolve）→ 同样 failed**——我方
+  patch 完全无罪。与社区互证：sb-cli issues #25/#26/#27/#28（2026-04 至 06，全部
+  open）报告同款症状，#27 直指 "evaluation containers failing server-side
+  (swe-bench_lite test)"。**托管评测自 4-5 月起服务性断裂，官方未修。**
+- **当前阻塞**：官方 resolved 分数拿不到。备选：本地 Docker 跑官方评测 harness
+  （swebench 包，ARM 镜像支持待验）/ Modal 云跑 / 等服务修复。predictions +
+  records + 判别实验记录齐备，评测通道恢复即可复用。
+
+---
+
+## 收官累计账（2026-07-11）
+
+| 维度 | 数 |
+|---|---|
+| adapter 冲出的 harness 真 bug/缺口 | 5（版本漂移、配置源漂移、--max-turns 缺失、retry 不覆盖流中断、无 provider 参数透传） |
+| 战役中的外部环境事故 | 5（欠费 ×2、思考模式默认翻转、网络抖动窗 ×N、官方评测服务故障） |
+| 判别实验 | 4（思考 A/B、payload 大小证伪、gold-probe、探活 vs 计费分层） |
+| 归因方法论产出 | 归因必须带条件戳；惯犯需公平条件复审（11019 平反 vs 11797 定罪） |
+| 本地终盘 | 268/300 completed（89.3%），284 非空 patch，全量单一模型署名 |
+| 待收 | 官方 resolved 分数（阻塞于服务端故障，备选路径已列） |
