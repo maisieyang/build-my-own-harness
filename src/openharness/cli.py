@@ -46,28 +46,13 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-# Side-effect import: when a readline backend is imported, Python's
-# built-in ``input()`` switches to it, enabling backspace, arrow-key
-# cursor motion, history (Up/Down), and Ctrl+R search inside the
-# ``oh chat`` REPL prompt. Without it, raw-TTY ``input()`` echoes
-# characters but ignores erase / arrow keys.
-#
-# **Order matters on macOS.** The stdlib ``readline`` is backed by
-# ``libedit``, which has a known bug computing cursor positions when
-# an input line mixes CJK (wide) and ASCII (narrow) characters —
-# backspace lands at the wrong byte offset and the user cannot
-# delete a mixed-script prompt. ``gnureadline`` (declared as a
-# macOS-only dep in pyproject.toml) is a binding around the real
-# GNU readline that fixes this. We import it FIRST so it claims the
-# ``readline`` slot before stdlib's libedit-backed module gets a
-# chance to. Linux already ships GNU readline natively; on Windows
-# both imports fail and ``contextlib.suppress`` degrades silently.
-with contextlib.suppress(ImportError):
-    import gnureadline  # type: ignore[import-not-found]  # noqa: F401
-with contextlib.suppress(ImportError):
-    import readline  # noqa: F401
-
 import typer
+
+# TTY input goes through prompt_toolkit (repl-ux plan §2): its own line
+# editor handles CJK/ASCII mixed-script width correctly, which retires
+# the Phase 14.5 gnureadline workaround. Non-TTY input never had line
+# editing, so no readline backend is needed anywhere anymore.
+from openharness import repl as _repl
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -185,7 +170,10 @@ OutputFormat = Literal["text", "json", "stream-json"]
 app = typer.Typer(
     name="oh",
     help="OpenHarness — a production-grade Python harness for LLM agents.",
-    no_args_is_help=True,
+    # repl-ux plan §1: bare ``oh`` enters the chat REPL (see ``_root``)
+    # instead of printing help — one word enters the session. Help
+    # stays reachable via ``oh --help``.
+    no_args_is_help=False,
     add_completion=False,
 )
 
@@ -1761,7 +1749,7 @@ async def _run_chat(
             web_enabled=effective_web,
         )
 
-        typer.echo("oh chat — multi-turn REPL. /help for commands, /exit to quit.")
+        typer.echo("oh chat — multi-turn REPL. Type / for the command menu, /exit to quit.")
 
         # P12-T5 (D30.4): --resume loads the latest snapshot for cwd
         # as the starting history; banner prints message count + git_head
@@ -1791,9 +1779,42 @@ async def _run_chat(
                     f"(resumed: {len(history)} messages from {pretty_when}; git_head={git_head})"
                 )
 
+        # repl-ux plan §2/§3: on a real terminal, input goes through a
+        # prompt_toolkit session — ``/`` pops the completion menu
+        # (built-ins + commands + skills, D38.1 order), input history
+        # persists per project, and the bottom toolbar shows model +
+        # context usage from the numbers the compaction subsystem
+        # already tracks. Non-TTY (pipes, tests, CI) keeps the legacy
+        # ``input(">>> ")`` path untouched.
+        prompt_session = None
+        if _repl.is_interactive():
+            from openharness.services.compact import (
+                estimate_message_tokens as _estimate_tokens,
+            )
+            from openharness.services.compact import (
+                get_context_window as _get_window,
+            )
+
+            def _status_line() -> str:
+                return _repl.format_status_bar(
+                    model=model,
+                    used_tokens=_estimate_tokens(history, model=model),
+                    context_window=_get_window(model),
+                    threshold_ratio=compact_threshold_ratio if compact_enabled else None,
+                )
+
+            prompt_session = _repl.create_prompt_session(
+                commands=_repl.collect_slash_commands(command_store, skill_store),
+                history_path=_repl.default_history_path(env.cwd),
+                status_provider=_status_line,
+            )
+
         while True:
             try:
-                user_input = await asyncio.to_thread(input, ">>> ")
+                if prompt_session is not None:
+                    user_input = await prompt_session.prompt_async(">>> ")
+                else:
+                    user_input = await asyncio.to_thread(input, ">>> ")
             except EOFError:
                 typer.echo("")  # newline after EOF
                 break
@@ -2064,8 +2085,9 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def _root(
+    ctx: typer.Context,
     _version: bool = typer.Option(
         False,
         "--version",
@@ -2075,6 +2097,37 @@ def _root(
     ),
 ) -> None:
     """OpenHarness CLI."""
+    # repl-ux plan §1 (正门): bare ``oh`` = argless ``oh chat``. Every
+    # kwarg is spelled out because calling the typer-decorated ``chat``
+    # directly would otherwise leak OptionInfo sentinels as values.
+    if ctx.invoked_subcommand is None:
+        chat(
+            model=None,
+            max_tokens=DEFAULT_MAX_TOKENS,
+            auto=False,
+            dry_run=False,
+            log_level=None,
+            log_format=None,
+            tool_result_cap=None,
+            no_auto_truncate=False,
+            no_skills=False,
+            no_commands=False,
+            sandbox=None,
+            sandbox_image=None,
+            sandbox_network=None,
+            sandbox_memory=None,
+            sandbox_cpus=None,
+            sandbox_runtime=None,
+            enable_plugin_hooks=None,
+            enable_plugins=None,
+            enable_memory=None,
+            enable_web=None,
+            compact_threshold=None,
+            no_auto_compact=False,
+            resume=False,
+            resume_id=None,
+            llm_focus_state=None,
+        )
 
 
 @app.command(help="Send a single prompt to the configured LLM and stream the response.")

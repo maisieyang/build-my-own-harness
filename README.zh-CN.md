@@ -116,8 +116,8 @@ cd build-my-own-harness && uv sync                  # 2. clone + sync
 
 cp .env.example .env && $EDITOR .env                # 3. 填 OPENHARNESS_API_KEY + BASE_URL
                                                     #    （任何 OpenAI 兼容端）
-uv run oh ask "list 5 git commands"                 # 4. 提问
-uv run oh chat                                       #    或多轮 REPL
+uv run oh                                           # 4. 进入 REPL(打 / 弹命令菜单)
+uv run oh ask "list 5 git commands"                 #    或单发提问
 ```
 
 所有配置都是 `OPENHARNESS_*` 环境变量（经 `pydantic-settings`）；见

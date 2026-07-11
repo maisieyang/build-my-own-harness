@@ -128,8 +128,9 @@ cd build-my-own-harness && uv sync                  # 2. clone + sync
 
 cp .env.example .env && $EDITOR .env                # 3. set OPENHARNESS_API_KEY + BASE_URL
                                                     #    (any OpenAI-compatible endpoint)
-uv run oh ask "list 5 git commands"                 # 4. ask
-uv run oh chat                                      #    or the multi-turn REPL
+uv run oh                                           # 4. enter the REPL
+                                                    #    (/ pops the command menu)
+uv run oh ask "list 5 git commands"                 #    or one-shot ask
 ```
 
 All configuration is `OPENHARNESS_*` environment variables (via

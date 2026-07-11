@@ -15,6 +15,25 @@ records + framework-level lessons), see
 
 ## [Unreleased]
 
+### Added — REPL UX: 正门 / `/` 识别层 / 状态行 (decisions/42)
+
+Bare `oh` now enters the chat REPL — one word enters the session
+(`oh --help` unchanged). On a real terminal, typing `/` pops a
+completion menu of everything dispatchable (built-ins + user commands
++ skills, D38.1 order, descriptions inline), input history persists
+per project across sessions, and a status toolbar shows model +
+context usage + auto-compact threshold while waiting for input.
+Non-TTY invocations (pipes, CI, scripts) keep the legacy `input()`
+path byte-for-byte. New dep: prompt-toolkit; retired: gnureadline
+(the Phase 14.5 libedit workaround — prompt_toolkit's line editor
+handles CJK/ASCII mixed-script width natively).
+
+### Changed
+
+- Default model is now `qwen3.7-max` (was `qwen-plus`; D5.3 update) —
+  the model the later-phase evals already target — with its 262,144
+  context window registered for compaction thresholds.
+
 ### Added — SWE-bench Lite adapter (benchmark track M1, decisions/40)
 
 `oh bench swebench fetch / run` — drive the shipped `oh` CLI over
