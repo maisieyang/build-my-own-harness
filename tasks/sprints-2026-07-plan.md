@@ -74,6 +74,18 @@ skill_store,Available Skills 段不出现);prompts 的既有 TDD 测试若断言
 
 ---
 
+## 无人值守决策规则(ratify 2026-07-12——判断预先立法,judge 型判据降级为 verify 型)
+
+1. **Sprint 1 措辞迭代上限**:最多试 2 版措辞;每版跑 qwen-max N=4 画像;
+   任一稳定红转 4/4 绿 → ratchet bar 到新的稳定绿地板;两版都治不好 →
+   如实写入 dataset_card("措辞 X/Y 不足以治 Z"),bar 不动,**停**——
+   不许第三版。
+2. **Sprint 1 回归红线**:原 6 个稳定绿 case 任何一个破绿 → 立即回滚该版
+   措辞,该版记为失败。
+3. **Sprint 3 bar 规则**:沿用 skill_trigger 先例——bar = N=4 画像的稳定
+   绿地板 + 稳定绿必须全绿;稳定红全部记 Known reds(改进 backlog);
+   禁止给抖动 case 设门。
+
 ## 排队(不进本轮 Sprint,已定 scope 待触发)
 
 | 项 | scope | 触发条件 |
