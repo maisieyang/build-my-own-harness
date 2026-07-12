@@ -493,3 +493,86 @@ class TestOpenRunSessionJournal:
             assert session is not None
             assert session.journal is None
             session.status = "completed"
+
+
+class TestUntrackedFilesWarning:
+    """Sprint 2 F3 (dogfood 2026-07-12): 无隔离的 run 收尾时, 检测本次 run
+    期间新增的 untracked 文件并 WARN -- 修复循环里模型被拒后改道写 cwd,
+    副产品静默留在活仓库 (实验 5 的 fizzbuzz.py)."""
+
+    async def test_new_untracked_file_warned_on_close(self, tmp_path: Path) -> None:
+        import structlog.testing
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        with structlog.testing.capture_logs() as logs:
+            async with open_run_session(
+                cwd=repo,
+                isolate=False,
+                journal_enabled=True,
+                sandbox_config=_sandbox_config(enabled=False),
+                goal="g",
+            ) as session:
+                assert session is not None
+                (repo / "stray.py").write_text("x = 1\n", encoding="utf-8")
+        warnings = [e for e in logs if e.get("event") == "run_left_untracked_files"]
+        assert len(warnings) == 1
+        assert "stray.py" in warnings[0]["files"]
+
+    async def test_preexisting_untracked_not_warned(self, tmp_path: Path) -> None:
+        import structlog.testing
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "already-there.txt").write_text("old\n", encoding="utf-8")
+        with structlog.testing.capture_logs() as logs:
+            async with open_run_session(
+                cwd=repo,
+                isolate=False,
+                journal_enabled=True,
+                sandbox_config=_sandbox_config(enabled=False),
+                goal="g",
+            ) as session:
+                assert session is not None
+        warnings = [e for e in logs if e.get("event") == "run_left_untracked_files"]
+        assert warnings == []
+
+    async def test_isolated_run_skips_check(self, tmp_path: Path) -> None:
+        import structlog.testing
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        with structlog.testing.capture_logs() as logs:
+            async with open_run_session(
+                cwd=repo,
+                isolate=True,
+                journal_enabled=False,
+                sandbox_config=_sandbox_config(enabled=False),
+                goal="g",
+            ) as session:
+                assert session is not None
+                # 写进 worktree 而非原 cwd -- 隔离 run 的正常形态, 不该报
+                (session.cwd_override / "wt-file.py").write_text("y = 2\n", encoding="utf-8")
+        warnings = [e for e in logs if e.get("event") == "run_left_untracked_files"]
+        assert warnings == []
+
+    async def test_non_git_cwd_is_silent(self, tmp_path: Path) -> None:
+        import structlog.testing
+
+        plain = tmp_path / "plain"
+        plain.mkdir()
+        with structlog.testing.capture_logs() as logs:
+            async with open_run_session(
+                cwd=plain,
+                isolate=False,
+                journal_enabled=True,
+                sandbox_config=_sandbox_config(enabled=False),
+                goal="g",
+            ) as session:
+                assert session is not None
+                (plain / "new.txt").write_text("n\n", encoding="utf-8")
+        warnings = [e for e in logs if e.get("event") == "run_left_untracked_files"]
+        assert warnings == []

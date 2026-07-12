@@ -384,3 +384,62 @@ class TestL8IrreversibleGitRedline:
             "Bash", _CmdInput(command="pytest -q"), ToolExecutionContext(cwd=tmp_path)
         )
         assert result.decision is Decision.ALLOW
+
+
+class TestAbsoluteSpecifierPin:
+    """Sprint 2 F2 复核 (dogfood 2026-07-12): 绝对路径 specifier 早已被
+    L2 设计支持 -- F2 实为可发现性缺口. 此处把该能力钉死为回归守卫."""
+
+    def test_absolute_allow_grants_outside_cwd_headless(self, tmp_path: Path) -> None:
+        checker = _checker(
+            headless=True,
+            permissions=PermissionRules(allow=("Write(/tmp/dogfood/**)",)),
+        )
+        result = checker.evaluate(
+            "Write",
+            _PathInput(path="/tmp/dogfood/out.txt"),
+            ToolExecutionContext(cwd=tmp_path),
+        )
+        assert result.decision is Decision.ALLOW
+
+    def test_relative_wildcard_stays_cwd_scoped(self, tmp_path: Path) -> None:
+        # 边界: Write(**) 绝不放大到 cwd 外 (安全语义回归守卫)
+        checker = _checker(
+            headless=True,
+            permissions=PermissionRules(allow=("Write(**)",)),
+        )
+        result = checker.evaluate(
+            "Write",
+            _PathInput(path="/tmp/dogfood/out.txt"),
+            ToolExecutionContext(cwd=tmp_path),
+        )
+        assert result.decision is Decision.DENY
+
+
+class TestHeadlessDenialTeachesGrantSyntax:
+    """Sprint 2 F4: 拒绝消息内嵌正确的授权语法 -- 让模型转述时有真话可抄
+    (dogfood F4: 模型曾编造 OH 不存在的 YAML 配置格式)."""
+
+    def test_outside_cwd_denial_names_env_var_and_absolute_form(self, tmp_path: Path) -> None:
+        checker = _checker(headless=True)
+        result = checker.evaluate(
+            "Write",
+            _PathInput(path="/tmp/dogfood/out.txt"),
+            ToolExecutionContext(cwd=tmp_path),
+        )
+        assert result.decision is Decision.DENY
+        assert result.reason is not None
+        assert "OPENHARNESS_PERMISSIONS__ALLOW" in result.reason
+        # 教绝对路径形态 (cwd 外必须用它)
+        assert "Write(/" in result.reason
+
+    def test_in_cwd_denial_names_env_var_and_relative_form(self, tmp_path: Path) -> None:
+        checker = _checker(headless=True)
+        result = checker.evaluate(
+            "Write",
+            _PathInput(path=str(tmp_path / "x.txt")),
+            ToolExecutionContext(cwd=tmp_path),
+        )
+        assert result.decision is Decision.DENY
+        assert result.reason is not None
+        assert "OPENHARNESS_PERMISSIONS__ALLOW" in result.reason

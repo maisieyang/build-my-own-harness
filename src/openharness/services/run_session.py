@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from openharness.execution.sandbox import SandboxExecution
+from openharness.observability import get_logger
 from openharness.services.run_journal import RunJournal, generate_run_id, get_run_dir, load_journal
 from openharness.services.worktree import create_worktree, remove_worktree, verify_existing_worktree
 
@@ -23,6 +24,31 @@ if TYPE_CHECKING:
     from openharness.cli import SandboxConfig
     from openharness.execution.base import ExecutionEnvironment
     from openharness.services.worktree import WorktreeHandle
+
+
+logger = get_logger("run_session")
+
+
+async def _untracked_files(cwd: Path) -> set[str] | None:
+    """Untracked (non-ignored) files in ``cwd``'s repo, or ``None`` when
+    ``cwd`` isn't a git working tree / git itself fails — callers treat
+    ``None`` as "can't tell, stay silent"."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            cwd=cwd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await proc.communicate()
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    return {line for line in out.decode().splitlines() if line.strip()}
 
 
 @dataclass
@@ -74,6 +100,11 @@ async def open_run_session(
         return
 
     resolved_run_id = run_id or generate_run_id()
+    # Sprint 2 F3 (dogfood 2026-07-12): non-isolated runs mutate the live
+    # cwd — snapshot untracked files now so close can name whatever the
+    # run leaves behind (repair-loop models rerouted by permission walls
+    # drop artifacts in cwd; the stray fizzbuzz.py of experiment 5).
+    untracked_before = None if isolate else await _untracked_files(cwd)
     session = RunSession(
         run_id=resolved_run_id,
         cwd_override=None,
@@ -150,6 +181,17 @@ async def open_run_session(
         if journal_enabled and session.journal is not None:
             with contextlib.suppress(Exception):
                 session.journal.append("run_finished", attempt=None, status=session.status)
+        if not isolate and untracked_before is not None:
+            with contextlib.suppress(Exception):
+                after = await _untracked_files(cwd)
+                new_files = sorted(after - untracked_before) if after is not None else []
+                if new_files:
+                    logger.warning(
+                        "run_left_untracked_files",
+                        files=new_files[:20],
+                        count=len(new_files),
+                        hint="run without --isolate mutated the live cwd; review or remove these",
+                    )
         if isolate and session.worktree is not None:
             with contextlib.suppress(Exception):
                 proc = await asyncio.create_subprocess_exec(

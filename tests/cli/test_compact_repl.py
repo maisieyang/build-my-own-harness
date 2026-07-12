@@ -255,3 +255,57 @@ class TestHelpMentionsNewFlags:
         result = runner.invoke(cli_module.app, ["chat"])
         assert result.exit_code == 0
         assert "/compact" in result.stdout
+
+
+class TestCompactExplicitCommandGuard:
+    """Sprint 2 F1 (learnings/dogfood-2026-07-12.md): 显式 /compact 不受
+    auto-compact 的 12 条保留窗拦截 -- 用户叫压缩就压缩; 压不了时说真话."""
+
+    def test_explicit_compact_uses_small_preserve_window(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_min_env(monkeypatch)
+        monkeypatch.setattr(cli_module, "_build_client", lambda _s: _StubClient())
+        _, fake = _capture_query_context()
+        monkeypatch.setattr(cli_module, "run_query", fake)
+
+        from openharness.services import compact as compact_module
+
+        seen: dict[str, object] = {}
+
+        async def _fake_full_compact(
+            messages: list[ConversationMessage], **kwargs: object
+        ) -> tuple[list[ConversationMessage], bool]:
+            seen.update(kwargs)
+            summary = ConversationMessage(role="user", content=[TextBlock(text="S")])
+            return [summary], True
+
+        monkeypatch.setattr(compact_module, "full_compact", _fake_full_compact)
+        _stub_inputs(monkeypatch, ["hi", "/compact", "/exit"])
+
+        result = CliRunner().invoke(cli_module.app, ["chat"])
+        assert result.exit_code == 0, result.stderr
+        # 显式命令传一个小保留窗 (2), 不用 auto 场景的 12 条默认
+        assert seen.get("preserve_recent") == 2
+
+    def test_honest_message_when_still_nothing_to_do(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _set_min_env(monkeypatch)
+        monkeypatch.setattr(cli_module, "_build_client", lambda _s: _StubClient())
+        _, fake = _capture_query_context()
+        monkeypatch.setattr(cli_module, "run_query", fake)
+
+        from openharness.services import compact as compact_module
+
+        async def _fake_full_compact(
+            messages: list[ConversationMessage], **_kwargs: object
+        ) -> tuple[list[ConversationMessage], bool]:
+            return messages, False  # 守卫未过
+
+        monkeypatch.setattr(compact_module, "full_compact", _fake_full_compact)
+        _stub_inputs(monkeypatch, ["hi", "/compact", "/exit"])
+
+        result = CliRunner().invoke(cli_module.app, ["chat"])
+        assert result.exit_code == 0, result.stderr
+        # 不再撒谎说 "nothing to summarize" -- 报出真实原因 (消息数与保留窗)
+        assert "nothing to summarize" not in result.stdout
+        assert "preserved tail" in result.stdout or "messages" in result.stdout

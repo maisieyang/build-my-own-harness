@@ -522,13 +522,23 @@ class TierBasedPermissionChecker:
             # round 4: name the boundary when the target is outside cwd, so the
             # agent can tell a path-scoping violation from a plain missing-rule
             # case (and relocate the write into cwd rather than blindly retry).
+            # Sprint 2 F4 (dogfood 2026-07-12): embed the CORRECT grant syntax
+            # so the model relaying this error has the real fix to quote —
+            # without it, models fabricate plausible-but-nonexistent config
+            # formats (observed: a YAML `permissions:` block OH doesn't have).
             if path is not None and not _inside_project_root(path, context.cwd):
                 return DecisionResult.deny(
-                    f"headless fail-closed: {path!r} is outside project root; add a "
-                    "permissions.allow rule naming this path to permit it"
+                    f"headless fail-closed: {path!r} is outside project root. "
+                    "Paths outside cwd need an explicit ABSOLUTE allow rule via "
+                    "the OPENHARNESS_PERMISSIONS__ALLOW env var, e.g. "
+                    f'OPENHARNESS_PERMISSIONS__ALLOW="{tool_name}(/abs/dir/**)". '
+                    "Relative globs like (**) are cwd-scoped and cannot grant this."
                 )
             return DecisionResult.deny(
-                "headless fail-closed: mutating tool requires an explicit permissions.allow rule"
+                "headless fail-closed: mutating tool requires an explicit allow "
+                "rule via the OPENHARNESS_PERMISSIONS__ALLOW env var, e.g. "
+                f'OPENHARNESS_PERMISSIONS__ALLOW="{tool_name}(**)" (cwd-relative '
+                f'glob) or "{tool_name}(/abs/dir/**)" (absolute)'
             )
 
         # 7. Tier 3 mode-based — interactive only (headless handled at step 6).

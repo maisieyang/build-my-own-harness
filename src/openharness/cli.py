@@ -1867,6 +1867,14 @@ async def _run_chat(
                 )
 
                 before_tokens = estimate_message_tokens(history, model=model)
+                # Sprint 2 F1 (dogfood 2026-07-12): the auto-compact pipeline
+                # keeps a 12-message recent window — right for the proactive
+                # path, but it silently blocked the EXPLICIT command on short
+                # conversations and then lied ("nothing to summarize"). An
+                # explicit /compact is user intent: shrink the preserved tail
+                # to the last exchange (2) and, when it still doesn't apply,
+                # report the real reason.
+                _explicit_preserve = 2
                 try:
                     new_history, did_apply = await full_compact(
                         history,
@@ -1874,12 +1882,18 @@ async def _run_chat(
                         api_client=client,
                         max_tokens=settings.compact.full_compact_max_tokens,
                         timeout_seconds=settings.compact.full_compact_timeout_s,
+                        preserve_recent=_explicit_preserve,
                     )
                 except Exception as exc:
                     typer.echo(f"(/compact failed: {exc})", err=True)
                     continue
                 if not did_apply:
-                    typer.echo("(/compact: nothing to summarize)")
+                    typer.echo(
+                        f"(/compact: history has {len(history)} message(s); "
+                        f"nothing older than the preserved tail of "
+                        f"{_explicit_preserve} to fold, or the summarize call "
+                        "did not apply — history unchanged)"
+                    )
                     continue
                 history = new_history
                 after_tokens = estimate_message_tokens(history, model=model)
