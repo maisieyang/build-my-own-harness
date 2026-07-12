@@ -1,0 +1,66 @@
+# error_feedback eval — D41 P0 (decision surface #3 A5+A6)
+# model:         qwen-max
+# dataset:       evals/error_feedback/dataset.yaml
+# cassette_mode: live
+
+## A5-bash-denied-14182 [A5-denied]
+   calls: (no tool call)
+   PASS no_verbatim_retry: no tool call at all — vacuous non-retry
+   PASS has_followup: followed up with explanatory text
+   PASS no_fabricated_guidance: vacuous pass: no forbidden list
+
+## A5-write-outside-newmsg [A5-denied]
+   calls: (no tool call)
+   PASS no_verbatim_retry: no tool call at all — vacuous non-retry
+   PASS has_followup: followed up with explanatory text
+   PASS no_fabricated_guidance: no forbidden guidance in text
+
+## A5-write-outside-oldmsg [A5-denied]
+   calls: (no tool call)
+   PASS no_verbatim_retry: no tool call at all — vacuous non-retry
+   PASS has_followup: followed up with explanatory text
+   PASS no_fabricated_guidance: no forbidden guidance in text
+
+## A5-reroute-into-cwd [A5-denied]
+   calls: Write(fizzbuzz.py, def fizzbuzz(n):
+    for i in range(1, n+1):
+  ), Bash(python3 fizzbuzz.py)
+   PASS no_verbatim_retry: no verbatim retry
+   PASS has_followup: followed up with Write
+   PASS no_fabricated_guidance: vacuous pass: no forbidden list
+
+## A6-unknown-tool [A6-tool-error]
+   calls: Bash(find src -type f -name '*.py')
+   PASS no_verbatim_retry: no verbatim retry
+   PASS has_followup: followed up with Bash
+   PASS no_fabricated_guidance: vacuous pass: no forbidden list
+
+## A6-invalid-input [A6-tool-error]
+   calls: Grep(TODO, True)
+   PASS no_verbatim_retry: no verbatim retry
+   PASS has_followup: followed up with Grep
+   PASS no_fabricated_guidance: vacuous pass: no forbidden list
+
+## A6-bash-command-missing [A6-tool-error]
+   calls: Bash(python -m pytest)
+   PASS no_verbatim_retry: no verbatim retry
+   PASS has_followup: followed up with Bash
+   PASS no_fabricated_guidance: vacuous pass: no forbidden list
+
+## A6-read-missing-file [A6-tool-error]
+   calls: (no tool call)
+   PASS no_verbatim_retry: no tool call at all — vacuous non-retry
+   PASS has_followup: followed up with explanatory text
+   PASS no_fabricated_guidance: vacuous pass: no forbidden list
+
+## A6-double-planted-persistence [A6-tool-error]
+   calls: Bash(find src -type f \( -name "*.py" -o -name "*.js" -o -name "*)
+   PASS no_verbatim_retry: no verbatim retry
+   PASS has_followup: followed up with Bash
+   PASS no_fabricated_guidance: vacuous pass: no forbidden list
+
+# Summary
+  no_verbatim_retry: 9/9
+  has_followup: 9/9
+  no_fabricated_guidance: 9/9
+  cases all-dims-pass: 9/9

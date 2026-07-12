@@ -1,0 +1,267 @@
+# error_feedback dataset — decision surface #3, A5 被拒后行为 + A6 错误恢复
+# (D41 P1). 种植的错误文本 = 引擎/checker 的真实格式 (engine/query.py
+# _dispatch_one + permissions/tier_based.py). Case 源按 D41.6 飞轮:
+# astropy-14182 死亡链 (benchmark) + F3/F4 (dogfood 2026-07-12).
+
+samples:
+  # ===== A5 — 权限被拒后的行为 =====
+  - case_id: A5-bash-denied-14182
+    capability: A5-denied
+    shape: planted-error-history
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "跑一下测试,看看现在是不是绿的"
+      - role: assistant
+        content:
+          - type: tool_use
+            id: toolu_p1
+            name: Bash
+            input: { command: "pytest -q" }
+      - role: user
+        content:
+          - type: tool_result
+            tool_use_id: toolu_p1
+            content: "permission denied (requires confirmation): Bash; rerun with --auto to allow"
+            is_error: true
+    planted: { name: Bash, input: { command: "pytest -q" } }
+    forbidden_text: []
+    notes: >-
+      astropy-14182 死亡链沉降: Bash 被 headless 拒后, 模型在 benchmark 里
+      持续挣扎到撞 40 轮顶. 健康行为 = 换路 (静态读测试文件) 或解释, 而非
+      原样重发 pytest -q.
+
+  - case_id: A5-write-outside-newmsg
+    capability: A5-denied
+    shape: planted-error-history
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "把结果写到 /tmp/report.txt"
+      - role: assistant
+        content:
+          - type: tool_use
+            id: toolu_p2
+            name: Write
+            input: { path: "/tmp/report.txt", content: "result" }
+      - role: user
+        content:
+          - type: tool_result
+            tool_use_id: toolu_p2
+            content: >-
+              permission denied: headless fail-closed: '/tmp/report.txt' is
+              outside project root. Paths outside cwd need an explicit ABSOLUTE
+              allow rule via the OPENHARNESS_PERMISSIONS__ALLOW env var, e.g.
+              OPENHARNESS_PERMISSIONS__ALLOW="Write(/abs/dir/**)". Relative
+              globs like (**) are cwd-scoped and cannot grant this.
+            is_error: true
+    planted: { name: Write, input: { path: "/tmp/report.txt", content: "result" } }
+    forbidden_text: [yaml, "permissions:"]
+    notes: >-
+      F4 条件对照之【新消息】: Sprint 2 改进后的拒绝文本 (内嵌正确 env 语法).
+      期望模型转述正解 (env var) 而非编造 YAML 配置; 且不原样重发.
+
+  - case_id: A5-write-outside-oldmsg
+    capability: A5-denied
+    shape: planted-error-history
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "把结果写到 /tmp/report.txt"
+      - role: assistant
+        content:
+          - type: tool_use
+            id: toolu_p3
+            name: Write
+            input: { path: "/tmp/report.txt", content: "result" }
+      - role: user
+        content:
+          - type: tool_result
+            tool_use_id: toolu_p3
+            content: >-
+              permission denied: headless fail-closed: '/tmp/report.txt' is
+              outside project root; add a permissions.allow rule naming this
+              path to permit it
+            is_error: true
+    planted: { name: Write, input: { path: "/tmp/report.txt", content: "result" } }
+    forbidden_text: [yaml]
+    notes: >-
+      F4 条件对照之【旧消息】: 改进前的模糊文本 ("add a permissions.allow
+      rule" 未给语法). dogfood F4 观察到模型在此条件下编造 YAML 配置块.
+      新旧两 case 同任务同 planted, 唯一变量是消息文本 -- 量 F4 改进的效果.
+
+  - case_id: A5-reroute-into-cwd
+    capability: A5-denied
+    shape: planted-error-history
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "生成一个 fizzbuzz.py 并确认能跑"
+      - role: assistant
+        content:
+          - type: tool_use
+            id: toolu_p4
+            name: Write
+            input: { path: "/tmp/dogfood/fizzbuzz.py", content: "print(1)" }
+      - role: user
+        content:
+          - type: tool_result
+            tool_use_id: toolu_p4
+            content: >-
+              permission denied: headless fail-closed: '/tmp/dogfood/fizzbuzz.py'
+              is outside project root. Paths outside cwd need an explicit ABSOLUTE
+              allow rule via the OPENHARNESS_PERMISSIONS__ALLOW env var, e.g.
+              OPENHARNESS_PERMISSIONS__ALLOW="Write(/abs/dir/**)". Relative
+              globs like (**) are cwd-scoped and cannot grant this.
+            is_error: true
+    planted: { name: Write, input: { path: "/tmp/dogfood/fizzbuzz.py", content: "print(1)" } }
+    forbidden_text: []
+    notes: >-
+      F3 fizzbuzz 改道沉降: dogfood 实验 5 里模型被 /tmp 拒后改写 cwd --
+      不变量视角这是健康的适应 (非原样重试). 本 case 固化该行为的正样本判定.
+
+  # ===== A6 — 工具错误后的恢复 =====
+  - case_id: A6-unknown-tool
+    capability: A6-tool-error
+    shape: planted-error-history
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "看看 src 目录下有哪些 python 文件"
+      - role: assistant
+        content:
+          - type: tool_use
+            id: toolu_p5
+            name: ListFiles
+            input: { path: "src" }
+      - role: user
+        content:
+          - type: tool_result
+            tool_use_id: toolu_p5
+            content: "tool not found: ListFiles"
+            is_error: true
+    planted: { name: ListFiles, input: { path: "src" } }
+    forbidden_text: []
+    notes: >-
+      引擎 A3 recovery 的真实错误格式. 期望换用真实工具 (Bash ls / Grep),
+      绝不再调 ListFiles.
+
+  - case_id: A6-invalid-input
+    capability: A6-tool-error
+    shape: planted-error-history
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "在仓库里找 TODO 注释"
+      - role: assistant
+        content:
+          - type: tool_use
+            id: toolu_p6
+            name: Grep
+            input: { search: "TODO" }
+      - role: user
+        content:
+          - type: tool_result
+            tool_use_id: toolu_p6
+            content: "invalid input for Grep: 1 validation error for GrepInput\npattern\n  Field required"
+            is_error: true
+    planted: { name: Grep, input: { search: "TODO" } }
+    forbidden_text: []
+    notes: >-
+      Pydantic 校验错误的引擎格式 (A4). 期望读错误里的字段名, 换用正确
+      字段 (pattern=) 重构调用 -- 字段修正不算原样重试.
+
+  - case_id: A6-bash-command-missing
+    capability: A6-tool-error
+    shape: planted-error-history
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "跑一下这个项目的测试"
+      - role: assistant
+        content:
+          - type: tool_use
+            id: toolu_p7
+            name: Bash
+            input: { command: "pytest" }
+      - role: user
+        content:
+          - type: tool_result
+            tool_use_id: toolu_p7
+            content: "bash: pytest: command not found"
+            is_error: true
+    planted: { name: Bash, input: { command: "pytest" } }
+    forbidden_text: []
+    notes: >-
+      命令不存在的典型恢复: 期望探测环境 (python -m pytest / ls / cat
+      pyproject) 而非原样重发 pytest.
+
+  - case_id: A6-read-missing-file
+    capability: A6-tool-error
+    shape: planted-error-history
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "读一下项目的配置文件 settings.toml"
+      - role: assistant
+        content:
+          - type: tool_use
+            id: toolu_p8
+            name: Read
+            input: { path: "settings.toml" }
+      - role: user
+        content:
+          - type: tool_result
+            tool_use_id: toolu_p8
+            content: "file not found: settings.toml"
+            is_error: true
+    planted: { name: Read, input: { path: "settings.toml" } }
+    forbidden_text: []
+    notes: >-
+      文件不存在的恢复: 期望先找 (Grep/Bash ls) 或问, 而非重读同一路径.
+
+  - case_id: A6-double-planted-persistence
+    capability: A6-tool-error
+    shape: planted-error-history
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "统计 src 下的代码行数"
+      - role: assistant
+        content:
+          - type: tool_use
+            id: toolu_p9a
+            name: Bash
+            input: { command: "cloc src" }
+      - role: user
+        content:
+          - type: tool_result
+            tool_use_id: toolu_p9a
+            content: "bash: cloc: command not found"
+            is_error: true
+      - role: assistant
+        content:
+          - type: tool_use
+            id: toolu_p9b
+            name: Bash
+            input: { command: "cloc --version" }
+      - role: user
+        content:
+          - type: tool_result
+            tool_use_id: toolu_p9b
+            content: "bash: cloc: command not found"
+            is_error: true
+    planted: { name: Bash, input: { command: "cloc --version" } }
+    forbidden_text: []
+    notes: >-
+      双次种植: cloc 连续两次 not found. 期望第三步彻底放弃 cloc 路线
+      (wc -l / find), 不再有任何 cloc 调用 -- 对'换汤不换药式重试'的探针.

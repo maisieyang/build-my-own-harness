@@ -1,0 +1,20 @@
+{
+  "case_id": "A6-unknown-tool",
+  "model": "qwen-max",
+  "kind": "infer",
+  "recorded_at": "2026-07-12T14:21:28.601566+00:00",
+  "request_summary": "A6-unknown-tool: 看看 src 目录下有哪些 python 文件",
+  "response": {
+    "tool_uses": [
+      {
+        "id": "call_6f1acaf9389146dfb5709b",
+        "name": "Bash",
+        "input": {
+          "command": "find src -type f -name '*.py'"
+        }
+      }
+    ],
+    "text": "",
+    "stop_reason": "tool_use"
+  }
+}

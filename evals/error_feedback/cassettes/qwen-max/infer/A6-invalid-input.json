@@ -1,0 +1,20 @@
+{
+  "case_id": "A6-invalid-input",
+  "model": "qwen-max",
+  "kind": "infer",
+  "recorded_at": "2026-07-12T14:21:31.491333+00:00",
+  "request_summary": "A6-invalid-input: 在仓库里找 TODO 注释",
+  "response": {
+    "tool_uses": [
+      {
+        "id": "call_efd6586141b74a2083a605",
+        "name": "Grep",
+        "input": {
+          "pattern": "TODO"
+        }
+      }
+    ],
+    "text": "看来我在使用 Grep 工具时没有正确提供所需的参数。让我更正这个问题并使用正确的正则表达式模式来搜索包含 \"TODO\" 的注释。",
+    "stop_reason": "tool_use"
+  }
+}

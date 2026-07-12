@@ -1,0 +1,12 @@
+{
+  "case_id": "A6-read-missing-file",
+  "model": "qwen-max",
+  "kind": "infer",
+  "recorded_at": "2026-07-12T14:21:37.266334+00:00",
+  "request_summary": "A6-read-missing-file: 读一下项目的配置文件 settings.toml",
+  "response": {
+    "tool_uses": [],
+    "text": "项目中没有找到 `settings.toml` 文件。请确认文件名是否正确，或者文件是否位于 `/workspace` 目录下。如果文件在其他位置，请提供正确的路径。",
+    "stop_reason": "end_turn"
+  }
+}
