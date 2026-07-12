@@ -273,3 +273,50 @@ class TestSkillsCatalogSection:
         without_kwarg = build_system_prompt(tools, env)
         with_none = build_system_prompt(tools, env, skill_store=None)
         assert without_kwarg == with_none
+
+
+class TestSkillsSectionTriggerGuidance:
+    """Sprint 1 v2 措辞(2026-07-12 规则校准后复活): 目录段携带触发引导,
+    治委派吸引子(先加载再委派/直答)且消歧 skill 名不是工具名."""
+
+    @pytest.fixture
+    def env(self) -> EnvironmentInfo:
+        return EnvironmentInfo(
+            os_name="Darwin",
+            os_version="25.4.0",
+            shell="/bin/zsh",
+            cwd=Path("/work"),
+            python_version="3.12.3",
+        )
+
+    @pytest.fixture
+    def tools(self) -> list[ToolSpec]:
+        return [
+            ToolSpec(
+                name="LoadSkill",
+                description="Load a named skill's body.",
+                input_schema={"type": "object", "properties": {}},
+            ),
+        ]
+
+    def test_guidance_names_both_attractors_and_disambiguates(
+        self, tools: list[ToolSpec], env: EnvironmentInfo, tmp_path: Path
+    ) -> None:
+        from openharness.skills.store import FilesystemSkillStore
+
+        (tmp_path / "s.md").write_text(
+            "---\nname: a-skill\ndescription: d\n---\nbody\n",
+            encoding="utf-8",
+        )
+        store = FilesystemSkillStore(global_dir=tmp_path)
+        prompt = build_system_prompt(tools, env, skill_store=store)
+        section = prompt[prompt.index("## Available Skills") :]
+        lowered = section.split("\n\n")[1].lower()
+        assert "first" in lowered
+        assert "before answering" in lowered  # 直答吸引子
+        assert "delegating" in lowered  # 委派吸引子
+        assert "not callable tools" in lowered  # 名当工具的消歧
+
+    def test_no_guidance_when_no_skills(self, tools: list[ToolSpec], env: EnvironmentInfo) -> None:
+        prompt = build_system_prompt(tools, env)
+        assert "before answering" not in prompt

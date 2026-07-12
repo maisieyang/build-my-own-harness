@@ -2,12 +2,12 @@
   "case_id": "TS2-loan-not-credit",
   "model": "qwen-max",
   "kind": "infer",
-  "recorded_at": "2026-07-12T05:30:48.714295+00:00",
+  "recorded_at": "2026-07-12T14:47:21.125413+00:00",
   "request_summary": "TS2-loan-not-credit: 帮我看下这份借款合同,有哪些条款对我不利?\n[合同文本占位]",
   "response": {
     "tool_uses": [
       {
-        "id": "call_9991c215e8f54732acc477",
+        "id": "call_58cf4ab1700b42b999c974",
         "name": "LoadSkill",
         "input": {
           "name": "loan-contract-review"

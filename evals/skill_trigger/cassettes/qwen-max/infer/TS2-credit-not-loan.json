@@ -2,12 +2,12 @@
   "case_id": "TS2-credit-not-loan",
   "model": "qwen-max",
   "kind": "infer",
-  "recorded_at": "2026-07-12T05:30:49.580900+00:00",
+  "recorded_at": "2026-07-12T14:47:22.297292+00:00",
   "request_summary": "TS2-credit-not-loan: 我上个月申请贷款被拒了,把这份征信报告里的查询记录数一下,是不是查太多次了?\n[报告文本占位]",
   "response": {
     "tool_uses": [
       {
-        "id": "call_53c7adfdff434be29fb664",
+        "id": "call_a78f519c8949414a8ed126",
         "name": "LoadSkill",
         "input": {
           "name": "parse-credit-report"

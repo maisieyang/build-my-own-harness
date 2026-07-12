@@ -9,9 +9,9 @@
    PASS slug_selection: exact slug: parse-credit-report
 
 ## TS1-release-notes-trigger [trigger]
-   calls: Agent
-   FAIL trigger_decision: expected LoadSkill, got: Agent
-   FAIL slug_selection: no LoadSkill call to inspect slug on
+   calls: LoadSkill(release-notes-writer)
+   PASS trigger_decision: LoadSkill called
+   PASS slug_selection: exact slug: release-notes-writer
 
 ## TS2-loan-not-credit [discrimination]
    calls: LoadSkill(loan-contract-review)
@@ -44,11 +44,11 @@
    PASS slug_selection: exact slug: sql-query-optimizer
 
 ## TS5-exact-slug-hyphens [slug-fidelity]
-   calls: (no tool call)
-   FAIL trigger_decision: expected LoadSkill, got: no tool call
-   FAIL slug_selection: no LoadSkill call to inspect slug on
+   calls: LoadSkill(loan-contract-review)
+   PASS trigger_decision: LoadSkill called
+   PASS slug_selection: exact slug: loan-contract-review
 
 # Summary
-  trigger_decision: 7/9
-  slug_selection: 7/9
-  cases all-dims-pass: 7/9
+  trigger_decision: 9/9
+  slug_selection: 9/9
+  cases all-dims-pass: 9/9

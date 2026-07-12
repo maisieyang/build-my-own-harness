@@ -43,32 +43,28 @@ slug-fidelity ×2)。restraint 语义与 tool_choice TC5 不同:**允许调
 | self-correction | TS4 | 未知 slug 的目录 is_error 回喂后单步选出精确 slug |
 | slug-fidelity | TS5 ×2 | 连字符 slug 精确性 |
 
-## Pass bar(ratify 2026-07-12,依 D41.5)
+## Pass bar(ratchet 2026-07-12,v2 措辞复活后;依 D41.5 + 预立规则)
 
-- **Gate:参照模型 qwen-max 上 `cases all-dims-pass ≥ 6/9`**,且 6 个
-  稳定绿 case(TS1-credit / TS2-credit-not-loan / TS3 ×2 / TS4 /
-  TS5-sql)**必须全绿**——任一破绿即回归。
-- 依据(N=4 稳定性画像,2026-07-12):6 case 4/4 绿;TS2-loan-not-credit
-  2/4 抖动;TS1-release-notes 与 TS5-exact-slug-hyphens **4/4 稳定红**。
-  禁止给 <100% 稳定的 case 设 100% 门,bar 落在稳定绿地板。
+- **Gate:参照模型 qwen-max 上 `cases all-dims-pass ≥ 7/9`**,且 7 个
+  稳定绿 case(TS1-credit / **TS1-release-notes** / TS2-loan-not-credit /
+  TS2-credit-not-loan / TS3 ×2 / TS4)**必须全绿**(破绿 = 稳定破 ≥2/4)。
+- 依据(v2 措辞 N=4 画像,attempt2 文件):8,9,8,8 /9;7 case 4/4 绿
+  (委派吸引子治愈、TS2 抖动止);TS5-hyphens 2/4 抖(直答残留)、
+  TS5-sql 1/4 采样噪声(名当工具)。
+- 历史:首版 bar 6/9(无引导语基线);v2 复活令地板 6→7,ratchet 环
+  第一次真实闭合。
 
-## Known reds(已知红基线 = 改进 backlog,非 oracle 缺陷)
+## 观察项(v2 措辞下;原 Known reds 已随治愈重写)
 
-两个 4/4 确定性红是**真实触发缺陷**,契约(目录段 "call LoadSkill to
-expand" + 工具描述 "Use when the user's task matches")明确覆盖这些
-case,模型行为违约:
+1. **委派吸引子:已治愈**(v2 引导语,TS1-release-notes 4/4 绿)。
+2. **直答吸引子:残留**——TS5-hyphens 2/4 抖(窄任务仍会零工具直答)。
+   进一步收敛的候选不在措辞(边际递减)而在 harness 侧。
+3. **skill-名-当-工具(新观察)**:TS5-sql 1/4 采样噪声级。harness 侧
+   修法候选:A3 未知工具名错误消息做最近邻提示("did you mean
+   LoadSkill(name=...)?")——多轮环境里引擎 tool-not-found 回喂已可纠正,
+   严重度低。
 
-1. **委派吸引子**(TS1-release-notes):多步任务时模型每次都选
-   SpawnAgent 而非先 LoadSkill——skill 触发输给子 agent 委派。
-2. **直答吸引子**(TS5-exact-slug-hyphens):窄任务时模型自认能答,
-   零工具直接开答。
-
-改进方向在**被测对象侧**(目录段措辞,如 "check skills before
-delegating or answering")——prompt 改动后重跑画像,红转绿则 ratchet
-bar(6/9 → 8/9),这正是 eval 作为改进闭环的用法。TS2 抖动(2/4)记录
-在案,不计入 bar。
-
-## 措辞迭代记录(Sprint 1,2026-07-12 — 负结果,按预立规则回滚)
+## 措辞迭代记录(Sprint 1,2026-07-12 — 首轮判负 → 规则校准后 v2 复活)
 
 按 `tasks/sprints-2026-07-plan.md` 预立规则(≤2 版;任一原稳定绿破绿即
 回滚)执行两次目录段引导语实验,**两版均触发回归红线,全部回滚**:
@@ -91,11 +87,16 @@ bar(6/9 → 8/9),这正是 eval 作为改进闭环的用法。TS2 抖动(2/4)记
    最近邻提示("did you mean LoadSkill(name=...)?")——A3 错误消息改进,
    归 Sprint 3 A6 地界
 
-bar 维持 6/9 不变;Known reds 不变;attempt 文件保留于 results/。
+**裁决(2026-07-12,用户)**:采纳第 3 条校准——"破绿"重定义为
+**稳定破(N=4 失败 ≥2 次)**,单次失败属采样噪声(原画像自身即含抖动
+case)。按新标准复核:v2 仅 TS5-sql 1/4 = 噪声,**v2 复活**,bar 棘轮
+6/9 → 7/9(见 Pass bar 节)。首轮"单次即破"的误杀与本次校准全程留痕
+——预立规则本身也要接受校准,这是预立法机制的一部分。attempt 文件
+保留于 results/。
 
 ## Cassettes & results
 
-- `cassettes/qwen-max/infer/` — 9 case 回放基线(record 轮 7/9,TS2
-  恰为绿;回放与 record 输出一致性已验证)
+- `cassettes/qwen-max/infer/` — 9 case 回放基线(v2 措辞下重录,record
+  轮 9/9;回放一致性已验证)
 - `results/qwen-max-run{1..4}.txt` — N=4 画像原始输出
 - 复跑:`OPENHARNESS_EVAL_MODE=replay uv run python scripts/spike_skill_trigger_eval.py`

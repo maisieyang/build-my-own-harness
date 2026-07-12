@@ -324,11 +324,19 @@ def _format_skills_section(store: SkillStore) -> str | None:
     # benefit from stable ordering; LLM's catalog parsing doesn't depend
     # on insertion order.
     body = "\n".join(f"- **{name}** -- {skills[name].description}" for name in sorted(skills))
-    # Sprint 1 (2026-07-12) NEGATIVE RESULT — do not re-add trigger guidance
-    # here without re-running the skill_trigger N=4 profile: two guidance
-    # wordings both cured the delegation attractor (TS1 4/4) but INDUCED a
-    # new failure (model calls the skill name as a tool), breaking a
-    # previously stable-green case. Per the pre-committed regression red
-    # line (tasks/sprints-2026-07-plan.md) both were rolled back. Full
-    # record: evals/skill_trigger/dataset_card.md 措辞迭代记录.
-    return f"## Available Skills (call LoadSkill to expand)\n\n{body}"
+    # Sprint 1 v2 wording, REVIVED 2026-07-12 after the user recalibrated
+    # the regression red line (破绿 = stable break >=2/4, not a single 1/4
+    # blip). Profile under this wording: 8,9,8,8 /9 — cures the delegation
+    # attractor (TS1 4/4) and stabilizes TS2; residuals: direct-answer on
+    # TS5-hyphens (2/4) and a 1/4 skill-name-as-tool blip on TS5-sql.
+    # This wording is the subject of evals/skill_trigger — changing it
+    # requires re-running the N=4 profile per tasks/sprints-2026-07-plan.md.
+    guidance = (
+        "If the user's task matches a skill's description below, load that "
+        "skill FIRST — before answering directly and before delegating to a "
+        "sub-agent. Skills are loaded only via the LoadSkill tool, passing "
+        'the skill name as the `name` argument (LoadSkill(name="...")); '
+        "skill names are not callable tools themselves. The skill body "
+        "contains required expert guidance you do not otherwise have."
+    )
+    return f"## Available Skills (call LoadSkill to expand)\n\n{guidance}\n\n{body}"
