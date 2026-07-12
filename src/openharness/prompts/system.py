@@ -324,4 +324,11 @@ def _format_skills_section(store: SkillStore) -> str | None:
     # benefit from stable ordering; LLM's catalog parsing doesn't depend
     # on insertion order.
     body = "\n".join(f"- **{name}** -- {skills[name].description}" for name in sorted(skills))
+    # Sprint 1 (2026-07-12) NEGATIVE RESULT — do not re-add trigger guidance
+    # here without re-running the skill_trigger N=4 profile: two guidance
+    # wordings both cured the delegation attractor (TS1 4/4) but INDUCED a
+    # new failure (model calls the skill name as a tool), breaking a
+    # previously stable-green case. Per the pre-committed regression red
+    # line (tasks/sprints-2026-07-plan.md) both were rolled back. Full
+    # record: evals/skill_trigger/dataset_card.md 措辞迭代记录.
     return f"## Available Skills (call LoadSkill to expand)\n\n{body}"

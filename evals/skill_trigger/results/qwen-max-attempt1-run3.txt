@@ -1,0 +1,54 @@
+# skill_trigger eval — D41 P0 (decision surface #5 / C1)
+# model:         qwen-max
+# dataset:       evals/skill_trigger/dataset.yaml
+# cassette_mode: live
+
+## TS1-credit-report-trigger [trigger]
+   calls: LoadSkill(parse-credit-report)
+   PASS trigger_decision: LoadSkill called
+   PASS slug_selection: exact slug: parse-credit-report
+
+## TS1-release-notes-trigger [trigger]
+   calls: LoadSkill(release-notes-writer)
+   PASS trigger_decision: LoadSkill called
+   PASS slug_selection: exact slug: release-notes-writer
+
+## TS2-loan-not-credit [discrimination]
+   calls: LoadSkill(loan-contract-review)
+   PASS trigger_decision: LoadSkill called
+   PASS slug_selection: exact slug: loan-contract-review
+
+## TS2-credit-not-loan [discrimination]
+   calls: LoadSkill(parse-credit-report)
+   PASS trigger_decision: LoadSkill called
+   PASS slug_selection: exact slug: parse-credit-report
+
+## TS3-restraint-edit-task [restraint]
+   calls: Edit
+   PASS trigger_decision: restraint held: no LoadSkill call (other tools allowed)
+   PASS slug_selection: vacuous pass: restraint case
+
+## TS3-restraint-near-miss [restraint]
+   calls: Write
+   PASS trigger_decision: restraint held: no LoadSkill call (other tools allowed)
+   PASS slug_selection: vacuous pass: restraint case
+
+## TS4-unknown-slug-recovery [self-correction]
+   calls: LoadSkill(parse-credit-report)
+   PASS trigger_decision: LoadSkill called
+   PASS slug_selection: exact slug: parse-credit-report
+
+## TS5-exact-slug-sql [slug-fidelity]
+   calls: LoadSkill(sql-query-optimizer)
+   PASS trigger_decision: LoadSkill called
+   PASS slug_selection: exact slug: sql-query-optimizer
+
+## TS5-exact-slug-hyphens [slug-fidelity]
+   calls: LoadSkill(loan-contract-review)
+   PASS trigger_decision: LoadSkill called
+   PASS slug_selection: exact slug: loan-contract-review
+
+# Summary
+  trigger_decision: 9/9
+  slug_selection: 9/9
+  cases all-dims-pass: 9/9

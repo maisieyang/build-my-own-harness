@@ -68,6 +68,31 @@ delegating or answering")——prompt 改动后重跑画像,红转绿则 ratchet
 bar(6/9 → 8/9),这正是 eval 作为改进闭环的用法。TS2 抖动(2/4)记录
 在案,不计入 bar。
 
+## 措辞迭代记录(Sprint 1,2026-07-12 — 负结果,按预立规则回滚)
+
+按 `tasks/sprints-2026-07-plan.md` 预立规则(≤2 版;任一原稳定绿破绿即
+回滚)执行两次目录段引导语实验,**两版均触发回归红线,全部回滚**:
+
+| 版 | 措辞要点 | 画像(N=4) | 增益 | 回归 |
+|---|---|---|---|---|
+| A(attempt1) | "call LoadSkill with that exact name FIRST — before answering / before delegating" | 8,7,9,9 /9 | 委派吸引子 4/4 治愈;TS2 抖动止 | **TS5-sql 破绿 1/4**:模型把 skill 名当工具名直接调(`calls: sql-query-optimizer`) |
+| B(attempt2) | A + 显式消歧 "skills are loaded only via LoadSkill; skill names are not callable tools" | 8,9,8,8 /9 | 同 A | **同款破绿 1/4**——消歧无效 |
+
+**科学结论**:
+1. 委派吸引子**可由措辞根治**(两版均 4/4)——缺陷在引导缺失,不在模型
+   能力;直答吸引子(TS5-hyphens)部分改善(4/4 红 → 2/4 抖)
+2. 但引导语**诱发新缺陷**:skill-名-当-工具-调用(两版均 ~1/4)。突出
+   skill 的存在感会增强幻觉工具的引力——修复引入了新失效模式,净交换
+   被回归红线拒绝
+3. 缓解剂量:生产多轮环境里该失误会被引擎的 tool-not-found 回喂纠正
+   (A3 恢复路径),单步 eval 的判罚比真实严重度偏重——**规则校准候选**:
+   "破绿"或应定义为稳定破(≥2/4)而非单次;留给用户裁决
+4. 修复方向候选(未试):不动 prompt,在 registry 侧给未知工具名做
+   最近邻提示("did you mean LoadSkill(name=...)?")——A3 错误消息改进,
+   归 Sprint 3 A6 地界
+
+bar 维持 6/9 不变;Known reds 不变;attempt 文件保留于 results/。
+
 ## Cassettes & results
 
 - `cassettes/qwen-max/infer/` — 9 case 回放基线(record 轮 7/9,TS2
