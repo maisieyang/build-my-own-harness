@@ -1,0 +1,156 @@
+# skill_trigger dataset — decision surface #5 / C1 (D41 P0 第二个)
+# Fixture catalog: 4 synthetic skills echoing the finance-skills dogfood
+# shape (two adjacent finance skills force real discrimination).
+# 扩量走 D41.6 飞轮: dogfood / L2 / SWE-bench 归因失败沉 case, 不凭想象编题.
+
+catalog:
+  - name: parse-credit-report
+    description: >-
+      解析个人征信报告(PDF 抽取文本或原文粘贴), 提取账户明细、逾期记录、
+      硬查询次数, 输出结构化摘要. Use for any task about reading or
+      extracting facts FROM a credit report.
+  - name: loan-contract-review
+    description: >-
+      审查贷款/借款合同条款, 标注对借款人不利的条款(利率跳升、提前还款
+      罚金、交叉违约), 给出风险等级. Use for tasks about reviewing loan
+      CONTRACT terms, not credit reports.
+  - name: sql-query-optimizer
+    description: >-
+      分析慢 SQL 查询, 给出执行计划解读、索引建议和改写方案.
+      Use when the user shares a slow SQL query needing optimization.
+  - name: release-notes-writer
+    description: >-
+      从 git 提交历史生成面向用户的版本发布说明(release notes),
+      按 feature/fix/breaking 分组. Use when asked to draft release notes.
+
+samples:
+  # ===== TS1 — clear trigger =====
+  - case_id: TS1-credit-report-trigger
+    capability: trigger
+    shape: single-user-message
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "这是我的征信报告文本,帮我把所有逾期记录和硬查询次数整理出来:\n[征信报告全文占位]"
+    expected_slug: parse-credit-report
+    notes: 任务与目录描述正面命中, 最基本的触发探针.
+
+  - case_id: TS1-release-notes-trigger
+    capability: trigger
+    shape: single-user-message
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "根据最近一个月的 git 提交,写一份 v2.0 的 release notes"
+    expected_slug: release-notes-writer
+    notes: 第二个正面触发, 不同领域, 防单一 case 侥幸.
+
+  # ===== TS2 — discrimination (adjacent finance skills) =====
+  - case_id: TS2-loan-not-credit
+    capability: discrimination
+    shape: single-user-message
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "帮我看下这份借款合同,有哪些条款对我不利?\n[合同文本占位]"
+    expected_slug: loan-contract-review
+    notes: >-
+      合同审查 vs 征信解析: 两个金融 skill 描述相邻, 模型必须读描述而不是
+      抓 '金融' 关键词. 期望 loan-contract-review, 选 parse-credit-report
+      即辨析失败.
+
+  - case_id: TS2-credit-not-loan
+    capability: discrimination
+    shape: single-user-message
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "我上个月申请贷款被拒了,把这份征信报告里的查询记录数一下,是不是查太多次了?\n[报告文本占位]"
+    expected_slug: parse-credit-report
+    notes: >-
+      反向辨析: 语境提到 '贷款' 但任务本体是读征信报告 —— 表面词与正确
+      slug 相反, 直接检验按描述匹配而非关键词匹配.
+
+  # ===== TS3 — restraint (no skill matches; other tools legitimate) =====
+  - case_id: TS3-restraint-edit-task
+    capability: restraint
+    shape: single-user-message
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "把 config.yaml 里的 timeout 从 10 改成 30"
+    expected_slug: null
+    notes: >-
+      普通编辑任务, 目录里没有任何相关 skill. 模型该直接用 Edit/Read 干活
+      —— 其他工具调用完全正当, 只断言不调 LoadSkill.
+
+  - case_id: TS3-restraint-near-miss
+    capability: restraint
+    shape: single-user-message
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "帮我写一个函数,计算一组贷款的月供(等额本息)"
+    expected_slug: null
+    notes: >-
+      近失误探针: '贷款' 字眼在场但任务是写代码, 与 loan-contract-review
+      (合同审查) 不匹配. 关键词党会在这里误触发.
+
+  # ===== TS4 — self-correction after unknown-slug error =====
+  - case_id: TS4-unknown-slug-recovery
+    capability: self-correction
+    shape: planted-error-history
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "这是我的征信报告,提取逾期记录:\n[报告文本占位]"
+      - role: assistant
+        content:
+          - type: tool_use
+            id: toolu_planted_1
+            name: LoadSkill
+            input: { name: "credit-report" }
+      - role: user
+        content:
+          - type: tool_result
+            tool_use_id: toolu_planted_1
+            content: >-
+              no skill named 'credit-report'; available skills:
+              loan-contract-review, parse-credit-report,
+              release-notes-writer, sql-query-optimizer
+            is_error: true
+    expected_slug: parse-credit-report
+    notes: >-
+      种植 LoadSkill 未知 slug 的 is_error 目录回喂(load_skill.py 的真实
+      错误格式), 断言下一步从目录里选出精确 slug —— A3 自纠机制在 skill
+      面的对应物.
+
+  # ===== TS5 — exact-slug fidelity =====
+  - case_id: TS5-exact-slug-sql
+    capability: slug-fidelity
+    shape: single-user-message
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "这条查询要跑 40 秒,帮我优化:\nSELECT * FROM orders o JOIN users u ON o.uid = u.id WHERE u.city = '上海' ORDER BY o.created_at DESC"
+    expected_slug: sql-query-optimizer
+    notes: slug 含连字符, 精确匹配探针 (sql_query_optimizer / SQLQueryOptimizer 均为失败).
+
+  - case_id: TS5-exact-slug-hyphens
+    capability: slug-fidelity
+    shape: single-user-message
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "review 一下这份贷款合同的提前还款条款\n[条款文本占位]"
+    expected_slug: loan-contract-review
+    notes: 三段连字符 slug 的精确性, 同时复验 TS2 的辨析方向.

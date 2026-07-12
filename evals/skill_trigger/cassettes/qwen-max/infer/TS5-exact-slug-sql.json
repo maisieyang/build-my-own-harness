@@ -1,0 +1,20 @@
+{
+  "case_id": "TS5-exact-slug-sql",
+  "model": "qwen-max",
+  "kind": "infer",
+  "recorded_at": "2026-07-12T05:31:02.861617+00:00",
+  "request_summary": "TS5-exact-slug-sql: 这条查询要跑 40 秒,帮我优化:\nSELECT * FROM orders o JOIN users u ON o.uid = u.id WHERE u.city = '上海' ORDER BY o.created_at DESC",
+  "response": {
+    "tool_uses": [
+      {
+        "id": "call_883301fbc5c848ab97d962",
+        "name": "LoadSkill",
+        "input": {
+          "name": "sql-query-optimizer"
+        }
+      }
+    ],
+    "text": "",
+    "stop_reason": "tool_use"
+  }
+}

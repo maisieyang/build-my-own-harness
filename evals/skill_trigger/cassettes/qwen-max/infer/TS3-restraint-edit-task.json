@@ -1,0 +1,22 @@
+{
+  "case_id": "TS3-restraint-edit-task",
+  "model": "qwen-max",
+  "kind": "infer",
+  "recorded_at": "2026-07-12T05:30:51.429706+00:00",
+  "request_summary": "TS3-restraint-edit-task: 把 config.yaml 里的 timeout 从 10 改成 30",
+  "response": {
+    "tool_uses": [
+      {
+        "id": "call_06513ccadde641a3a868a9",
+        "name": "Edit",
+        "input": {
+          "path": "config.yaml",
+          "old_str": "timeout: 10",
+          "new_str": "timeout: 30"
+        }
+      }
+    ],
+    "text": "",
+    "stop_reason": "tool_use"
+  }
+}

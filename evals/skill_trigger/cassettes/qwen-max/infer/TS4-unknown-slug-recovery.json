@@ -1,0 +1,20 @@
+{
+  "case_id": "TS4-unknown-slug-recovery",
+  "model": "qwen-max",
+  "kind": "infer",
+  "recorded_at": "2026-07-12T05:31:02.209250+00:00",
+  "request_summary": "TS4-unknown-slug-recovery: 这是我的征信报告,提取逾期记录:\n[报告文本占位]",
+  "response": {
+    "tool_uses": [
+      {
+        "id": "call_90d8c9decbd04396ae36fd",
+        "name": "LoadSkill",
+        "input": {
+          "name": "parse-credit-report"
+        }
+      }
+    ],
+    "text": "抱歉，我刚刚引用的技能名称有误。让我使用正确的技能“parse-credit-report”来解析您的个人征信报告并提取逾期记录。",
+    "stop_reason": "tool_use"
+  }
+}

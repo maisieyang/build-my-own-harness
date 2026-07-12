@@ -1,0 +1,21 @@
+{
+  "case_id": "TS1-release-notes-trigger",
+  "model": "qwen-max",
+  "kind": "infer",
+  "recorded_at": "2026-07-12T05:30:47.774815+00:00",
+  "request_summary": "TS1-release-notes-trigger: 根据最近一个月的 git 提交,写一份 v2.0 的 release notes",
+  "response": {
+    "tool_uses": [
+      {
+        "id": "call_94d605f11cfa4a1283b55f",
+        "name": "Agent",
+        "input": {
+          "description": "generate release notes from git history",
+          "prompt": "使用 Bash 工具从最近一个月的 git 提交中收集信息，然后根据这些信息撰写 v2.0 版本的发布说明。按功能/修复/重大变更分组。\n\n步骤 1: 使用 Bash 调用 'git log' 获取最近一个月的所有提交记录。\n步骤 2: 根据获取到的提交记录，分析并整理出功能改进、错误修复和任何重大变更。\n步骤 3: 撰写 v2.0 的版本发布说明，确保按照 feature/fix/breaking 分类列出。\n\n请开始执行第一步，并将结果返回给我。"
+        }
+      }
+    ],
+    "text": "",
+    "stop_reason": "tool_use"
+  }
+}
