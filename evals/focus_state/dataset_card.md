@@ -16,6 +16,13 @@
 | File | `evals/focus_state/dataset.yaml` |
 | Sample count | 8 |
 
+## Reference policy(D41.5 增补,2026-07-12)
+
+参照模型 **qwen3.7-max**(cassettes 双基线:qwen-plus + qwen3.7-max,
+以 qwen3.7-max 为 gate 基线;qwen-plus 上的红 = 信息,不是 gate 红——
+design-for-strong-model,D41.5)。pre-D41.5 建档,本声明为追补,
+既有 stability profile 与 bar 语义不变。
+
 ## Capability coverage
 
 | Capability | Sample | 测什么 |

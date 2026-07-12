@@ -10,6 +10,12 @@
 
 ---
 
+## Reference policy(D41.5 增补,2026-07-12)
+
+参照模型 **qwen3.7-max**(cassette 基线所在;acceptance bar
+"warm-start PASS ≥ 4/5" 即在该模型上 ratify)。弱模型上的红 = 信息,
+不是 gate 红(D41.5)。pre-D41.5 建档,本声明为追补。
+
 ## D35.3 three-claim header
 
 ### Capability claim

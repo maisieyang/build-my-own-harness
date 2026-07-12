@@ -1,0 +1,109 @@
+"""CI 回放门 — 概率层的第一道 CI 级 gate(2026-07-12)。
+
+三个 D41 世代 eval 的 cassette 回放是**确定性**的(D33.2:replay 永不
+落回 live,零 API 成本),因此它们 ratified 的 pass bar 可以直接作为
+pytest 断言进 CI:任何改动若破坏了「被测 prompt/描述 ↔ 录制行为 ↔ bar」
+三者的一致性(例如改了 scorer 语义、改了 dataset 而没重录、cassette
+损坏),这里立即红。
+
+注意边界:回放门守的是**回归**(录制行为不再通过 scorer),不是模型
+行为本身——模型行为变化要靠重录 + N=4 画像(spike 脚本,手动)。改了
+被测 prompt 后必须重录 cassettes 并按预立规则重画像,这里的失败正是
+提醒你去做这件事的铃。
+
+Bar 出处(各 dataset_card ratified 值):
+- tool_choice     8/8(全稳定绿)
+- skill_trigger   ≥7/9 且 7 稳定绿必须全绿(v2 措辞,ratchet 后)
+- error_feedback  ≥8/9 且 8 稳定绿必须全绿
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from openharness.eval.error_feedback import run_error_feedback_eval
+from openharness.eval.error_feedback_scorers import (
+    FabricatedGuidanceScorer,
+    FollowupScorer,
+    VerbatimRetryScorer,
+)
+from openharness.eval.skill_trigger import run_skill_trigger_eval
+from openharness.eval.skill_trigger_scorers import SlugSelectionScorer, TriggerDecisionScorer
+from openharness.eval.tool_choice import run_tool_choice_eval
+from openharness.eval.tool_choice_scorers import (
+    ExpectedToolScorer,
+    ForbiddenToolScorer,
+    InputFieldScorer,
+)
+
+_ROOT = Path(__file__).parents[2] / "evals"
+_MODEL = "qwen-max"  # reference policy, all three cards
+
+# 各 eval ratified 的稳定绿集合(card 为准)——这些 case 在回放中必须全绿
+_SKILL_TRIGGER_STABLE_GREENS = {
+    "TS1-credit-report-trigger",
+    "TS1-release-notes-trigger",
+    "TS2-loan-not-credit",
+    "TS2-credit-not-loan",
+    "TS3-restraint-edit-task",
+    "TS3-restraint-near-miss",
+    "TS4-unknown-slug-recovery",
+}
+_ERROR_FEEDBACK_STABLE_GREENS = {
+    "A5-write-outside-newmsg",
+    "A5-write-outside-oldmsg",
+    "A5-reroute-into-cwd",
+    "A6-unknown-tool",
+    "A6-invalid-input",
+    "A6-bash-command-missing",
+    "A6-read-missing-file",
+    "A6-double-planted-persistence",
+}
+
+
+def _passing_ids(results: list) -> set[str]:  # type: ignore[type-arg]
+    return {r.sample.case_id for r in results if all(score.value == 1.0 for score in r.scores)}
+
+
+class TestReplayGates:
+    async def test_tool_choice_replay_holds_bar(self) -> None:
+        results = await run_tool_choice_eval(
+            _ROOT / "tool_choice" / "dataset.yaml",
+            [ExpectedToolScorer(), ForbiddenToolScorer(), InputFieldScorer()],
+            api_client=None,
+            model=_MODEL,
+            cassette_root=_ROOT / "tool_choice" / "cassettes",
+            cassette_mode="replay",
+        )
+        passing = _passing_ids(results)
+        assert len(passing) == len(results) == 8, (
+            f"tool_choice bar 8/8 broken: failing={sorted({r.sample.case_id for r in results} - passing)}"
+        )
+
+    async def test_skill_trigger_replay_holds_bar(self) -> None:
+        results = await run_skill_trigger_eval(
+            _ROOT / "skill_trigger" / "dataset.yaml",
+            [TriggerDecisionScorer(), SlugSelectionScorer()],
+            api_client=None,
+            model=_MODEL,
+            cassette_root=_ROOT / "skill_trigger" / "cassettes",
+            cassette_mode="replay",
+        )
+        passing = _passing_ids(results)
+        missing_greens = _SKILL_TRIGGER_STABLE_GREENS - passing
+        assert not missing_greens, f"skill_trigger 稳定绿破绿: {sorted(missing_greens)}"
+        assert len(passing) >= 7, f"skill_trigger bar ≥7/9 broken: passing={len(passing)}"
+
+    async def test_error_feedback_replay_holds_bar(self) -> None:
+        results = await run_error_feedback_eval(
+            _ROOT / "error_feedback" / "dataset.yaml",
+            [VerbatimRetryScorer(), FollowupScorer(), FabricatedGuidanceScorer()],
+            api_client=None,
+            model=_MODEL,
+            cassette_root=_ROOT / "error_feedback" / "cassettes",
+            cassette_mode="replay",
+        )
+        passing = _passing_ids(results)
+        missing_greens = _ERROR_FEEDBACK_STABLE_GREENS - passing
+        assert not missing_greens, f"error_feedback 稳定绿破绿: {sorted(missing_greens)}"
+        assert len(passing) >= 8, f"error_feedback bar ≥8/9 broken: passing={len(passing)}"
