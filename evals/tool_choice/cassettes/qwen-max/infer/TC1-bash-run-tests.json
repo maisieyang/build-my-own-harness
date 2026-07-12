@@ -1,0 +1,20 @@
+{
+  "case_id": "TC1-bash-run-tests",
+  "model": "qwen-max",
+  "kind": "infer",
+  "recorded_at": "2026-07-08T13:41:36.038424+00:00",
+  "request_summary": "TC1-bash-run-tests: 跑一下全量测试,看看现在是不是绿的",
+  "response": {
+    "tool_uses": [
+      {
+        "id": "call_91671779b2d7431693b16d",
+        "name": "Bash",
+        "input": {
+          "command": "make test"
+        }
+      }
+    ],
+    "text": "",
+    "stop_reason": "tool_use"
+  }
+}

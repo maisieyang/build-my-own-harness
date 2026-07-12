@@ -1,0 +1,58 @@
+# tool_choice eval — D41 P0 (decision surface #2)
+# model:         qwen-max
+# dataset:       evals/tool_choice/dataset.yaml
+# cassette_mode: live
+
+## TC1-read-config [TC1]
+   calls: Read(path)
+   PASS tool_selection: first call is Read
+   PASS forbidden_avoidance: no forbidden tool used
+   PASS input_construction: all 1 field(s) hit
+
+## TC1-bash-run-tests [TC1]
+   calls: Bash(command)
+   PASS tool_selection: first call is Bash
+   PASS forbidden_avoidance: no forbidden tool used
+   FAIL input_construction: command (want any of ['pytest'], got 'make test')
+
+## TC2-grep-not-bash [TC2]
+   calls: Grep(pattern, path, line_cap)
+   PASS tool_selection: first call is Grep
+   PASS forbidden_avoidance: no forbidden tool used
+   PASS input_construction: all 1 field(s) hit
+
+## TC2-edit-not-write [TC2]
+   calls: Edit(path, old_str, new_str, replace_all)
+   PASS tool_selection: first call is Edit
+   PASS forbidden_avoidance: no forbidden tool used
+   PASS input_construction: all 1 field(s) hit
+
+## TC3-grep-scoped-path [TC3]
+   calls: Grep(pattern, path, glob)
+   PASS tool_selection: first call is Grep
+   PASS forbidden_avoidance: vacuous pass: no forbidden list
+   PASS input_construction: all 2 field(s) hit
+
+## TC3-write-new-file [TC3]
+   calls: Write(path, content)
+   PASS tool_selection: first call is Write
+   PASS forbidden_avoidance: vacuous pass: no forbidden list
+   PASS input_construction: all 2 field(s) hit
+
+## TC4-unknown-tool-recovery [TC4]
+   calls: Grep(pattern, hidden)
+   PASS tool_selection: first call is Grep
+   PASS forbidden_avoidance: no forbidden tool used
+   PASS input_construction: all 1 field(s) hit
+
+## TC5-greeting-no-tool [TC5]
+   calls: (no tool call)
+   PASS tool_selection: restraint held: no tool call
+   PASS forbidden_avoidance: vacuous pass: no forbidden list
+   PASS input_construction: vacuous pass: no input expectations
+
+# Summary
+  tool_selection: 8/8
+  forbidden_avoidance: 8/8
+  input_construction: 7/8
+  cases all-dims-pass: 7/8

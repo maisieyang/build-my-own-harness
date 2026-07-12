@@ -1,0 +1,23 @@
+{
+  "case_id": "TC2-edit-not-write",
+  "model": "qwen-max",
+  "kind": "infer",
+  "recorded_at": "2026-07-08T13:41:38.288999+00:00",
+  "request_summary": "TC2-edit-not-write: 把 README.md 里的 'quickstart' 改成 'Quick Start',整个文件只有一处",
+  "response": {
+    "tool_uses": [
+      {
+        "id": "call_e5cd9cfd4ff14946923cc3",
+        "name": "Edit",
+        "input": {
+          "path": "README.md",
+          "old_str": "quickstart",
+          "new_str": "Quick Start",
+          "replace_all": false
+        }
+      }
+    ],
+    "text": "",
+    "stop_reason": "tool_use"
+  }
+}

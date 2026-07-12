@@ -1,0 +1,153 @@
+# tool_choice eval dataset — capability-anchored (D41 P0, surface #2 A3/A4)
+#
+# 8 cases across 5 capabilities:
+#   TC1 selection       — right tool for the task
+#   TC2 discrimination  — near-synonym tools (Grep vs Bash-grep, Edit vs Write)
+#   TC3 param           — input field construction quality
+#   TC4 self-correction — planted unknown-tool error, next call must recover
+#   TC5 restraint       — no tool call for conversational input (contract E#2)
+#
+# Schema: openharness.eval.tool_choice.load_tool_choice_dataset() decodes
+# this into list[ToolChoiceSample]. expected_tool null = assert NO tool call.
+# expected_input_contains: field -> any-of substrings (case-insensitive).
+# See evals/tool_choice/dataset_card.md for the four-declaration header.
+
+samples:
+
+  # ===== TC1 — selection =====
+  - case_id: TC1-read-config
+    capability: TC1
+    shape: single-user-msg
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "帮我看一下 pyproject.toml 里要求的 Python 最低版本是多少"
+    expected_tool: Read
+    expected_input_contains:
+      path: ["pyproject.toml"]
+    forbidden_tools: [Bash]
+    notes: "读单个已知文件应选 Read,不该起 Bash cat。"
+
+  - case_id: TC1-bash-run-tests
+    capability: TC1
+    shape: single-user-msg
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "跑一下全量测试,看看现在是不是绿的"
+    expected_tool: Bash
+    expected_input_contains: {}
+    forbidden_tools: [Grep, Read]
+    notes: >-
+      执行测试是 Bash 的正当场景;不该拿 Grep/Read 假装。纯 TC1 选择探针:
+      合成环境无项目上下文,测试命令(pytest vs make test)对模型不可知,
+      不设 input 期望(Day 1 N=4 发现:command 含 pytest 的断言 4/4 确定性
+      失败于 'make test'——断言了输入中不存在的信息,已撤;带项目上下文的
+      参数构造是未来 case 形态,见 dataset_card Known gaps)。
+
+  # ===== TC2 — discrimination =====
+  - case_id: TC2-grep-not-bash
+    capability: TC2
+    shape: single-user-msg
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "找出 src/ 下所有调用 summarize( 的地方"
+    expected_tool: Grep
+    expected_input_contains:
+      pattern: ["summarize"]
+    forbidden_tools: [Bash]
+    notes: "内容搜索有专用 Grep 工具,不该 Bash grep(近义辨析)。"
+
+  - case_id: TC2-edit-not-write
+    capability: TC2
+    shape: single-user-msg
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "把 README.md 里的 'quickstart' 改成 'Quick Start',整个文件只有一处"
+    expected_tool: Edit
+    expected_input_contains:
+      old_str: ["quickstart"]
+    forbidden_tools: [Write]
+    notes: "局部替换用 Edit;Write 会整文件覆盖,是破坏性误选。"
+
+  # ===== TC3 — param construction =====
+  - case_id: TC3-grep-scoped-path
+    capability: TC3
+    shape: single-user-msg
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "只在 tests/ 目录下找 assert_called 出现的位置"
+    expected_tool: Grep
+    expected_input_contains:
+      pattern: ["assert_called"]
+      path: ["tests"]
+    forbidden_tools: []
+    notes: "用户给了范围约束,path 参数必须体现 tests/ 限定。"
+
+  - case_id: TC3-write-new-file
+    capability: TC3
+    shape: single-user-msg
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "新建 docs/changelog-draft.md,内容就写一行:# Changelog Draft"
+    expected_tool: Write
+    expected_input_contains:
+      path: ["docs/changelog-draft.md"]
+      content: ["Changelog Draft"]
+    forbidden_tools: []
+    notes: "新建文件用 Write;path 与 content 两个字段都要按指令构造。"
+
+  # ===== TC4 — unknown-tool self-correction (two-step: error planted) =====
+  - case_id: TC4-unknown-tool-recovery
+    capability: TC4
+    shape: planted-error
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "找出仓库里所有 TODO 注释"
+      - role: assistant
+        content:
+          - type: tool_use
+            id: call_search_1
+            name: Search
+            input:
+              query: "TODO"
+      - role: user
+        content:
+          - type: tool_result
+            tool_use_id: call_search_1
+            content: "tool not found: Search"
+            is_error: true
+    expected_tool: Grep
+    expected_input_contains:
+      pattern: ["TODO"]
+    forbidden_tools: [Search]
+    notes: >-
+      种植的错误历史:上一步调了不存在的 Search 并收到 engine 原文
+      "tool not found: ..."(engine/query.py:514 格式)。断言打在报错后
+      第二格:换用真实存在的 Grep,不原样重放 Search。
+
+  # ===== TC5 — restraint (prompt contract E#2) =====
+  - case_id: TC5-greeting-no-tool
+    capability: TC5
+    shape: single-user-msg
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "你好呀,今天过得怎么样?"
+    expected_tool: null
+    expected_input_contains: {}
+    forbidden_tools: []
+    notes: "寒暄不该触发任何工具(system prompt 契约:don't invoke tools for greetings)。"
