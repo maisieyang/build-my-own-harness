@@ -1516,6 +1516,7 @@ Use Ctrl+D (EOF) to exit; Ctrl+C cancels the current input line."""
 
 async def _run_chat(
     *,
+    initial_prompt: str | None = None,
     model_override: str | None,
     max_tokens: int,
     permission_mode_override: PermissionMode | None,
@@ -1809,18 +1810,33 @@ async def _run_chat(
                 status_provider=_status_line,
             )
 
+        # D43.1: a root-command positional prompt is seeded as the first
+        # REPL turn — answered, then the session stays open (no revolving
+        # door). D43.4: Ctrl+D requires a double-press (armed on first EOF,
+        # reset by any successful read) so a slip doesn't drop the session.
+        pending_input: str | None = initial_prompt
+        eof_armed = False
         while True:
             try:
-                if prompt_session is not None:
+                if pending_input is not None:
+                    user_input = pending_input
+                    pending_input = None
+                    typer.echo(f">>> {user_input}")
+                elif prompt_session is not None:
                     user_input = await prompt_session.prompt_async(">>> ")
                 else:
                     user_input = await asyncio.to_thread(input, ">>> ")
             except EOFError:
-                typer.echo("")  # newline after EOF
-                break
+                if eof_armed:
+                    typer.echo("")  # newline after EOF
+                    break
+                eof_armed = True
+                typer.echo("\n(press Ctrl+D again to exit)")
+                continue
             except KeyboardInterrupt:
                 typer.echo("\n(use /exit to quit)")
                 continue
+            eof_armed = False
 
             user_input = user_input.strip()
             if not user_input:
@@ -2110,12 +2126,21 @@ def _root(
         help="Print version and exit.",
     ),
 ) -> None:
-    """OpenHarness CLI."""
+    """OpenHarness CLI.
+
+    D43 front-door note: ``oh "prompt"`` / ``oh -p "prompt"`` are handled
+    by :func:`_preprocess_root_argv` in ``main()`` (known-subcommand-first
+    argv rewrite), NOT by params here — a Click group feeds its positional
+    argument before resolving subcommands, so a group-level ``prompt``
+    would shadow every subcommand (``oh chat`` → prompt="chat"). Learned
+    the hard way; do not re-add group-level positionals.
+    """
     # repl-ux plan §1 (正门): bare ``oh`` = argless ``oh chat``. Every
     # kwarg is spelled out because calling the typer-decorated ``chat``
     # directly would otherwise leak OptionInfo sentinels as values.
     if ctx.invoked_subcommand is None:
         chat(
+            prompt=None,
             model=None,
             max_tokens=DEFAULT_MAX_TOKENS,
             auto=False,
@@ -2307,6 +2332,7 @@ def ask(
     tool_result_cap: int | None = typer.Option(
         None,
         "--tool-result-cap",
+        hidden=True,
         min=0,
         help=(
             "Layer 1 per-tool-result token cap. Outputs above this cap are "
@@ -2317,6 +2343,7 @@ def ask(
     no_auto_truncate: bool = typer.Option(
         False,
         "--no-auto-truncate",
+        hidden=True,
         help=(
             "Disable Layer 1 truncation hook registration. Raw tool outputs "
             "flow through unchanged;Layer 2 reactive (prompt-too-long retry) "
@@ -2356,6 +2383,7 @@ def ask(
     sandbox_image: str | None = typer.Option(
         None,
         "--sandbox-image",
+        hidden=True,
         help=(
             "Docker image for the sandbox (default: python:3.12-slim). "
             "Overrides OPENHARNESS_SANDBOX_IMAGE."
@@ -2364,6 +2392,7 @@ def ask(
     sandbox_network: str | None = typer.Option(
         None,
         "--sandbox-network",
+        hidden=True,
         help=(
             "Container network mode [none|bridge]. ``none`` (default) "
             "blocks external network — strongest default. ``bridge`` "
@@ -2373,6 +2402,7 @@ def ask(
     sandbox_memory: str | None = typer.Option(
         None,
         "--sandbox-memory",
+        hidden=True,
         help=(
             "Container memory limit, Docker-style spec (1g / 512m / etc.). "
             "Overrides OPENHARNESS_SANDBOX_MEMORY (default 1g)."
@@ -2381,6 +2411,7 @@ def ask(
     sandbox_cpus: float | None = typer.Option(
         None,
         "--sandbox-cpus",
+        hidden=True,
         help=(
             "Container CPU quota in CPU equivalents (1.0 = one full CPU; "
             "0.5 = half). Overrides OPENHARNESS_SANDBOX_CPUS (default 1.0)."
@@ -2389,6 +2420,7 @@ def ask(
     sandbox_runtime: str | None = typer.Option(
         None,
         "--sandbox-runtime",
+        hidden=True,
         help=(
             "OCI runtime for the sandbox container. ``runc`` (default) "
             "shares the host kernel; ``runsc`` selects gVisor for user-"
@@ -2401,6 +2433,7 @@ def ask(
     enable_plugin_hooks: bool | None = typer.Option(
         None,
         "--enable-plugin-hooks/--no-enable-plugin-hooks",
+        hidden=True,
         help=(
             "Enable discovery of third-party hooks declared via the "
             "``openharness.hooks`` Python entry-point group (Phase 5e). "
@@ -2412,6 +2445,7 @@ def ask(
     enable_plugins: bool | None = typer.Option(
         None,
         "--enable-plugins/--no-enable-plugins",
+        hidden=True,
         help=(
             "Enable discovery + loading of plugins from "
             "~/.openharness/plugins/<name>/manifest.yaml (Phase 9). "
@@ -2424,6 +2458,7 @@ def ask(
     enable_memory: bool | None = typer.Option(
         None,
         "--enable-memory/--no-enable-memory",
+        hidden=True,
         help=(
             "Enable the memory subsystem (Phase 10, D28.10). When ON "
             "(default), CLAUDE.md cascade + per-project durable memory "
@@ -2436,6 +2471,7 @@ def ask(
     enable_web: bool | None = typer.Option(
         None,
         "--enable-web/--no-enable-web",
+        hidden=True,
         help=(
             "Enable web tools — WebSearch + WebFetch (Phase 14 D29.3). "
             "Default OFF: tools are not registered and the system "
@@ -2450,6 +2486,7 @@ def ask(
     compact_threshold: float | None = typer.Option(
         None,
         "--compact-threshold",
+        hidden=True,
         min=0.0,
         max=1.0,
         help=(
@@ -2462,6 +2499,7 @@ def ask(
     no_auto_compact: bool = typer.Option(
         False,
         "--no-auto-compact",
+        hidden=True,
         help=(
             "Disable proactive auto-compact (Phase 11). The engine's "
             "reactive prompt-too-long retry remains active as the last-"
@@ -2495,6 +2533,7 @@ def ask(
     llm_focus_state: bool | None = typer.Option(
         None,
         "--llm-focus-state/--no-llm-focus-state",
+        hidden=True,
         help=(
             "Opt in to LLM-authored ``tool_metadata.task_focus_state`` "
             "(Phase 13 D31.7). Fires a secondary LLM call at turn "
@@ -3047,6 +3086,13 @@ def ask(
 
 @app.command(help="Open an interactive multi-turn REPL (Phase 6+).")
 def chat(
+    prompt: str | None = typer.Argument(
+        None,
+        help=(
+            "Optional initial prompt (D43.1): submitted as the first REPL "
+            "turn, then the session stays interactive."
+        ),
+    ),
     model: str | None = typer.Option(None, "--model", "-m", help="Model name override."),
     max_tokens: int = typer.Option(
         DEFAULT_MAX_TOKENS, "--max-tokens", min=1, help="Max tokens per turn."
@@ -3055,7 +3101,7 @@ def chat(
     dry_run: bool = typer.Option(False, "--dry-run", help="List tool calls; don't execute."),
     log_level: LogLevel | None = typer.Option(None, "--log-level"),
     log_format: LogFormat | None = typer.Option(None, "--log-format"),
-    tool_result_cap: int | None = typer.Option(None, "--tool-result-cap", min=0),
+    tool_result_cap: int | None = typer.Option(None, "--tool-result-cap", hidden=True, min=0),
     no_auto_truncate: bool = typer.Option(False, "--no-auto-truncate"),
     no_skills: bool = typer.Option(False, "--no-skills"),
     no_commands: bool = typer.Option(False, "--no-commands"),
@@ -3066,16 +3112,20 @@ def chat(
     sandbox_cpus: float | None = typer.Option(None, "--sandbox-cpus"),
     sandbox_runtime: str | None = typer.Option(None, "--sandbox-runtime"),
     enable_plugin_hooks: bool | None = typer.Option(
-        None, "--enable-plugin-hooks/--no-enable-plugin-hooks"
+        None,
+        "--enable-plugin-hooks/--no-enable-plugin-hooks",
+        hidden=True,
     ),
     enable_plugins: bool | None = typer.Option(
         None,
         "--enable-plugins/--no-enable-plugins",
+        hidden=True,
         help="Enable plugin discovery + loading (Phase 9). Default OFF.",
     ),
     enable_memory: bool | None = typer.Option(
         None,
         "--enable-memory/--no-enable-memory",
+        hidden=True,
         help=(
             "Enable the memory subsystem (Phase 10). Default ON. "
             "Per-turn relevance scoring + CLAUDE.md injection. "
@@ -3085,6 +3135,7 @@ def chat(
     enable_web: bool | None = typer.Option(
         None,
         "--enable-web/--no-enable-web",
+        hidden=True,
         help=(
             "Enable WebSearch + WebFetch tools (Phase 14). Default "
             "OFF; system prompt picks up anti-substitution paragraph "
@@ -3096,6 +3147,7 @@ def chat(
     compact_threshold: float | None = typer.Option(
         None,
         "--compact-threshold",
+        hidden=True,
         min=0.0,
         max=1.0,
         help="Auto-compact threshold (Phase 11). Overrides OPENHARNESS_COMPACT__THRESHOLD_RATIO.",
@@ -3103,6 +3155,7 @@ def chat(
     no_auto_compact: bool = typer.Option(
         False,
         "--no-auto-compact",
+        hidden=True,
         help="Disable proactive auto-compact (Phase 11). Reactive PTL retry still active.",
     ),
     resume: bool = typer.Option(
@@ -3125,6 +3178,7 @@ def chat(
     llm_focus_state: bool | None = typer.Option(
         None,
         "--llm-focus-state/--no-llm-focus-state",
+        hidden=True,
         help="Opt in to LLM-authored task_focus_state (Phase 13 D31.7). Default OFF.",
     ),
 ) -> None:
@@ -3144,6 +3198,7 @@ def chat(
     try:
         asyncio.run(
             _run_chat(
+                initial_prompt=prompt,
                 model_override=model,
                 max_tokens=max_tokens,
                 permission_mode_override=permission_mode_override,
@@ -3417,6 +3472,7 @@ def hooks_list(
     enable_plugin_hooks: bool = typer.Option(
         False,
         "--enable-plugin-hooks/--no-enable-plugin-hooks",
+        hidden=True,
         help="Also discover entry-point + filesystem plugin hooks.",
     ),
 ) -> None:
@@ -3466,6 +3522,7 @@ def hooks_describe(
     enable_plugin_hooks: bool = typer.Option(
         False,
         "--enable-plugin-hooks/--no-enable-plugin-hooks",
+        hidden=True,
         help="Look up plugin hooks too.",
     ),
 ) -> None:
@@ -4693,6 +4750,43 @@ def run_show(
 # --------------------------------------------------------------------------- #
 
 
+def _known_subcommands() -> set[str]:
+    """Registered subcommand names (typer commands + sub-apps)."""
+    names = {cmd.name for cmd in app.registered_commands if cmd.name}
+    names.update(
+        {c.callback.__name__ for c in app.registered_commands if c.name is None and c.callback}
+    )
+    names.update({g.name for g in app.registered_groups if g.name})
+    return names
+
+
+def _preprocess_root_argv(argv: list[str]) -> list[str]:
+    """D43.1/D43.2 — known-subcommand-first argv rewrite (Claude Code 形态).
+
+    A Click group feeds its positional ARGUMENT before resolving
+    subcommands, so ``oh "prompt"`` cannot be a group-level positional
+    (it would shadow every subcommand). Instead ``main()`` rewrites argv
+    before Typer sees it:
+
+    - first non-option token is a known subcommand → passthrough
+    - ``-p``/``--print`` anywhere in a non-subcommand invocation →
+      delegate to ``ask`` (full contract-flag surface for free)
+    - any other non-option lead token → delegate to ``chat`` (the token
+      becomes the seeded initial prompt, D43.1)
+    - pure options (``--version``/``--help``) or empty → passthrough
+
+    Known limit (documented in D43): a quoted prompt equal to a
+    subcommand name routes to the subcommand — same trade-off as
+    Claude Code.
+    """
+    first_positional = next((t for t in argv if not t.startswith("-")), None)
+    if first_positional is None or first_positional in _known_subcommands():
+        return argv
+    if "-p" in argv or "--print" in argv:
+        return ["ask", *argv]
+    return ["chat", *argv]
+
+
 def main() -> None:
     """Console-script entry point (``oh`` / ``openharness``).
 
@@ -4700,7 +4794,9 @@ def main() -> None:
     function does not return a value. ``__main__.py`` and the script
     wrapper both rely on that exit-code propagation.
     """
-    app()
+    import sys
+
+    app(_preprocess_root_argv(sys.argv[1:]))
 
 
 if __name__ == "__main__":  # pragma: no cover

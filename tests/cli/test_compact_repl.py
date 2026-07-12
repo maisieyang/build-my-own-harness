@@ -225,26 +225,20 @@ class TestCompactReplCommand:
 # --------------------------------------------------------------------------- #
 
 
-class TestHelpMentionsNewFlags:
-    def test_ask_help_lists_new_flags(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # Wide terminal so the flags don't wrap; strip ANSI because under
-        # force_terminal (CI sets GITHUB_ACTIONS) Rich styles the help text.
-        monkeypatch.setenv("COLUMNS", "200")
-        runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "--help"])
-        assert result.exit_code == 0
-        plain = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", result.stdout)
-        assert "--no-auto-compact" in plain
-        assert "--compact-threshold" in plain
+class TestCompactFlagsAreHiddenConfigFlags:
+    """D43.3 旗面瘦身: compact 两旗被归为配置旗 -- 退出 help 展示(env
+    孪生是文档正道),解析兼容保留. 原 TestHelpMentionsNewFlags 断言的
+    "出现在 help" 契约随 D43 反转."""
 
-    def test_chat_help_lists_new_flags(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_hidden_from_both_helps(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("COLUMNS", "200")
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["chat", "--help"])
-        assert result.exit_code == 0
-        plain = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", result.stdout)
-        assert "--no-auto-compact" in plain
-        assert "--compact-threshold" in plain
+        for cmd in ("ask", "chat"):
+            result = runner.invoke(cli_module.app, [cmd, "--help"])
+            assert result.exit_code == 0
+            plain = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", result.stdout)
+            assert "--no-auto-compact" not in plain, cmd
+            assert "--compact-threshold" not in plain, cmd
 
     def test_chat_help_text_mentions_compact_repl(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_min_env(monkeypatch)
