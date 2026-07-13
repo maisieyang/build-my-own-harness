@@ -143,21 +143,37 @@ class TestBashEmptyOutput:
 
 
 class TestBashTruncation:
-    async def test_output_truncated_at_max_chars(
+    """F6 (dogfood Day 1): 截断改 head+tail 双保留 -- 命令输出的信息密度
+    在尾部(统计行/错误/exit 文本), 砍尾留头曾让模型看不到 pytest 统计行
+    而编造 '2468 passed' (learnings/dogfood-day1). 对齐 Layer-1 D14.1 的
+    50/50 约定."""
+
+    async def test_truncation_keeps_head_and_tail(
         self, tool: Bash, ctx: ToolExecutionContext
     ) -> None:
-        # Generate 13,000 'x' chars: > MAX_OUTPUT_CHARS (12,000).
+        # 头部可识别 + 30,000 字符灌水 + 尾部统计行(必须存活)
+        cmd = (
+            'python3 -c "import sys; '
+            "sys.stdout.write('HEAD-SENTINEL\\n' + 'x' * 30000 + "
+            "'\\n2652 passed, 8 skipped in 105s')\""
+        )
+        result = await tool.execute(BashInput(command=cmd), ctx)
+        assert result.is_error is False
+        assert "[truncated" in result.output
+        assert result.output.startswith("HEAD-SENTINEL")
+        # 关键断言: 尾部统计行存活 -- 模型有真话可抄
+        assert result.output.rstrip().endswith("2652 passed, 8 skipped in 105s")
+        # 保留总量(头+尾, 不含标记)不超过 cap
+        head, _, rest = result.output.partition("\n... [truncated")
+        _, _, tail = rest.partition("] ...\n")
+        assert len(head) + len(tail) <= MAX_OUTPUT_CHARS
+
+    async def test_under_cap_output_untouched(self, tool: Bash, ctx: ToolExecutionContext) -> None:
         result = await tool.execute(
-            BashInput(command="python3 -c \"import sys; sys.stdout.write('x' * 13000)\""),
+            BashInput(command="python3 -c \"import sys; sys.stdout.write('y' * 500)\""),
             ctx,
         )
-        assert result.is_error is False
-        # Truncation marker present; total length is the cap plus the marker.
-        assert "[truncated" in result.output
-        assert result.output.startswith("x" * 100)
-        # Capped portion is exactly MAX_OUTPUT_CHARS chars.
-        head, _, _ = result.output.partition("\n... [truncated")
-        assert len(head) == MAX_OUTPUT_CHARS
+        assert result.output == "y" * 500
 
 
 class TestBashValidation:

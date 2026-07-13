@@ -15,9 +15,10 @@ Behavior contract(unchanged across the P7-T3 refactor):
   (handled by the substrate's pipe-level merge in :class:`HostExecution`).
 - On timeout:``SIGTERM`` -> 2s grace -> ``SIGKILL`` (handled by the
   substrate).
-- Output truncated at 12,000 chars (with a tail marker) — handled here
-  in the tool layer because truncation is LLM-facing semantics, not
-  raw process I/O.
+- Output over 12,000 chars is head+tail truncated (50/50, middle marker,
+  F6) — summaries/exit text live at the END of command output and must
+  survive; handled here in the tool layer because truncation is
+  LLM-facing semantics, not raw process I/O.
 - Empty stdout returns ``"(no output)"`` sentinel (P3-T1.1b) — same
   reasoning, LLM-facing.
 - ``exit_code`` and ``duration_ms`` go to ``metadata`` (D9.5).
@@ -128,8 +129,16 @@ class Bash(BaseTool[BashInput]):
         if output == "":
             output = NO_OUTPUT_SENTINEL
         elif len(output) > MAX_OUTPUT_CHARS:
+            # F6 (dogfood Day 1, learnings/dogfood-day1): head+tail, never
+            # head-only. Command output packs its information density at the
+            # ends — errors surface early, summaries/exit text land LAST
+            # (pytest's "N passed" is the final line). Head-only truncation
+            # amputated exactly that line and the model, left with nothing
+            # true to quote, fabricated its own count. 50/50 split mirrors
+            # Layer-1's head_tail_truncate convention (D14.1).
             dropped = len(output) - MAX_OUTPUT_CHARS
-            output = output[:MAX_OUTPUT_CHARS] + f"\n... [truncated {dropped} chars]"
+            half = MAX_OUTPUT_CHARS // 2
+            output = output[:half] + f"\n... [truncated {dropped} chars] ...\n" + output[-half:]
 
         return ToolResult(
             output=output,
