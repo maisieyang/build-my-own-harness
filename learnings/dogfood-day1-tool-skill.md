@@ -93,7 +93,7 @@
 | F5 | 命令仅执行中瞬显,transcript 不可事后审计 | backlog(REPL 完成行保留 command 摘要) |
 | F7 | skill body 欠规格 → 编造身份 | skill 编写规范(Ch6);skill-body 质量维度的第一实证 |
 | 正样本 ×4 | 上下文构参/辨析理由自述/委派治愈守住/最强诱导不咬钩 | eval-体感互证记录;L2 正样本池 |
-| F8 | replay 模式的 cassette 查找绑 settings.model——用户配置模型 ≠ 参照模型时注定失败(fail-closed 正确炸出,D33.2 验证 ✓;但 replay 本不调 API,不该依赖用户模型配置) | backlog:replay 缺省取参照模型,或报错给出正确命令 |
+| F8 | replay 模式的 cassette 查找绑 settings.model——用户配置模型 ≠ 参照模型时注定失败(fail-closed 正确炸出,D33.2 验证 ✓;但 replay 本不调 API,不该依赖用户模型配置) | **已修**(当日):replay 不再构造 Settings(零凭据依赖),模型缺省取参照模型,显式 OPENHARNESS_MODEL 仍可覆盖且 fail-closed 不变 |
 
 ## 章节素材包
 

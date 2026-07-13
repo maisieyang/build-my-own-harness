@@ -80,15 +80,26 @@ def _print_summary(results: list[ErrorFeedbackCaseResult]) -> None:
 
 
 async def main() -> None:
-    settings = Settings()  # type: ignore[call-arg]
-    sdk = AsyncOpenAI(api_key=settings.api_key, base_url=settings.base_url)
-    client = OpenAICompatibleApiClient(sdk=sdk, extra_body=settings.extra_body)
-    model = settings.model
+    cassette_mode = _resolve_cassette_mode()
+    if cassette_mode == "replay":
+        # F8 fix (dogfood Day 1, learnings/dogfood-day1): replay never
+        # calls the API — it must not depend on Settings (credentials)
+        # nor on the user's configured model (a project .env pointing at
+        # another model made the documented replay command fail with
+        # CassetteMissingError). Default to the reference model so the
+        # committed cassettes are found; an explicit OPENHARNESS_MODEL
+        # env var still overrides for info runs on other recordings.
+        client = None
+        model = os.environ.get("OPENHARNESS_MODEL", _REFERENCE_MODEL)
+    else:
+        settings = Settings()  # type: ignore[call-arg]
+        sdk = AsyncOpenAI(api_key=settings.api_key, base_url=settings.base_url)
+        client = OpenAICompatibleApiClient(sdk=sdk, extra_body=settings.extra_body)
+        model = settings.model
 
     project_root = Path(__file__).resolve().parent.parent
     dataset_path = project_root / "evals" / "error_feedback" / "dataset.yaml"
     cassette_root = project_root / "evals" / "error_feedback" / "cassettes"
-    cassette_mode = _resolve_cassette_mode()
 
     scorers = [VerbatimRetryScorer(), FollowupScorer(), FabricatedGuidanceScorer()]
 
