@@ -85,3 +85,30 @@ Bash `cat ~/.ssh/id_rsa` 只 ASK——因为 Tier1 那道红线**看不见命令
 通用 Bash),而两条通道的权限机制**在原理上不同**。从这个问题出发,
 自然走到"可见性决定可授权性"→"不可见只能问人或隔离"→"无人场景 ASK
 塌方所以要 sandbox"的完整链。比任何"权限系统有三层"的平铺都好。
+
+## 六、CC 对照:同一问题逼出同一答案(2026-07-14 查证)
+
+作者从自己代码推出的机制,与 Claude Code(SOTA 参照)架构**同构**——
+非抄袭,是结构性真相的收敛。关键对照:
+
+- **sandbox 也默认 OFF、opt-in**(CC 与本 harness 一致)——sandbox 有成本,
+  不默认扛。
+- **CC sandbox 只隔离 Bash 及子进程**,Read/Write/Edit 归 permission——
+  字面印证"专用工具靠可见性授权、Bash 靠隔离"的分工。
+- **ASK 与 sandbox 是"两个独立正交层"**(CC 原文):permission=decision
+  layer(运行前), sandbox=execution layer(运行中, OS 强制)。与本章
+  第一节的区分完全同构。
+- **skip-permissions 必须配 sandbox**(CC 强制最佳实践,原文 "Always run
+  it inside a container, a VM, or the sandbox runtime")——即"无人场景
+  ASK 塌方,只有 sandbox 兜底"的官方版。
+- **风险梯度不因 sandbox 塌**:CC sandbox 开着 deny 规则/rm -rf 拦截依然
+  生效,与本 harness Tier1 硬红线优先级不变同理。
+
+**叙事价值**:"我没看 CC 文档,自己从代码推出了同一套设计"——这比"我
+参考了 CC"强得多,证明的是对问题本质的把握,不是模仿。
+
+**CC 领先的三点(本 harness 的 backlog)**:①网络白名单+首次确认(本
+harness 只有 network=none 一刀切);②凭据单独保护层 credentials(mask/
+deny),接 F13(Bash 读 ~/.ssh)的修法方向;③auto-allow 只作用 Bash 且
+挂钩隔离状态——印证 F14"Bash 成本应与隔离状态挂钩:有 sandbox 可松,
+无 sandbox 必 ASK"。
