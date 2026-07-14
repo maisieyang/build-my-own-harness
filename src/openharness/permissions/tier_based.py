@@ -548,4 +548,22 @@ class TierBasedPermissionChecker:
         if t3 is not None:
             return DecisionResult.ask(t3)
 
+        # 7b. D44 (F9 fix, dogfood Day 2): a mutating PATHLESS tool (Bash) that
+        #     reached here — cleared the catastrophic deny-list (step 1), the
+        #     git red line (step 1b), and every allow rule (step 4, which
+        #     short-circuits to ALLOW) — is a general-compute channel. Its
+        #     file side effects (echo>/tmp, brew install) are invisible to the
+        #     path-based Tiers, so nothing above could gate them. Interactive
+        #     posture ASKS (aligning with Claude Code's per-command Bash
+        #     prompt); AUTO maps ASK→ALLOW in _dispatch_one, preserving the
+        #     "pre-trusted" mode; sandbox remains the OS-level enforcement.
+        #     Path-bearing mutating tools are already covered by Tier 3 above.
+        if not tool.is_read_only and path is None:
+            return DecisionResult.ask(
+                f"{tool_name} runs arbitrary commands whose file side effects "
+                "bypass path-based permissions; approve this call, add a "
+                f"permissions.allow rule (e.g. {tool_name}(prefix:*)), or use "
+                "--sandbox for OS-level isolation"
+            )
+
         return DecisionResult.allow()

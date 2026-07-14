@@ -258,17 +258,21 @@ class TestBashCatastrophicPatterns:
         )
         assert result.decision is Decision.DENY
 
-    def test_safe_bash_command_allowed(self, tmp_path: Path) -> None:
+    def test_safe_bash_not_caught_by_denylist(self, tmp_path: Path) -> None:
+        # Intent preserved (deny-list doesn't over-match a safe command), but
+        # under D44 a bare interactive Bash is ASK not ALLOW; express the
+        # "not denied" invariant via an allow rule so the assertion stays
+        # about the deny-list, not about the D44 posture change.
         checker = TierBasedPermissionChecker(
             _registry(),
-            _StubSettings(),  # type: ignore[arg-type]
+            _StubSettings(permissions=PermissionRules(allow=("Bash(ls:*)",))),  # type: ignore[arg-type]
         )
         result = checker.evaluate(
             "Bash",
             _BashLikeInput(command="ls /tmp"),
             ToolExecutionContext(cwd=tmp_path),
         )
-        assert result.decision is Decision.ALLOW
+        assert result.decision is Decision.ALLOW  # allowed, NOT denied by list
 
 
 class TestTierResolutionOrder:
@@ -292,19 +296,65 @@ class TestTierResolutionOrder:
 
 
 class TestPathlessTools:
-    def test_no_path_no_tier_match(self, tmp_path: Path) -> None:
-        # Bash command without path → Tier 1/2/3 all skip; only the
-        # Bash deny-list applies. Safe command → ALLOW.
+    def test_interactive_safe_bash_asks(self, tmp_path: Path) -> None:
+        # D44 (F9 fix, dogfood Day 2): interactive mode, a mutating pathless
+        # tool (Bash) that cleared the catastrophic deny-list + git red line +
+        # allow rules must ASK — it is a general-compute channel that bypasses
+        # every path-based file gate (echo>/tmp, brew install). Was ALLOW
+        # (the F9 hole); this assertion IS the vulnerability nailed as a change.
         checker = TierBasedPermissionChecker(
             _registry(),
             _StubSettings(deny_paths=("secrets/**",)),  # type: ignore[arg-type]
         )
         result = checker.evaluate(
             "Bash",
-            _BashLikeInput(command="echo hello"),
+            _BashLikeInput(command="echo hello > /tmp/x"),
+            ToolExecutionContext(cwd=tmp_path),
+        )
+        assert result.decision is Decision.ASK
+
+    def test_allow_rule_short_circuits_before_ask(self, tmp_path: Path) -> None:
+        # A user-approved Bash prefix rule must NOT be re-asked (step 4 ALLOW
+        # short-circuits before the D44 ASK) — aligns with CC "unless matched
+        # by an approved rule".
+        checker = TierBasedPermissionChecker(
+            _registry(),
+            _StubSettings(permissions=PermissionRules(allow=("Bash(echo:*)",))),  # type: ignore[arg-type]
+        )
+        result = checker.evaluate(
+            "Bash",
+            _BashLikeInput(command="echo hello > /tmp/x"),
             ToolExecutionContext(cwd=tmp_path),
         )
         assert result.decision is Decision.ALLOW
+
+    def test_headless_bash_still_denies(self, tmp_path: Path) -> None:
+        # D44 must not touch headless: the fail-closed gate (step 6) still
+        # DENIES a pathless mutating tool with no allow rule.
+        checker = TierBasedPermissionChecker(
+            _registry(),
+            _StubSettings(),  # type: ignore[arg-type]
+            headless=True,
+        )
+        result = checker.evaluate(
+            "Bash",
+            _BashLikeInput(command="echo hello > /tmp/x"),
+            ToolExecutionContext(cwd=tmp_path),
+        )
+        assert result.decision is Decision.DENY
+
+    def test_catastrophic_still_denies_ahead_of_ask(self, tmp_path: Path) -> None:
+        # Priority intact: the disaster deny-list (step 1) beats the D44 ASK.
+        checker = TierBasedPermissionChecker(
+            _registry(),
+            _StubSettings(),  # type: ignore[arg-type]
+        )
+        result = checker.evaluate(
+            "Bash",
+            _BashLikeInput(command="rm -rf /"),
+            ToolExecutionContext(cwd=tmp_path),
+        )
+        assert result.decision is Decision.DENY
 
 
 class TestUnknownTool:

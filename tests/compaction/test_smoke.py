@@ -166,7 +166,7 @@ class TestCompactionE2E:
         runner = CliRunner()
         result = runner.invoke(
             cli_module.app,
-            ["ask", "smoke", "--log-level", "INFO", "--log-format", "json"],
+            ["ask", "smoke", "--auto", "--log-level", "INFO", "--log-format", "json"],
         )
         assert result.exit_code == 0, result.stderr
 
@@ -204,6 +204,7 @@ class TestCompactionE2E:
             [
                 "ask",
                 "smoke",
+                "--auto",
                 "--log-level",
                 "INFO",
                 "--log-format",
@@ -239,6 +240,7 @@ class TestCompactionE2E:
             [
                 "ask",
                 "smoke",
+                "--auto",
                 "--log-level",
                 "INFO",
                 "--log-format",

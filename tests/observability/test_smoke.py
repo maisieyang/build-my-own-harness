@@ -145,7 +145,7 @@ class TestObservabilityE2E:
         runner = CliRunner()
         result = runner.invoke(
             cli_module.app,
-            ["ask", "smoke", "--log-level", "INFO", "--log-format", "json"],
+            ["ask", "smoke", "--auto", "--log-level", "INFO", "--log-format", "json"],
         )
 
         assert result.exit_code == 0, result.stderr
@@ -208,7 +208,7 @@ class TestObservabilityE2E:
         runner = CliRunner()
         result = runner.invoke(
             cli_module.app,
-            ["ask", "smoke", "--log-format", "json"],
+            ["ask", "smoke", "--auto", "--log-format", "json"],
         )
 
         assert result.exit_code == 0
@@ -230,7 +230,7 @@ class TestObservabilityE2E:
             runner = CliRunner()
             result = runner.invoke(
                 cli_module.app,
-                ["ask", "smoke", "--log-level", "INFO", "--log-format", "json"],
+                ["ask", "smoke", "--auto", "--log-level", "INFO", "--log-format", "json"],
             )
             assert result.exit_code == 0
             lines = [
