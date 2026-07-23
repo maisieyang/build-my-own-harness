@@ -102,13 +102,13 @@ D = decisions/,L = learnings/,I = docs/ideas/,W = `~/2026/aa/harness/writing/`(�
 
 | 章 | 素材 | 密度 |
 |---|---|---|
-| Ch1 地图 | L openharness-first-principles;I from-prompt-to-loop-2026;W why-harness-2025(I 同名稿的成文版,模型能力曲线推 prompt→context→harness→loop 过阈值)、anthropic-product-logic §1(Claude Code 起源史,"build for the model in six months" 一手时间线,也是 Ch2/Ch3 strong-model thesis 的源材料);REFERENCE.md | 富+ |
+| Ch1 地图 | L openharness-first-principles;I from-prompt-to-loop-2026;W why-harness-2025(I 同名稿的成文版,模型能力曲线推 prompt→context→harness→loop 过阈值)、anthropic-product-logic §1(Claude Code 起源史,"build for the model in six months" 一手时间线,也是 Ch2/Ch3 strong-model thesis 的源材料);L phase-3-framing §3-§4(LLM = 奇怪客户端的四个特殊性——"harness = 为奇怪客户端定制的 RPC 框架"是 thesis 候选,2026-07-10 盘点时从 Ch3 改挂到此);REFERENCE.md | 富+ |
 | Ch2 朴素循环 | L 05/08/04;D 05(代码按 re-staging 决策新写) | 中 |
-| Ch3 协议与 provider | L 02/03、phase-3-framing(LLM 调用 ↔ RPC 同构);D 02/03/04;qwen-plus 实录 | 富 |
-| Ch4 工具系统 | L 06/07、phase-5b(slash commands)、phase-14(anti-substitution 战例);D 07/14/29 | 富 |
+| Ch3 协议与 provider | L 02/03(含 L02 §5"我在写一个框架"啊哈实录);D 02/03/04(Pivot + 7 个 wire 不一致表 + revisit triggers);qwen-plus 退化实录 + D5.3 模型升级 | 富+ |
+| Ch4 工具系统 | L 06/07、phase-14(anti-substitution 战例 + dogfood-driven phase shape);D 07/29(phase-5b/D14 移挂 Ch17,2026-07-10) | 富+ |
 | Ch5 系统提示装配 | L 09;D 29(prompt guard 战例) | 中 |
-| Ch6 安全边界 | L phase-3/10、phase-7a/7b/7c;D 15/16/21/23 —— sandbox 三个 substrate(进程/Docker/gVisor) | 富+ |
-| Ch7 上下文与会话生命周期 | L phase-4/11/12/13;D 10/26/27/28 | 富 |
+| Ch6 安全边界 | L phase-3/10、phase-7a/7b/7c、phase-3-framing §2(RPC 五件配套演化链 = Part II 的框架级问题链);D 15/16/21/23 —— sandbox 三个 substrate(进程/Docker/gVisor) | 富+ |
+| Ch7 上下文与会话生命周期 | L phase-4/11/12/13、phase-3-framing §4.3(wire history 不丢 → compaction 的必然性论证);D 10/26/27/28 | 富 |
 | Ch8 持久记忆 | L phase-10/11/16/17;D 25/36/37;I memory-first-principles —— phase-16 架构 pivot 是顶级战例 | 富+ |
 | Ch9 eval substrate | D 31/35/41;I eval-first-principles、eval-craft-journal、M3 case study | 富 |
 | Ch10 judge + cassette | D 32/33/34;I eval-mentor-playbook、blog-prompt-eval 系列 | 富 |
@@ -118,7 +118,7 @@ D = decisions/,L = learnings/,I = docs/ideas/,W = `~/2026/aa/harness/writing/`(�
 | Ch14 tasks | 仅 L phase-6(sub-agent)+ D 13 可作前身 | **薄(未 build)** |
 | Ch15 swarm | 无 | **零(未 build)** |
 | Ch16 coordinator | 无 | **零(未 build)** |
-| Ch17 接触面 | L 04/10、phase-6plus、phase-15;D 22/30;I tui-vs-web、node-tui-next-step | 富 |
+| Ch17 接触面 | L 04/10、phase-6plus、phase-15、phase-5b(slash commands,自 Ch4 移入);D 22/30/14;I tui-vs-web、node-tui-next-step | 富 |
 | Ch18 benchmark | D 40;benchmarks/swebench RUNLOG;L eval-flywheel-framing | 富 |
 | Ch19 全景 + 前沿 | L phase-7(16+1 phase meta-retro)、working-with-ai-2026-06、talk;I eval-flywheel-framing | 富 |
 | 附录 | D 00/01/06/08/09(env、脚手架、settings、boundary-contract);F PLAYBOOK(候选:"垂直行业落地 playbook"附录) | 富 |
@@ -153,7 +153,25 @@ D = decisions/,L = learnings/,I = docs/ideas/,W = `~/2026/aa/harness/writing/`(�
 - **维持理由**:"改 prompt 后确定性测试够不到"在 Part II 结尾真实发生;若度量拖到 Part V 之后,读者中间四五章在没有尺的状态下改概率性行为,必然性链断。
 - **让步**:原 Ch11 benchmark in action 后置为 Ch18(Part VI)——它依赖多 Agent 战役语境。后置反而补全必然性:尺(Part III)+ 规模(Part V)+ headless 入口(Ch17)齐备才打得起真战役,且全书以最硬的战场实录章收束进全景。
 
-## 8. 未决问题
+## 8. 写作流(已决 2026-07-09)
+
+**章循环**(每章走一遍——TDD 纪律平移到写作):
+1. **章契约(章的 RED)**:动笔前写死三行——读者带着什么问题进来(上一章结尾暴露的)/ 读完能做什么、能判断什么 / 本章结尾暴露什么问题(下一章入口)。草稿再漂亮,读者答不出出口问题就不合格。
+2. **素材盘点**:读 §5 挂的 D/L/I/W/F 全部素材,列"盘上已有 vs 只在作者脑子里";**采访只问缺口**(dogfood 采访验证过的纪律)。
+3. **双向采访**:AI 带问题链骨架、候选朴素方案、行业对照(CC/Codex/LangChain 在此问题域的做法);作者出活的判断——当时的意外、弯路、文档没记的取舍。分歧在这一步吵完,不带进文稿。**采访产出先落盘再写章**——书不引用只活在对话里的材料。
+4. **骨架先行**:bullet 级问题链骨架(朴素方案→暴露什么→修复→再暴露)→ 作者确认走向 → 再成文。
+5. **成文入七段模板**(§2);tradeoff 段用 01-tradeoffs 的六段格式(在权衡什么/两端/选择/为何/强制放弃/重议条件)。
+6. **验收(章的 GREEN)**:对章契约 + §0 好书定义过——每个设计是否被问题逼出、读者能否预测下一章;硬纪律:**文中所有数字/日期/commit/行为断言对着 git log / 文件 / 实测核过才落稿**。
+
+**跨章原则**:
+- **骨架先行全书(作者决定,2026-07-10)**:章循环第 1-4 步(契约/盘点/采访/骨架)逐章过完全书,所有枝干立起后,再统一进入第 5-6 步(成文/验收)。骨架与采访实录落书稿仓库(`~/2026/aa/harness/build-harness-in-action` 的 `skeletons/`、`interviews/`)。
+- 正文按阅读序写(问题链要求续接);**Ch1 留 stub 最后写**——地图章要等树长出来。
+- **代码与文稿同步推进**:写到哪章,教学仓库 checkpoint 就 re-staging 到哪章。Ch2 开写 = 教学仓库 bootstrap = re-staging 决策首次实弹验证。
+- **采访实录是一等产物**,与章稿同入库——修订版与宣传材料的矿。
+
+**基础设施(已决)**:文稿住新仓库(书是独立产品线,教学代码仓将来挂其下);**中文先行**,翻译是出版阶段的事。
+
+## 9. 未决问题
 
 1. **REFERENCE.md 的 prompts/ 覆盖缺口怎么补**:它整份冻结,需单独决策。与书的结构无关,可随时单独处理;属主仓库文档完整性问题。
 2. **Part V(多 Agent)素材空洞怎么处理**:模块 #11-13 未 build。选项 A=先 build 三模块再写 Part V;选项 B=v1 收窄,Part V 降为前沿速写。倾向 A——多 Agent 是 §5 标"认知增量最高"的 tier,砍掉伤书的完整性,且这三个模块本来就在主线 build 序上;写作不被它阻塞(Ch1-13、17-19 素材已齐,可与 build 并行推进)。
