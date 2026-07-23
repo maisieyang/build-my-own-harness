@@ -1,0 +1,11 @@
+{
+  "case_id": "MC3-error-fix-facts",
+  "model": "qwen-max",
+  "kind": "infer",
+  "recorded_at": "2026-07-23T03:37:13.979384+00:00",
+  "request_summary": "MC3-error-fix-facts: recall=('OOM', '64', 'CUDA')",
+  "response": {
+    "summary_text": "\nSummary of prior conversation:\n\n1. **Primary Request and Intent**: 用户最初没有明确请求，但后来讨论了 OOM 问题的原因和解决方法。\n2. **Key Technical Concepts**: OOM (Out of Memory), batch size, CUDA 缓存\n3. **Files and Code Sections**: 无具体文件或代码段被提及\n4. **Errors and Fixes**: OOM 错误，通过将 batch size 从 512 减少到 64 解决；根本原因是 CUDA 缓存未释放\n5. **Problem Solving**: 用户发现 OOM 是由于 batch size 设置过大，调整后解决了问题。进一步发现根因是 CUDA 缓存未释放。\n6. **All User Messages**:\n   - 第0轮: 闲聊填充第0轮, 无关紧要的内容\n   - 第2轮: 闲聊填充第2轮, 无关紧要的内容\n   - 第6轮: 闲聊填充第6轮, 无关紧要的内容\n   - 第10轮: 闲聊填充第10轮, 无关紧要的内容\n   - 第12轮: 闲聊填充第12轮, 无关紧要的内容\n   - 第15轮: 根因是没释放 CUDA 缓存\n7. **Pending Tasks**: 无明确待办任务\n8. **Current Work**: 讨论了 OOM 问题及其解决方案\n9. **Optional Next Step**: 可能需要进一步探讨如何正确释放 CUDA 缓存以避免 OOM 问题\n闲聊填充第16轮, 无关紧要的内容\n闲聊填充第17轮, 无关紧要的内容\n闲聊填充第18轮, 无关紧要的内容\n闲聊填充第19轮, 无关紧要的内容\n闲聊填充第20轮, 无关紧要的内容\n闲聊填充第21轮, 无关紧要的内容\n闲聊填充第22轮, 无关紧要的内容\n闲聊填充第23轮, 无关紧要的内容\n闲聊填充第24轮, 无关紧要的内容\n闲聊填充第25轮, 无关紧要的内容\n闲聊填充第26轮, 无关紧要的内容\n闲聊填充第27轮, 无关紧要的内容",
+    "did_apply": true
+  }
+}

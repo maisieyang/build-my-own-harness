@@ -1,30 +1,30 @@
 # memory_compact eval — D41 P0 (decision surface #1 / B2)
 # model:         qwen-max
 # dataset:       evals/memory_compact/dataset.yaml
-# cassette_mode: live
+# cassette_mode: record
 
 ## MC1-config-facts [fact-recall]
-   summary[:80]:  Summary of prior conversation:  1. **Primary Request and Intent**: 用户希望在项目中使用Ta
+   summary[:80]:  Summary of prior conversation:  1. **Primary Request and Intent**: 用户希望更改项目中使用的
    PASS fact_recall: all 3 fact(s) retained
    PASS noise_exclusion: vacuous pass: no noise list
 
 ## MC2-decision-facts [fact-recall]
-   summary[:80]:  Summary of prior conversation:  1. **Primary Request and Intent**: 用户最初表达了关于系统设
+   summary[:80]:  Summary of prior conversation:  1. **Primary Request and Intent**: 用户意图构建一个使用JW
    PASS fact_recall: all 3 fact(s) retained
    PASS noise_exclusion: vacuous pass: no noise list
 
 ## MC3-error-fix-facts [fact-recall]
-   summary[:80]:  Summary of prior conversation:  1. **Primary Request and Intent**: 用户报告了一个 OOM
+   summary[:80]:  Summary of prior conversation:  1. **Primary Request and Intent**: 用户最初没有明确请求，但
    PASS fact_recall: all 3 fact(s) retained
    PASS noise_exclusion: vacuous pass: no noise list
 
 ## MC4-user-request-facts [fact-recall]
-   summary[:80]:  Summary of prior conversation:  1. **Primary Request and Intent**: 用户希望实现一个功能，能
+   summary[:80]:  Summary of prior conversation:  1. **Primary Request and Intent**: 用户想要一个能够导出仅含
    PASS fact_recall: all 3 fact(s) retained
    PASS noise_exclusion: vacuous pass: no noise list
 
 ## MC5-pending-tasks-facts [fact-recall]
-   summary[:80]:  Summary of prior conversation:  1. **Primary Request and Intent**: Not clearly
+   summary[:80]:  Summary of prior conversation:  1. **Primary Request and Intent**: The user has
    PASS fact_recall: all 3 fact(s) retained
    PASS noise_exclusion: vacuous pass: no noise list
 

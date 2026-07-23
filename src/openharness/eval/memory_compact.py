@@ -98,9 +98,15 @@ async def infer_memory_compact(
     sample: MemoryCompactSample,
     api_client: SupportsStreamingMessages,
     model: str,
-    max_tokens: int = 20_000,
+    max_tokens: int = 8192,
 ) -> MemoryCompactOutput:
-    """真调生产 full_compact,提取摘要文本。"""
+    """真调生产 full_compact,提取摘要文本。
+
+    ``max_tokens=8192``:适配参照模型 qwen-max 的输出上限(F16——生产
+    full_compact 默认 20_000 超 qwen-max 的 8192 硬顶,是潜在可移植性 bug,
+    生产用 qwen3.7-max 上限够高未爆;短对话的 9-slot 摘要 8192 绰绰有余,
+    非掩盖而是用合身预算)。
+    """
     new_messages, did_apply = await full_compact(
         list(sample.messages),
         model=model,
@@ -135,7 +141,7 @@ async def cassetted_infer_memory_compact(
     model: str,
     cassette_mode: CassetteMode = "live",
     cassette_store: CassetteStore | None = None,
-    max_tokens: int = 20_000,
+    max_tokens: int = 8192,
 ) -> MemoryCompactOutput:
     """Record / replay / live wrapper (D33.2: replay 永不落回 live)."""
     key = CassetteKey(case_id=sample.case_id, model=model, kind="infer")

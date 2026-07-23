@@ -1,0 +1,11 @@
+{
+  "case_id": "MC2-decision-facts",
+  "model": "qwen-max",
+  "kind": "infer",
+  "recorded_at": "2026-07-23T03:37:02.579686+00:00",
+  "request_summary": "MC2-decision-facts: recall=('JWT', 'Redis', '蓝绿')",
+  "response": {
+    "summary_text": "\nSummary of prior conversation:\n\n1. **Primary Request and Intent**: 用户意图构建一个使用JWT鉴权且具有Redis缓存的应用系统。\n2. **Key Technical Concepts**: JWT, Redis缓存, TTL\n3. **Files and Code Sections**: 未提及具体文件或代码段。\n4. **Errors and Fixes**: 没有遇到错误或需要修复的问题。\n5. **Problem Solving**: 决定采用JWT而非session cookie以实现鉴权，并选用Redis作为缓存解决方案，设置TTL值来控制缓存数据的有效期。\n6. **All User Messages**:\n   - 决定用 JWT 做鉴权, 不用 session cookie\n   - 缓存层选 Redis, TTL 设 300 秒\n7. **Pending Tasks**: 确定如何在项目中实施JWT和配置Redis缓存的具体步骤。\n8. **Current Work**: 讨论了关于应用架构的一些基本设计决策。\n9. **Optional Next Step**: 下一步可能是开始编写或修改代码来集成JWT鉴权机制和配置Redis缓存。\n部署走蓝绿, 不用滚动更新\n闲聊填充第17轮, 无关紧要的内容\n闲聊填充第18轮, 无关紧要的内容\n闲聊填充第19轮, 无关紧要的内容\n闲聊填充第20轮, 无关紧要的内容\n闲聊填充第21轮, 无关紧要的内容\n闲聊填充第22轮, 无关紧要的内容\n闲聊填充第23轮, 无关紧要的内容\n闲聊填充第24轮, 无关紧要的内容\n闲聊填充第25轮, 无关紧要的内容\n闲聊填充第26轮, 无关紧要的内容\n闲聊填充第27轮, 无关紧要的内容",
+    "did_apply": true
+  }
+}

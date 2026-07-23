@@ -27,6 +27,8 @@ from openharness.eval.error_feedback_scorers import (
     FollowupScorer,
     VerbatimRetryScorer,
 )
+from openharness.eval.memory_compact import run_memory_compact_eval
+from openharness.eval.memory_compact_scorers import FactRecallScorer, NoiseExclusionScorer
 from openharness.eval.skill_trigger import run_skill_trigger_eval
 from openharness.eval.skill_trigger_scorers import SlugSelectionScorer, TriggerDecisionScorer
 from openharness.eval.tool_choice import run_tool_choice_eval
@@ -107,3 +109,18 @@ class TestReplayGates:
         missing_greens = _ERROR_FEEDBACK_STABLE_GREENS - passing
         assert not missing_greens, f"error_feedback 稳定绿破绿: {sorted(missing_greens)}"
         assert len(passing) >= 8, f"error_feedback bar ≥8/9 broken: passing={len(passing)}"
+
+    async def test_memory_compact_replay_holds_bar(self) -> None:
+        results = await run_memory_compact_eval(
+            _ROOT / "memory_compact" / "dataset.yaml",
+            [FactRecallScorer(), NoiseExclusionScorer()],
+            api_client=None,
+            model=_MODEL,
+            cassette_root=_ROOT / "memory_compact" / "cassettes",
+            cassette_mode="replay",
+        )
+        passing = _passing_ids(results)
+        # B2 bar = 6/6 全稳定绿(dataset_card ratify)
+        assert len(passing) == len(results) == 6, (
+            f"memory_compact bar 6/6 broken: failing={sorted({r.sample.case_id for r in results} - passing)}"
+        )

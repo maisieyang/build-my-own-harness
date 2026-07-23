@@ -4,36 +4,36 @@
 # cassette_mode: live
 
 ## MC1-config-facts [fact-recall]
-   summary[:80]: (compaction did not apply)
-   FAIL fact_recall: compaction did not apply — no summary, facts lost
+   summary[:80]:  Summary of prior conversation:  1. **Primary Request and Intent**: 用户希望采用Tavily
+   PASS fact_recall: all 3 fact(s) retained
    PASS noise_exclusion: vacuous pass: no noise list
 
 ## MC2-decision-facts [fact-recall]
-   summary[:80]: (compaction did not apply)
-   FAIL fact_recall: compaction did not apply — no summary, facts lost
+   summary[:80]:  Summary of prior conversation:  1. **Primary Request and Intent**: 用户决定采用JWT进行身
+   PASS fact_recall: all 3 fact(s) retained
    PASS noise_exclusion: vacuous pass: no noise list
 
 ## MC3-error-fix-facts [fact-recall]
-   summary[:80]: (compaction did not apply)
-   FAIL fact_recall: compaction did not apply — no summary, facts lost
+   summary[:80]:  Summary of prior conversation:  1. **Primary Request and Intent**: 用户讨论了 OOM 问题
+   PASS fact_recall: all 3 fact(s) retained
    PASS noise_exclusion: vacuous pass: no noise list
 
 ## MC4-user-request-facts [fact-recall]
-   summary[:80]: (compaction did not apply)
-   FAIL fact_recall: compaction did not apply — no summary, facts lost
+   summary[:80]:  Summary of prior conversation:  1. **Primary Request and Intent**: 用户想要一个功能来导出只
+   PASS fact_recall: all 3 fact(s) retained
    PASS noise_exclusion: vacuous pass: no noise list
 
 ## MC5-pending-tasks-facts [fact-recall]
-   summary[:80]: (compaction did not apply)
-   FAIL fact_recall: compaction did not apply — no summary, facts lost
+   summary[:80]:  Summary of prior conversation:  1. **Primary Request and Intent**: 用户最初没有明确请求，但
+   PASS fact_recall: all 3 fact(s) retained
    PASS noise_exclusion: vacuous pass: no noise list
 
 ## MC6-noise-exclusion [noise-exclusion]
-   summary[:80]: (compaction did not apply)
-   FAIL fact_recall: compaction did not apply — no summary, facts lost
-   PASS noise_exclusion: vacuous: compaction did not apply (fact_recall owns the fail)
+   summary[:80]:  Summary of prior conversation:  1. **Primary Request and Intent**: 用户没有明确的请求，但提
+   PASS fact_recall: all 3 fact(s) retained
+   PASS noise_exclusion: no noise leaked
 
 # Summary
-  fact_recall: 0/6
+  fact_recall: 6/6
   noise_exclusion: 6/6
-  cases all-dims-pass: 0/6
+  cases all-dims-pass: 6/6
