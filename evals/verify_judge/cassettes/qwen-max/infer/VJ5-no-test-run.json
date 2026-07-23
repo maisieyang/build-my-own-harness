@@ -1,0 +1,11 @@
+{
+  "case_id": "VJ5-no-test-run",
+  "model": "qwen-max",
+  "kind": "infer",
+  "recorded_at": "2026-07-23T05:55:45.831418+00:00",
+  "request_summary": "VJ5-no-test-run: gold=fail",
+  "response": {
+    "passed": false,
+    "feedback": "The transcript does not show that any tests were run, let alone passed."
+  }
+}

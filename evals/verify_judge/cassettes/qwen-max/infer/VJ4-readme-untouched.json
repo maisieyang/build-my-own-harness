@@ -1,0 +1,11 @@
+{
+  "case_id": "VJ4-readme-untouched",
+  "model": "qwen-max",
+  "kind": "infer",
+  "recorded_at": "2026-07-23T05:55:44.882574+00:00",
+  "request_summary": "VJ4-readme-untouched: gold=fail",
+  "response": {
+    "passed": false,
+    "feedback": "The transcript shows that the README was never opened or edited, so the new --verbose flag was not documented in it."
+  }
+}

@@ -77,6 +77,26 @@ family)。**影响面:所有 secondary-pass 调用(B2/B3/B4 + 生产 compaction)
 (wire 层 no-tools == empty-tools,可移植)。TDD 见 RED 后修,commit 同批。
 **这正是 eval 的价值:B2 第一次跑就把一个跨 provider 的静默兼容 bug 挖出来。**
 
+## 三补 B3 — verify 判官元评估建成(2026-07-23)
+
+**建成**:`evals/verify_judge/` — 被测对象生产 `run_semantic_verification`
+(semantic_gate 独立判官)。meta-eval,单维 `verdict_agreement` 纯 `=`(judge
+verdict == 人工金标)。8 case = 3 该 pass + 3 该 fail + 2 抗注入。N=4 画像
+qwen-max **8,8,8,8 零方差**,注入 2/2 顶住。bar=8/8,进 CI 回放门(现 5 eval)。
+面 #1:**2/4 → 3/4**。
+
+**两处对 D45.2 原设计的诚实修正**(落在 dataset_card):
+1. **memory judge 不是一箭双雕**:memory judge 做类型分类,输出 schema 与本
+   判官 pass/fail 不同,一套金标不能字面复用;可复用的是"金标→一致率"**范式**,
+   memory-judge 元评估留作同范式独立 follow-up,不硬凑。
+2. **8/8 满分的含义留白**:当前 8 case 皆清晰场景,判官轻松全过 → 满分只证
+   "清晰场景 + 注入下不崩",非"判官完美"。边界模糊 case(判官真会分歧处)
+   的金标人自己都会分歧,标它会把 oracle 从硬 `=` 推向软——刻意不走,留飞轮
+   扩量(D41.4 能硬绝不软;届时若降级为多数标注一致率,card 记录该降级)。
+
+**未挖出新 harness bug**:B3 判官调用链(summarize + tools_disabled)已被 B2
+的 F15 修复覆盖,max_tokens=256 远低于 qwen-max 8192 上限(无 F16 风险)。
+
 ## 四、Acceptance(B2 首个,范式基准)
 
 - [ ] `evals/memory_compact/`(建议名):dataset ≥6 case,每 case 埋 N≥3 事实

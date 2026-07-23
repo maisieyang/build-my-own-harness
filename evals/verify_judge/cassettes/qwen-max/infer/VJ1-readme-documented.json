@@ -1,0 +1,11 @@
+{
+  "case_id": "VJ1-readme-documented",
+  "model": "qwen-max",
+  "kind": "infer",
+  "recorded_at": "2026-07-23T05:55:41.844631+00:00",
+  "request_summary": "VJ1-readme-documented: gold=pass",
+  "response": {
+    "passed": true,
+    "feedback": "The assistant edited the README to include documentation for the new --verbose flag."
+  }
+}

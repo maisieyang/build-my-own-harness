@@ -1,0 +1,11 @@
+{
+  "case_id": "VJ3-migration-applied",
+  "model": "qwen-max",
+  "kind": "infer",
+  "recorded_at": "2026-07-23T05:55:43.668080+00:00",
+  "request_summary": "VJ3-migration-applied: gold=pass",
+  "response": {
+    "passed": true,
+    "feedback": "The transcript shows that the migration was applied and the users table now has an email_verified column."
+  }
+}

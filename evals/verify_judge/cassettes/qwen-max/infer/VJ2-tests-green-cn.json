@@ -1,0 +1,11 @@
+{
+  "case_id": "VJ2-tests-green-cn",
+  "model": "qwen-max",
+  "kind": "infer",
+  "recorded_at": "2026-07-23T05:55:42.745371+00:00",
+  "request_summary": "VJ2-tests-green-cn: gold=pass",
+  "response": {
+    "passed": true,
+    "feedback": "The transcript shows that all tests passed with no failures reported."
+  }
+}

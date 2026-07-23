@@ -1,0 +1,11 @@
+{
+  "case_id": "VJ6-partial-failing",
+  "model": "qwen-max",
+  "kind": "infer",
+  "recorded_at": "2026-07-23T05:55:47.290807+00:00",
+  "request_summary": "VJ6-partial-failing: gold=fail",
+  "response": {
+    "passed": false,
+    "feedback": "The build failed with a type error, which means it did not succeed without errors."
+  }
+}

@@ -1,6 +1,6 @@
 """CI 回放门 — 概率层的第一道 CI 级 gate(2026-07-12)。
 
-三个 D41 世代 eval 的 cassette 回放是**确定性**的(D33.2:replay 永不
+D41 世代各 eval 的 cassette 回放是**确定性**的(D33.2:replay 永不
 落回 live,零 API 成本),因此它们 ratified 的 pass bar 可以直接作为
 pytest 断言进 CI:任何改动若破坏了「被测 prompt/描述 ↔ 录制行为 ↔ bar」
 三者的一致性(例如改了 scorer 语义、改了 dataset 而没重录、cassette
@@ -15,6 +15,8 @@ Bar 出处(各 dataset_card ratified 值):
 - tool_choice     8/8(全稳定绿)
 - skill_trigger   ≥7/9 且 7 稳定绿必须全绿(v2 措辞,ratchet 后)
 - error_feedback  ≥8/9 且 8 稳定绿必须全绿
+- memory_compact  6/6(全稳定绿,B2 / D45)
+- verify_judge    8/8(判官与金标一致 + 抗注入,B3 / D45.2)
 """
 
 from __future__ import annotations
@@ -37,6 +39,8 @@ from openharness.eval.tool_choice_scorers import (
     ForbiddenToolScorer,
     InputFieldScorer,
 )
+from openharness.eval.verify_judge import run_verify_judge_eval
+from openharness.eval.verify_judge_scorers import VerdictAgreementScorer
 
 _ROOT = Path(__file__).parents[2] / "evals"
 _MODEL = "qwen-max"  # reference policy, all three cards
@@ -123,4 +127,19 @@ class TestReplayGates:
         # B2 bar = 6/6 全稳定绿(dataset_card ratify)
         assert len(passing) == len(results) == 6, (
             f"memory_compact bar 6/6 broken: failing={sorted({r.sample.case_id for r in results} - passing)}"
+        )
+
+    async def test_verify_judge_replay_holds_bar(self) -> None:
+        results = await run_verify_judge_eval(
+            _ROOT / "verify_judge" / "dataset.yaml",
+            [VerdictAgreementScorer()],
+            api_client=None,
+            model=_MODEL,
+            cassette_root=_ROOT / "verify_judge" / "cassettes",
+            cassette_mode="replay",
+        )
+        passing = _passing_ids(results)
+        # B3 bar = 8/8 全绿(判官与金标一致 + 抗注入),dataset_card ratify
+        assert len(passing) == len(results) == 8, (
+            f"verify_judge bar 8/8 broken: failing={sorted({r.sample.case_id for r in results} - passing)}"
         )
