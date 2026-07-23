@@ -1,0 +1,94 @@
+# memory_read eval dataset — C4 / D41 面 #4 的另一半。
+#
+# 被测:模型看 `## Memory`(写规则 + MEMORY.md 索引)自决 Read 哪个 memory
+# 文件(或不读)。oracle = Read tool-call 存在性(硬),镜像 skill_trigger。
+#
+# 布局(6 case,镜像 skill_trigger 的 trigger/restraint/selection 平衡):
+#   3 must-read(明确 recall/check/remember 触发词 → 契约强制,含选择正确性)
+#   3 restraint(ignore 指令 / 无相关记忆 / near-miss 邻近但非 recall)
+#
+# fixture 是共享的合成 MEMORY.md 索引(4 条 memory),非用户内容。case 靠
+# user turn 区分该读哪条(或不读)。
+
+fixture:
+  memory_slugs:
+    - user_deploy_prefs
+    - project_aurora_status
+    - reference_staging_db
+    - feedback_review_tone
+  index_content: |
+    # Memory Index
+
+    - [Deploy preferences](user_deploy_prefs.md) — prefers blue-green deploys; never rolling-restart the payments service
+    - [Project Aurora status](project_aurora_status.md) — Aurora data migration paused until 2026-08-01 pending vendor SLA review
+    - [Staging DB connection](reference_staging_db.md) — staging Postgres at db-staging.internal:5432, creds in vault secret/staging/pg
+    - [Review tone feedback](feedback_review_tone.md) — user wants terse PR review comments, no praise sandwiches
+
+samples:
+  # ---- MUST-READ:明确 recall/check/remember 触发词(契约强制) ----
+  - case_id: MR1-recall-deploy-prefs
+    capability: must-read-recall
+    shape: single-turn
+    expected_read_slug: user_deploy_prefs
+    notes: "'recall' 是 MUST 触发词;任务关乎 deploy → 必读 deploy prefs"
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "We're about to ship the payments service. Recall my deployment preferences before you write the rollout plan."
+
+  - case_id: MR2-check-review-tone
+    capability: must-read-check
+    shape: single-turn
+    expected_read_slug: feedback_review_tone
+    notes: "'check' 是 MUST 触发词;必读 review tone feedback"
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "Before you draft that PR review, check what feedback I gave you earlier about how I like review comments written."
+
+  - case_id: MR3-remember-staging-db
+    capability: must-read-selection
+    shape: single-turn
+    expected_read_slug: reference_staging_db
+    notes: "'remember' 是 MUST 触发词;4 条里须选对 staging DB 那条(选择性)"
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "Remember the staging database connection details I gave you? I need the host and port to run a smoke test."
+
+  # ---- RESTRAINT:不该读 memory ----
+  - case_id: MR4-restraint-ignore-directive
+    capability: restraint-ignore
+    shape: single-turn
+    expected_read_slug: null
+    notes: "用户显式说 ignore memory → 契约要求不 apply/不读,即使话题(deploy)有匹配记忆"
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "Ignore anything you have in memory for this one — just give me a generic blue-green vs rolling deploy comparison from scratch."
+
+  - case_id: MR5-restraint-no-match
+    capability: restraint-no-match
+    shape: single-turn
+    expected_read_slug: null
+    notes: "任务与任何 memory 无关 → 不该读(索引里没有可匹配项)"
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "Write me a haiku about the ocean at dawn."
+
+  - case_id: MR6-restraint-near-miss
+    capability: restraint-near-miss
+    shape: single-turn
+    expected_read_slug: null
+    notes: "话题邻近 deploy 但是**全新**任务、非 recall 既往决定 → 不该自动读旧偏好(邻近非触发)。约束最难,可能是 flaky case"
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "Set up a brand-new deployment pipeline for a greenfield analytics service we just created — no prior context, design it fresh."

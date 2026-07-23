@@ -17,6 +17,7 @@ Bar 出处(各 dataset_card ratified 值):
 - error_feedback  ≥8/9 且 8 稳定绿必须全绿
 - memory_compact  6/6(全稳定绿,B2 / D45)
 - verify_judge    8/8(判官与金标一致 + 抗注入,B3 / D45.2)
+- memory_read     6/6(must-read 契约 + restraint,C4 / 面 #4)
 """
 
 from __future__ import annotations
@@ -31,6 +32,8 @@ from openharness.eval.error_feedback_scorers import (
 )
 from openharness.eval.memory_compact import run_memory_compact_eval
 from openharness.eval.memory_compact_scorers import FactRecallScorer, NoiseExclusionScorer
+from openharness.eval.memory_read import run_memory_read_eval
+from openharness.eval.memory_read_scorers import MemorySelectionScorer, ReadDecisionScorer
 from openharness.eval.skill_trigger import run_skill_trigger_eval
 from openharness.eval.skill_trigger_scorers import SlugSelectionScorer, TriggerDecisionScorer
 from openharness.eval.tool_choice import run_tool_choice_eval
@@ -142,4 +145,19 @@ class TestReplayGates:
         # B3 bar = 8/8 全绿(判官与金标一致 + 抗注入),dataset_card ratify
         assert len(passing) == len(results) == 8, (
             f"verify_judge bar 8/8 broken: failing={sorted({r.sample.case_id for r in results} - passing)}"
+        )
+
+    async def test_memory_read_replay_holds_bar(self) -> None:
+        results = await run_memory_read_eval(
+            _ROOT / "memory_read" / "dataset.yaml",
+            [ReadDecisionScorer(), MemorySelectionScorer()],
+            api_client=None,
+            model=_MODEL,
+            cassette_root=_ROOT / "memory_read" / "cassettes",
+            cassette_mode="replay",
+        )
+        passing = _passing_ids(results)
+        # C4 bar = 6/6 全稳定绿(must-read 契约 + restraint),dataset_card ratify
+        assert len(passing) == len(results) == 6, (
+            f"memory_read bar 6/6 broken: failing={sorted({r.sample.case_id for r in results} - passing)}"
         )

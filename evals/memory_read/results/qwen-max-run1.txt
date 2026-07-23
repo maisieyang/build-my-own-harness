@@ -1,0 +1,39 @@
+# memory_read eval — 决策面 #4 / C4 (memory READ 自选决策)
+# model:         qwen-max
+# dataset:       evals/memory_read/dataset.yaml
+# cassette_mode: live
+
+## MR1-recall-deploy-prefs [must-read-recall]
+   expected=user_deploy_prefs  reads=['/eval-fixture/memory/user_deploy_prefs.md']
+   PASS read_decision: read memory as mandated (read: user_deploy_prefs)
+   PASS memory_selection: selected the correct memory: user_deploy_prefs
+
+## MR2-check-review-tone [must-read-check]
+   expected=feedback_review_tone  reads=['/eval-fixture/memory/feedback_review_tone.md']
+   PASS read_decision: read memory as mandated (read: feedback_review_tone)
+   PASS memory_selection: selected the correct memory: feedback_review_tone
+
+## MR3-remember-staging-db [must-read-selection]
+   expected=reference_staging_db  reads=['/eval-fixture/memory/reference_staging_db.md']
+   PASS read_decision: read memory as mandated (read: reference_staging_db)
+   PASS memory_selection: selected the correct memory: reference_staging_db
+
+## MR4-restraint-ignore-directive [restraint-ignore]
+   expected=(none — restraint)  reads=(none)
+   PASS read_decision: abstained from memory read as expected
+   PASS memory_selection: restraint case — no selection to make (vacuous)
+
+## MR5-restraint-no-match [restraint-no-match]
+   expected=(none — restraint)  reads=(none)
+   PASS read_decision: abstained from memory read as expected
+   PASS memory_selection: restraint case — no selection to make (vacuous)
+
+## MR6-restraint-near-miss [restraint-near-miss]
+   expected=(none — restraint)  reads=(none)
+   PASS read_decision: abstained from memory read as expected
+   PASS memory_selection: restraint case — no selection to make (vacuous)
+
+# Summary
+  read_decision: 6/6
+  memory_selection: 6/6
+  cases all-dims-pass: 6/6

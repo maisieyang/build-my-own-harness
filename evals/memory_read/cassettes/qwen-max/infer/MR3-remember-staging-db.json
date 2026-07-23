@@ -1,0 +1,20 @@
+{
+  "case_id": "MR3-remember-staging-db",
+  "model": "qwen-max",
+  "kind": "infer",
+  "recorded_at": "2026-07-23T06:30:58.355747+00:00",
+  "request_summary": "MR3-remember-staging-db: Remember the staging database connection details I gave you? I need the host and port to run a smoke test.",
+  "response": {
+    "tool_uses": [
+      {
+        "id": "call_e0b14d46155742ad81ca2f",
+        "name": "Read",
+        "input": {
+          "path": "/eval-fixture/memory/reference_staging_db.md"
+        }
+      }
+    ],
+    "text": "",
+    "stop_reason": "tool_use"
+  }
+}

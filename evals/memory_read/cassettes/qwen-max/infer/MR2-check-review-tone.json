@@ -1,0 +1,20 @@
+{
+  "case_id": "MR2-check-review-tone",
+  "model": "qwen-max",
+  "kind": "infer",
+  "recorded_at": "2026-07-23T06:30:56.241038+00:00",
+  "request_summary": "MR2-check-review-tone: Before you draft that PR review, check what feedback I gave you earlier about how I like review comments written.",
+  "response": {
+    "tool_uses": [
+      {
+        "id": "call_ca528f9697d747ff8fbdfe",
+        "name": "Read",
+        "input": {
+          "path": "/eval-fixture/memory/feedback_review_tone.md"
+        }
+      }
+    ],
+    "text": "",
+    "stop_reason": "tool_use"
+  }
+}

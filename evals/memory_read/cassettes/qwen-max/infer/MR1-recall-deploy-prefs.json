@@ -1,0 +1,20 @@
+{
+  "case_id": "MR1-recall-deploy-prefs",
+  "model": "qwen-max",
+  "kind": "infer",
+  "recorded_at": "2026-07-23T06:30:54.952127+00:00",
+  "request_summary": "MR1-recall-deploy-prefs: We're about to ship the payments service. Recall my deployment preferences before you write the rollout plan.",
+  "response": {
+    "tool_uses": [
+      {
+        "id": "call_6e1b320eadb14cc0939318",
+        "name": "Read",
+        "input": {
+          "path": "/eval-fixture/memory/user_deploy_prefs.md"
+        }
+      }
+    ],
+    "text": "",
+    "stop_reason": "tool_use"
+  }
+}
