@@ -82,7 +82,12 @@ def to_openai_request(req: ApiMessageRequest) -> dict[str, Any]:
 
     result["messages"] = messages
 
-    if req.tools is not None:
+    # F15: truthy check, not ``is not None`` — an empty ``tools=[]`` (the
+    # "tools disabled" signal from summarize/compact/decompose) must OMIT the
+    # field, not send ``[]``. DashScope rejects an empty array
+    # ("[] is too short - 'tools'"); wire-level, no-tools-field == empty-tools
+    # for OpenAI-compatible models, so omission is equivalent and portable.
+    if req.tools:
         result["tools"] = [_tool_spec_to_openai(t) for t in req.tools]
 
     return result

@@ -269,6 +269,19 @@ class TestToOpenAiRequestTools:
         result = to_openai_request(req)
         assert "tools" not in result
 
+    def test_empty_tools_list_omits_field(self) -> None:
+        # F15 (B2 eval 挖出): summarize/compact/decompose 用 tools=[] 表达
+        # "禁用工具", 但 DashScope 拒绝空数组 ("[] is too short - 'tools'").
+        # 空列表在 OpenAI-compat wire 层等同于无 tools —— 省略字段, 别发 [].
+        req = ApiMessageRequest(
+            model="qwen-max",
+            max_tokens=1024,
+            messages=[ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+            tools=[],
+        )
+        result = to_openai_request(req)
+        assert "tools" not in result
+
 
 # ============================================================================
 # _StreamAssembler: consume OpenAI streaming chunks  →  ApiStreamEvent / final

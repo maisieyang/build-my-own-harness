@@ -1,0 +1,728 @@
+# memory_compact dataset — 决策面 #1 / B2 (D45)
+# 每 case = 一段长历史(>preserve_recent), 中段埋 3+ 关键事实.
+# oracle = 种植事实回收: 压缩后判事实在不在 summary (硬 keyword).
+
+samples:
+- case_id: MC1-config-facts
+  capability: fact-recall
+  messages:
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第0轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第1轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第2轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第3轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 我们用 Tavily 做网络搜索, 不用 SerpAPI, 太贵了
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第5轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第6轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第7轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 生产端口从 3000 改成 8080
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第9轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第10轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第11轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 数据库是 PostgreSQL 15, 不是 MySQL
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第13轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第14轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第15轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第16轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第17轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第18轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第19轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第20轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第21轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第22轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第23轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第24轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第25轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第26轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第27轮, 无关紧要的内容
+  must_recall:
+  - Tavily
+  - '8080'
+  - PostgreSQL
+  notes: 三个配置事实埋在中段(会被压掉的 older 区), 摘要必须保留
+- case_id: MC2-decision-facts
+  capability: fact-recall
+  messages:
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第0轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第1轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第2轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第3轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第4轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第5轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 决定用 JWT 做鉴权, 不用 session cookie
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第7轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第8轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第9轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 缓存层选 Redis, TTL 设 300 秒
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第11轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第12轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第13轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第14轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第15轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 部署走蓝绿, 不用滚动更新
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第17轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第18轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第19轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第20轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第21轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第22轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第23轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第24轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第25轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第26轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第27轮, 无关紧要的内容
+  must_recall:
+  - JWT
+  - Redis
+  - 蓝绿
+  notes: 三个架构决策事实
+- case_id: MC3-error-fix-facts
+  capability: fact-recall
+  messages:
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第0轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第1轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第2轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第3轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 那个 OOM 是因为 batch size 设成 512 太大
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第5轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第6轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第7轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 改成 64 之后就好了
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第9轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第10轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第11轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第12轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第13轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 根因是没释放 CUDA 缓存
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第15轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第16轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第17轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第18轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第19轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第20轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第21轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第22轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第23轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第24轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第25轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第26轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第27轮, 无关紧要的内容
+  must_recall:
+  - OOM
+  - '64'
+  - CUDA
+  notes: 错误+修复的事实链(对应 Errors and Fixes 槽)
+- case_id: MC4-user-request-facts
+  capability: fact-recall
+  messages:
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第0轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第1轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 我要一个导出 CSV 的功能, 只导已完成订单
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第3轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第4轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第5轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第6轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第7轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第8轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第9轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 字段要含订单号/金额/完成时间三列
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第11轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第12轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第13轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第14轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第15轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第16轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第17轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 编码用 UTF-8 带 BOM, Excel 才不乱码
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第19轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第20轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第21轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第22轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第23轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第24轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第25轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第26轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第27轮, 无关紧要的内容
+  must_recall:
+  - CSV
+  - UTF-8
+  - BOM
+  notes: 用户原始需求的关键约束(对应 Primary Request 槽)
+- case_id: MC5-pending-tasks-facts
+  capability: fact-recall
+  messages:
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第0轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第1轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第2轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第3轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第4轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第5轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: '还没做的: 给 /export 加分页'
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第7轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第8轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第9轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第10轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第11轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 还欠一个 rate limit, 每分钟 60 次
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第13轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第14轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第15轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第16轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第17轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第18轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第19轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 文档里 API 版本号要从 v1 改 v2
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第21轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第22轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第23轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第24轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第25轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第26轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第27轮, 无关紧要的内容
+  must_recall:
+  - 分页
+  - '60'
+  - v2
+  notes: 待办事实(对应 Pending Tasks 槽) —— 最容易在摘要里被丢
+- case_id: MC6-noise-exclusion
+  capability: noise-exclusion
+  messages:
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第0轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第1轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第2轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第3轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: '核心事实: 项目代号是 Falcon'
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第5轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第6轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第7轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: '另一个核心: 上线日期 2026-08-01'
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第9轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第10轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第11轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: '还有: 负责人是张伟'
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第13轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第14轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第15轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第16轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第17轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第18轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第19轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第20轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第21轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第22轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第23轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第24轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第25轮, 无关紧要的内容
+  - role: user
+    content:
+    - type: text
+      text: 闲聊填充第26轮, 无关紧要的内容
+  - role: assistant
+    content:
+    - type: text
+      text: 闲聊填充第27轮, 无关紧要的内容
+  must_recall:
+  - Falcon
+  - '2026-08-01'
+  - 张伟
+  must_not_recall:
+  - 闲聊填充第1轮
+  - 闲聊填充第5轮
+  notes: 既测事实保留, 又测噪声不该进摘要 —— 双向探针
