@@ -91,34 +91,45 @@ Sources:
 - 真正的空白:**REPL 无模式状态机**——没有 mode 概念、没有审批闸、
   没有"批准→翻转→同 session 继续"的状态转移。
 
-### 状态机(v1)
+### 状态机(v1,follow CC:审批 = harness 渲染的菜单,非用户命令)
 
 ```
-            /plan                     /execute [--accept-edits]
-  默认  ─────────▶  plan 模式  ─────────────▶  执行(同 session)
-   ▲                   │                            │
-   │     /default      │                            │ turn 结束回落
-   └───────────────────┘◀───────────────────────────┘
+            /plan
+  默认  ─────────▶  plan 模式(deny 钳制,只读探索)
+   ▲                   │
+   │                   │ assistant turn 结束(计划呈交)
+   │                   ▼
+   │           ┌─ 审批菜单(harness 渲染)─────────────┐
+   │           │ [1] 批准,手动批边改(落 DEFAULT)      │──▶ 执行 turn ──┐
+   │           │ [2] 批准,acceptEdits                 │──▶ 执行 turn ──┤
+   │           │ [3] 继续规划(留在 plan)              │                │
+   │           │ [4] 放弃,回默认                      │                │ turn 结束
+   │           └──────────────────────────────────────┘                │ 回落
+   └───────────────────────────────────────────────────────────────────┘
 ```
 
 - **进入 `/plan`**:叠加 `plan_mode_preset()` deny 规则
   (`Edit(*)` / `Write(*)` / `Bash(*)`);只读工具照常;状态栏亮
   `mode=plan`(`format_status_bar` 现成)。
-- **批准 `/execute`**:人敲命令即审批闸——不给模型 ExitPlanMode 类
-  工具(CC 自己也演化到了这个形状,OH 的 REPL 里人敲的斜杠命令天然
-  就是 harness-owned gate,连菜单 UI 都省了)。撤 deny 预设,按参数
-  选落地模式:裸 `/execute` → DEFAULT(手动批);`--accept-edits` →
-  `accept_edits_preset()`(Edit/Write 放行,Bash 仍拦)。计划不需注入
-  ——它就在消息历史里,这是上下文连续的红利。
-- **放弃 `/default`**:撤姿态回地面,计划文本留在对话里当理解沉淀。
+- **审批菜单**:plan 模式下每个 assistant turn 结束,harness 渲染
+  四选项菜单(交互 prompt 有 D44 interactive-bash-ask 先例)。批准
+  选项即落地模式选择(follow CC"选项即落地模式");选批准后 harness
+  注入一条 canned 批准消息自动发起执行 turn。模型无任何退出类工具
+  (CC 已移除 ExitPlanMode,审批是 harness 直接接管的 UI 硬闸)。
+  计划不需注入——它就在消息历史里,上下文连续的红利。
+- **v1 相对 CC 的一处声明简化**:CC 在"计划呈交时"弹菜单(需识别
+  计划完成);v1 在 plan 模式**每个** turn 结束弹菜单,"继续规划"
+  选项兜住模型还在追问/探索的情形——简单、可预测,识别"计划已呈交"
+  留给 v2。
 
 ### 锁定的旋钮
 
 | 旋钮 | 决定 | 理由 |
 |---|---|---|
-| 批准由谁发起 | 人敲 `/execute`,模型无退出工具 | 权力划分最干净;CC 已收敛到同形状 |
+| 批准由谁发起 | harness 在 turn 结束渲染审批菜单;模型无退出工具 | follow CC(菜单硬闸);模型连提议退出的资格都没有 |
+| 落地模式选择 | 菜单批准选项即落地模式(手动批 DEFAULT / acceptEdits) | follow CC"选项即落地模式" |
+| 批准后如何启动执行 | harness 注入 canned 批准消息,自动发起执行 turn | 批准即执行;只翻权限干等输入是半吊子批准 |
 | 执行完权限落到哪 | turn 结束回落 DEFAULT | 批准的授权范围 = 这份计划;授权不跨事延伸 |
-| 落地模式选择 | `/execute` 的参数 | 抄 CC 审批菜单"选项即落地模式"的细节 |
 | plan 出口默认去向 | 同 session 执行;goal card 导出仅作可选出口 | §〇 修正 2:不强迫计划付上下文断绝税 |
 
 ### 留给 v2 的已知简化
@@ -129,11 +140,31 @@ Sources:
   prompt(收敛快)——注意它是姿态不是契约,契约只在 deny 预设。
 - **Ctrl+G 计划外置编辑**:好细节,v1 不做。
 
-### 依赖插点(按 module loop,动手前回 REFERENCE.md 定位)
+### 定位插点(对着 REFERENCE.md 做的盘点,2026-07-24)
 
-依赖 permissions(已完成)+ REPL 模式状态(**新**)+ 斜杠命令系统
-(已完成)。上游 OpenHarness 无此模块——属于 §5 之外的新增,需先在
-认知地图上补位再动手。
+**地位声明**(沿 loop-runtime-plan.md 先例):REFERENCE.md §1-§5 整份
+冻结,地图身份是逆向上游 v0.1.9——上游无 plan mode,写进 §5 会污染
+参照系,所以**不动地图,定位落在本文档**。plan-mode 不是 §5 的第 18
+号模块,也不是 ohmo/autopilot 那类"harness 之上的应用"(§5 覆盖核对
+的除外先例)——它和 loop-runtime L2 同类:**已建成模块的跨要素扩展**,
+capability 级新 epic 的一部分。认知来源:本文档 §一/§二(CC 对标)。
+
+**九要素盘点**(loop-runtime §1 同款表法):
+
+| 九要素 | 现状 | plan-mode 要它干什么 | 差距 |
+|---|---|---|---|
+| §3.5 安全边界(模块5 ✅) | 规则引擎 deny>ask>allow + `accept_edits_preset()` | plan 进入时的只读钳制;批准后的落地模式 | **扩展**:一个 `plan_mode_preset()` deny 预设——"新姿态收编为规则预设而非新枚举值"立场的第二次应用 |
+| §3.9 接触面(模块4 + repl-ux D42/D43 ✅) | `oh chat` REPL + 斜杠命令系统(Phase 5b/18)+ `format_status_bar` + 交互 prompt(D44 先例) | `/plan` 进入;turn 结束渲染审批菜单;状态栏亮 mode | **REPL 模式状态机 + 审批菜单——唯一真正的新面**(mode 状态 + 菜单四选项的转移) |
+| §3.1 循环 / §3.3 工具 | ✅ | 同 session 继续执行;计划靠消息历史自然在场 | 零改动(上下文连续的红利:engine 对 plan-mode 无感知) |
+| §3.2/3.4/3.6/3.7/3.8 | — | 不触碰 | — |
+
+**依赖**:模块5(permissions)✅ + 模块4/repl-ux ✅ + 斜杠命令 ✅
+——无未建成的前置,**当下可建**。
+
+**与 loop-runtime L 系列的关系**:正交且互补——L 系列(L1-L4/autopilot)
+是无头侧的三把椅子,plan-mode 是交互侧 REPL 的审批闸;对回 §一光谱:
+plan-mode = 第 2 点,L3′/L4 ≈ 第 3 点,autopilot = 第 4 点。可组合
+(先 plan 批准,再交给条件循环跑到绿——CC 的 plan+/goal 组合同款)。
 
 ## 四、论点候选(一句话 thesis)
 

@@ -35,12 +35,14 @@ from openharness.prompts.memory_inject import (
     format_relevant_memories_section,
 )
 from openharness.prompts.system import (
+    PLAN_MODE_PROMPT_SECTION,
     EnvironmentInfo,
     build_system_prompt,
     detect_environment,
 )
 
 __all__ = [
+    "PLAN_MODE_PROMPT_SECTION",
     "EnvironmentInfo",
     "MemoryManifest",
     "build_system_prompt",

@@ -90,6 +90,22 @@ _BASE_INSTRUCTIONS = (
 _NO_TOOLS_SENTINEL = "(no tools registered)"
 
 
+# D47.6 — plan-mode posture prompt. Posture, not contract: the actual clamp
+# is the permissions deny preset (plan_mode_preset); this text only steers
+# the model toward converging on a reviewable plan. Appended per-turn by the
+# REPL while mode=plan; never persisted (snapshots store messages, not
+# system prompts).
+PLAN_MODE_PROMPT_SECTION = """\
+## Plan mode
+
+You are in plan mode: file edits and shell commands are blocked by the
+permission layer. Research the task with read-only tools, ask clarifying
+questions if needed, then converge on ONE concise, reviewable plan (aim
+for a single screen) and present it as plain text. Do not attempt to
+edit files or run commands — an approval menu is shown to the user after
+your reply; execution starts only after they approve the plan."""
+
+
 def build_system_prompt(
     tools: list[ToolSpec],
     env: EnvironmentInfo,

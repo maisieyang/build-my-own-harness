@@ -15,6 +15,20 @@ records + framework-level lessons), see
 
 ## [Unreleased]
 
+### Added — plan mode: `/plan` + 审批菜单 (decisions/47)
+
+`oh chat` gains a plan mode: `/plan` clamps the session to read-only
+exploration (`Edit`/`Write`/`Bash` denied via a rules preset — the
+clamp is the permission layer, not a prompt), the status toolbar shows
+`[plan]`, and after every reply the harness renders a 4-option approval
+menu (approve with default permissions / approve with auto-accepted
+edits for the execution turn / keep planning / discard). Approving
+launches the execution turn in the same session immediately; the
+acceptEdits grant is one-shot and permissions fall back to default when
+that turn ends. The model has no exit tool — only a menu choice can
+leave plan mode. Menu EOF (non-interactive input) fails closed to
+discard.
+
 ### Added — REPL UX: 正门 / `/` 识别层 / 状态行 (decisions/42)
 
 Bare `oh` now enters the chat REPL — one word enters the session

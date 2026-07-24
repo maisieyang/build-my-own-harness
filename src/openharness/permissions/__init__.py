@@ -36,6 +36,7 @@ from openharness.permissions.rules import (
     accept_edits_preset,
     match_rules,
     parse_rule,
+    plan_mode_preset,
 )
 from openharness.permissions.tier_based import TierBasedPermissionChecker
 
@@ -51,4 +52,5 @@ __all__ = [
     "accept_edits_preset",
     "match_rules",
     "parse_rule",
+    "plan_mode_preset",
 ]

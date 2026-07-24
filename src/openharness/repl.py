@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
+from enum import Enum
 from hashlib import sha1
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
@@ -26,6 +27,12 @@ from typing import TYPE_CHECKING, Protocol
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.history import FileHistory
+
+from openharness.permissions.rules import (
+    PermissionRules,
+    accept_edits_preset,
+    plan_mode_preset,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -65,11 +72,88 @@ BUILTIN_SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/help", "show available commands"),
     SlashCommand("/clear", "reset conversation history (keeps tools + mode)"),
     SlashCommand("/compact", "force full LLM-based compaction of the conversation"),
+    SlashCommand("/plan", "enter plan mode — read-only exploration until you approve a plan"),
     SlashCommand("/skills", "list available skills"),
     SlashCommand("/memory", "list memories in this project's memory store"),
     SlashCommand("/exit", "leave the REPL"),
     SlashCommand("/quit", "leave the REPL"),
 )
+
+
+# --------------------------------------------------------------------------- #
+# plan mode (D47) — state-machine primitives, pure + TTY-free                 #
+# --------------------------------------------------------------------------- #
+
+
+class ChatMode(Enum):
+    """REPL posture: the ground state vs the plan-mode clamp (D47).
+
+    Deliberately NOT a :class:`~openharness.permissions.PermissionMode` value —
+    plan mode is a rules-preset overlay ("收编为规则预设" stance, D47.1), and
+    it lives only in REPL memory (D47.7: not persisted; a dead session falls
+    back to the ground state).
+    """
+
+    DEFAULT = "default"
+    PLAN = "plan"
+
+
+class PlanMenuChoice(Enum):
+    """The four approval-menu options (D47.2). Values are the input keys."""
+
+    APPROVE_MANUAL = "1"
+    APPROVE_ACCEPT_EDITS = "2"
+    KEEP_PLANNING = "3"
+    DISCARD = "4"
+
+
+# Rendered by the harness after every assistant turn while in plan mode
+# (D47.5: no plan-presented detection in v1 — option 3 covers "not ready").
+# The approve options name their landing permission mode (follow CC:
+# "选项即落地模式", D47.3).
+PLAN_MENU_TEXT = """\
+plan mode — approve this plan?
+  [1] yes, approve — execute with edits reviewed as usual (default permissions)
+  [2] yes, approve — auto-accept edits for the execution turn
+  [3] no, keep planning
+  [4] no, discard plan mode (back to default)"""
+
+
+# Injected as the auto-launched execution turn after approval (D47.3):
+# approval must start execution, not silently flip permissions and wait.
+PLAN_APPROVAL_MESSAGE = "The plan has been approved. Execute the plan you presented now."
+
+
+def parse_plan_menu_choice(raw: str) -> PlanMenuChoice | None:
+    """Map raw menu input to a choice; ``None`` = invalid → caller re-asks."""
+    stripped = raw.strip()
+    for choice in PlanMenuChoice:
+        if stripped == choice.value:
+            return choice
+    return None
+
+
+def overlay_plan_permissions(
+    base: PermissionRules,
+    *,
+    mode: ChatMode,
+    grant: PlanMenuChoice | None,
+) -> PermissionRules:
+    """Turn-scoped permission overlay for the plan state machine.
+
+    - ``mode=PLAN`` → append :func:`plan_mode_preset` to ``deny`` (the clamp;
+      engine precedence deny > allow keeps it authoritative over any allow).
+    - ``grant=APPROVE_ACCEPT_EDITS`` → append :func:`accept_edits_preset` to
+      ``allow`` for the one execution turn (D47.4: the caller consumes the
+      grant so it never outlives that turn).
+    - Anything else → ``base`` unchanged (identity, so the ground state stays
+      byte-for-byte on the pre-plan code path).
+    """
+    if mode is ChatMode.PLAN:
+        return base.model_copy(update={"deny": (*base.deny, *plan_mode_preset())})
+    if grant is PlanMenuChoice.APPROVE_ACCEPT_EDITS:
+        return base.model_copy(update={"allow": (*base.allow, *accept_edits_preset())})
+    return base
 
 
 def is_interactive() -> bool:
@@ -138,16 +222,21 @@ def format_status_bar(
     used_tokens: int,
     context_window: int,
     threshold_ratio: float | None,
+    mode: str | None = None,
 ) -> str:
-    """Render the bottom-toolbar line: model · context usage · threshold.
+    """Render the bottom-toolbar line: [mode] · model · context · threshold.
 
     Pure formatting over numbers the compaction subsystem already
     produces (``estimate_message_tokens`` / ``get_context_window``);
     ``threshold_ratio=None`` means auto-compact is off and the segment
-    is omitted rather than shown as a dead value.
+    is omitted rather than shown as a dead value. ``mode=None`` (the
+    ground state) omits the mode segment the same way — only a
+    non-default posture (e.g. ``"plan"``) earns a marker.
     """
     percent = round(used_tokens / context_window * 100) if context_window else 0
     bar = f"{model} · ctx {used_tokens / 1000:.1f}k/{context_window // 1000}k ({percent}%)"
+    if mode is not None:
+        bar = f"[{mode}] {bar}"
     if threshold_ratio is not None:
         bar += f" · auto-compact @{threshold_ratio:.0%}"
     return bar

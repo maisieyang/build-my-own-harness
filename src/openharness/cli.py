@@ -123,6 +123,7 @@ from openharness.plugins import (
     PluginLoader,
 )
 from openharness.prompts import (
+    PLAN_MODE_PROMPT_SECTION,
     build_system_prompt,
     detect_environment,
     load_claude_md_prompt,
@@ -1500,6 +1501,9 @@ oh chat — multi-turn REPL commands:
   /compact           force full LLM-based compaction of the conversation
                      (Phase 11 D29.6) — replaces history with a 9-slot
                      summary regardless of token threshold
+  /plan              enter plan mode (D47) — edits/commands are clamped
+                     to read-only exploration; an approval menu appears
+                     after each reply (approve = execute in this session)
   /skills            list available skills (Phase 18 D38.4)
   /memory            list memories in this project's memory store
   /help              show this message
@@ -1780,6 +1784,14 @@ async def _run_chat(
                     f"(resumed: {len(history)} messages from {pretty_when}; git_head={git_head})"
                 )
 
+        # D47 plan-mode state machine — REPL-memory only (D47.7: not
+        # persisted; a dead session falls back to the ground state).
+        chat_mode = _repl.ChatMode.DEFAULT
+        # One-shot acceptEdits grant for the approval-launched execution
+        # turn. Consumed at context build (never merely after the turn) so
+        # an error path that aborts the turn cannot leak it forward (D47.4).
+        execution_grant: _repl.PlanMenuChoice | None = None
+
         # repl-ux plan §2/§3: on a real terminal, input goes through a
         # prompt_toolkit session — ``/`` pops the completion menu
         # (built-ins + commands + skills, D38.1 order), input history
@@ -1802,6 +1814,10 @@ async def _run_chat(
                     used_tokens=_estimate_tokens(history, model=model),
                     context_window=_get_window(model),
                     threshold_ratio=compact_threshold_ratio if compact_enabled else None,
+                    # Same late-binding closure pattern as ``history`` above:
+                    # reads the current mode each render, so the toolbar
+                    # flips the instant /plan or the approval menu does.
+                    mode=("plan" if chat_mode is _repl.ChatMode.PLAN else None),
                 )
 
             prompt_session = _repl.create_prompt_session(
@@ -1851,6 +1867,21 @@ async def _run_chat(
                 continue
             if user_input == "/help":
                 typer.echo(_CHAT_HELP_TEXT)
+                continue
+            # D47 — enter plan mode. The clamp itself is the permissions deny
+            # preset overlaid at context build; this just flips the state.
+            # Leaving plan mode is menu-only (harness-owned gate, D47.2) —
+            # there is deliberately no /default escape command and no
+            # model-callable exit tool.
+            if user_input == "/plan":
+                if chat_mode is _repl.ChatMode.PLAN:
+                    typer.echo("(already in plan mode)")
+                else:
+                    chat_mode = _repl.ChatMode.PLAN
+                    typer.echo(
+                        "(plan mode: edits and shell commands are blocked; an "
+                        "approval menu appears after each reply)"
+                    )
                 continue
             # Phase 18 D38.4: list available skills. Dogfood entry point so
             # users can confirm a freshly dropped SKILL.md was discovered.
@@ -2029,14 +2060,33 @@ async def _run_chat(
                     web_enabled=effective_web,
                 )
 
+            # D47 — turn-scoped permission overlay + posture prompt. The
+            # acceptEdits grant is consumed here (one-shot swap) so it is
+            # spent whether or not the turn survives. ``overlay`` returns the
+            # base object untouched for the ground state, so the identity
+            # check keeps the pre-plan path byte-for-byte.
+            turn_grant, execution_grant = execution_grant, None
+            turn_permissions = _repl.overlay_plan_permissions(
+                effective_settings.permissions, mode=chat_mode, grant=turn_grant
+            )
+            turn_settings = (
+                effective_settings
+                if turn_permissions is effective_settings.permissions
+                else effective_settings.model_copy(update={"permissions": turn_permissions})
+            )
+            # Posture (D47.6), not contract — appended per turn, never stored.
+            turn_system_prompt = (
+                f"{system_prompt}\n\n{PLAN_MODE_PROMPT_SECTION}"
+                if chat_mode is _repl.ChatMode.PLAN
+                else system_prompt
+            )
+
             context = QueryContext(
                 api_client=client,
                 tool_registry=effective_registry,
-                permission_checker=TierBasedPermissionChecker(
-                    effective_registry, effective_settings
-                ),
+                permission_checker=TierBasedPermissionChecker(effective_registry, turn_settings),
                 hook_registry=effective_hook_registry,
-                system_prompt=system_prompt,
+                system_prompt=turn_system_prompt,
                 cwd=env.cwd,
                 model=model,
                 max_tokens=max_tokens,
@@ -2102,6 +2152,57 @@ async def _run_chat(
 
             if captured is not None:
                 history = captured
+
+            # D47.2/D47.5 — approval menu after EVERY assistant turn while in
+            # plan mode (v1 declared simplification: no plan-presented
+            # detection; option 3 covers "model is still exploring"). This is
+            # the harness-owned gate: the model has no exit tool, and natural
+            # language cannot flip the mode — only a menu choice can.
+            if chat_mode is _repl.ChatMode.PLAN:
+                typer.echo(_repl.PLAN_MENU_TEXT)
+                choice: _repl.PlanMenuChoice
+                while True:
+                    try:
+                        if prompt_session is not None:
+                            raw_choice = await prompt_session.prompt_async("plan> ")
+                        else:
+                            raw_choice = await asyncio.to_thread(input, "plan> ")
+                    except EOFError:
+                        # Fail-closed: exhausted/non-interactive input can
+                        # never approve execution — treat as discard. The
+                        # REPL's own double-Ctrl+D exit then fires normally.
+                        choice = _repl.PlanMenuChoice.DISCARD
+                        typer.echo("")
+                        break
+                    except KeyboardInterrupt:
+                        choice = _repl.PlanMenuChoice.KEEP_PLANNING
+                        typer.echo("")
+                        break
+                    parsed = _repl.parse_plan_menu_choice(raw_choice)
+                    if parsed is not None:
+                        choice = parsed
+                        break
+                    typer.echo("(enter 1-4)")
+                if choice in (
+                    _repl.PlanMenuChoice.APPROVE_MANUAL,
+                    _repl.PlanMenuChoice.APPROVE_ACCEPT_EDITS,
+                ):
+                    # 批准即执行 (D47.3): flip to ground state, arm the
+                    # one-shot grant, and seed the canned approval message so
+                    # the execution turn launches without further input.
+                    chat_mode = _repl.ChatMode.DEFAULT
+                    execution_grant = choice
+                    pending_input = _repl.PLAN_APPROVAL_MESSAGE
+                    landing = (
+                        "auto-accepted edits for this turn"
+                        if choice is _repl.PlanMenuChoice.APPROVE_ACCEPT_EDITS
+                        else "default permissions"
+                    )
+                    typer.echo(f"(plan approved — executing now with {landing})")
+                elif choice is _repl.PlanMenuChoice.DISCARD:
+                    chat_mode = _repl.ChatMode.DEFAULT
+                    typer.echo("(plan discarded — back to default mode)")
+                # KEEP_PLANNING: stay clamped; the next input keeps planning.
 
 
 # --------------------------------------------------------------------------- #
