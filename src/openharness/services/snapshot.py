@@ -313,6 +313,101 @@ def _serialize_snapshot(
     }
 
 
+def _atomic_write(*, storage_dir: Path, target: Path, content: str) -> None:
+    """Atomically replace ``target`` with ``content``.
+
+    Same-directory ``tempfile + os.replace`` so a concurrent reader sees
+    either the previous version or the new one, never a partial write.
+    ``storage_dir`` must be ``target``'s directory (same filesystem is
+    what makes ``os.replace`` atomic).
+    """
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=storage_dir,
+            delete=False,
+            suffix=".tmp",
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+            tmp.write(content)
+        os.replace(tmp_path, target)
+        tmp_path = None  # ownership transferred to target
+    finally:
+        if tmp_path is not None and tmp_path.exists():
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
+
+
+def append_messages_to_snapshot(
+    *,
+    cwd: str | Path,
+    messages: list[ConversationMessage],
+) -> Path | None:
+    """Amend the existing snapshot for ``cwd`` with trailing ``messages``.
+
+    F17 (dogfood 2026-07-28): snapshots are written **by the engine** at
+    user-turn end (:func:`write_session_snapshot` inside ``run_query``),
+    but the REPL appends some messages *after* the turn returns — the
+    ``/goal`` judge's ``met``/``cleared`` sentinels (D48.7) are the
+    motivating case. Those landed in the in-memory history only: quit
+    before the next turn and they were never persisted, so ``--resume``
+    revived a goal that had already been met or cleared.
+
+    This is an **amendment to the turn that just ended**, not a new turn:
+    no ``history/`` rotation, and every other field (``tool_metadata``,
+    ``created_at``, ``git_head``, context fields) is preserved verbatim.
+
+    Returns the amended path, or ``None`` when there's nothing to amend
+    (no snapshot yet — e.g. snapshots disabled, or no turn has run) or
+    the existing snapshot is unreadable. Never raises on IO/parse
+    failure: like the engine's writer (D30.9), a failed snapshot must
+    not take down the session — but it IS WARN-logged.
+    """
+    if not messages:
+        return None
+
+    storage_dir = get_snapshot_dir(Path(cwd).resolve())
+    snapshot_path = storage_dir / "current.json"
+    try:
+        payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError) as exc:
+        _logger.warning(
+            "snapshot_amend_read_failed",
+            snapshot=str(snapshot_path),
+            error=str(exc),
+        )
+        return None
+
+    existing = payload.get("messages")
+    if not isinstance(existing, list):
+        _logger.warning(
+            "snapshot_amend_malformed",
+            snapshot=str(snapshot_path),
+            reason="messages field is not a list",
+        )
+        return None
+
+    payload["messages"] = [*existing, *(m.model_dump(mode="json") for m in messages)]
+    try:
+        _atomic_write(
+            storage_dir=storage_dir,
+            target=snapshot_path,
+            content=json.dumps(payload, indent=2, ensure_ascii=False),
+        )
+    except OSError as exc:
+        _logger.warning(
+            "snapshot_amend_write_failed",
+            snapshot=str(snapshot_path),
+            error=str(exc),
+        )
+        return None
+    return snapshot_path
+
+
 def write_session_snapshot(
     *,
     cwd: str | Path,
@@ -374,23 +469,7 @@ def write_session_snapshot(
             )
             rotation_source = None
 
-    tmp_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=storage_dir,
-            delete=False,
-            suffix=".tmp",
-        ) as tmp:
-            tmp_path = Path(tmp.name)
-            tmp.write(content)
-        os.replace(tmp_path, snapshot_path)
-        tmp_path = None  # ownership transferred to snapshot_path
-    finally:
-        if tmp_path is not None and tmp_path.exists():
-            with contextlib.suppress(OSError):
-                tmp_path.unlink()
+    _atomic_write(storage_dir=storage_dir, target=snapshot_path, content=content)
 
     # P13-T1 (D31.3 + D31.5): rotation step. Failures here are
     # WARN-logged but don't fail the snapshot write (the new

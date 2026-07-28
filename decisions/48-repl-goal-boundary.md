@@ -102,6 +102,33 @@
 
 **Reversibility**: `easy`。
 
+### D48.10 — 终态哨兵落盘由 REPL 补写（F17 修复，2026-07-28）
+
+**Chosen**: 新增 `services.snapshot.append_messages_to_snapshot(cwd, messages)`
+——读现存 `current.json`、追加消息、原子重写，**不 rotate**、其余字段原样保留；
+REPL 在追加 `met`/`cleared` 哨兵时同步调用（`_extinguish_goal`）。`set` 哨兵
+不需要：它后面紧跟 kickoff turn，引擎自然把它捎上。
+
+**Why**: D48.7 写"对话流是唯一事实源、零状态同步",漏了一个前提——**事实源的
+写入点归引擎所有**（`run_query` 内 per-turn），而 goal 的状态变更发生在引擎
+之外、turn 之后。两个时钟。后果：达成后直接退出 → `met` 哨兵从未落盘 →
+`--resume` 复活已达成的 goal 并自动 kickoff（在人不在场时自作主张地重开）。
+首次 dogfood 的 snapshot 复盘撞出（learnings/dogfood-goal-todo-mvp.md F17）。
+
+不 rotate 是要点：这是**对刚结束那个 turn 的修订**，不是新 turn；rotate 会
+让每次 goal 达成都往 `history/` 里塞一份近似重复。
+
+**Alternatives**: ①判官前置进引擎 turn 内（动 engine，面大，且判官本就该在
+引擎之外——裁判分离）；③退出时 flush（只治正常退出，治不了崩溃，与 D48.7
+的崩溃安全主张相悖）。
+
+**Reversibility**: `easy`。
+
+**测试缝**: 原 41 例全绿却漏掉此 bug——`find_active_goal` 测内存列表、
+`--resume` 测手工构造的 snapshot dict，**没有一例跨"内存→磁盘"**。补
+`TestGoalSentinelPersistence`（run_query 替身照引擎时点落盘）+ 服务层 8 例，
+并做变异检验确认会咬。
+
 ### D48.8 — 姿态注入与 fail-closed
 
 **Chosen**: goal 激活期间 turn 级 system prompt 追加 `GOAL_PROMPT_SECTION`（含条件；复用 D47 turn_system_prompt 机制，不持久）。判官 fail-closed 不区分"判负"与"判官坏了"（v1 一律续跑，上限 + 可见 feedback 兜底）。
@@ -173,10 +200,16 @@
 | `verification/semantic_gate` | unchanged | 判官原语原样复用（D48.3） |
 | `services/snapshot\|session_memory\|compact` | unchanged | 哨兵走普通消息，snapshot 无感知 |
 | `engine/` | unchanged | 续跑是 REPL 层再调 run_query |
-| `prompts/` | requires extension | GOAL_PROMPT_SECTION（若放 prompts 层；放 repl 则 unchanged） |
+| `prompts/` | unchanged（实测回填） | `goal_prompt_section` 落在 `repl.py`，prompts 层未动 |
 | `eval/` | unchanged | 判官输入格式不变，校准不失效（D48.3） |
 
 **Conclusion**: 4-5 extension + 其余 unchanged + 0 bypass——比 D47 大一档但仍 phase 形态，无需重 ratify。
+
+**实测回填（2026-07-28）**：`services/snapshot` 的 `unchanged` **判错了**——
+预判"哨兵走普通消息，snapshot 无感知"，实际正因为无感知才漏了写入时点，
+F17 由此而生（改判 `requires extension`，见 D48.10）。教训：把某层判成
+`unchanged` 时，要问的不是"我会不会改它的代码"，而是**"我的新状态依赖它的
+哪条时序保证"**——依赖存在而假设未验证，正是 audit 该抓却没抓到的那类。
 
 ## 七、References
 

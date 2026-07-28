@@ -1810,6 +1810,23 @@ async def _run_chat(
         from openharness.services.compact import (
             estimate_message_tokens as _goal_estimate_tokens,
         )
+        from openharness.services.snapshot import append_messages_to_snapshot
+
+        def _extinguish_goal(event: str, condition: str) -> None:
+            """Append a terminal goal sentinel (``met``/``cleared``) and
+            persist it immediately (F17, dogfood 2026-07-28).
+
+            The engine writes this turn's snapshot *inside* ``run_query``;
+            the judge and these sentinels run after it returns. Appending to
+            ``history`` alone means quitting here leaves the last persisted
+            sentinel at ``set`` — and ``--resume`` would revive a goal that
+            is already done, then auto-kickoff on it. The ``set`` sentinel
+            needs no such amendment: its kickoff turn persists it.
+            """
+            sentinel = _repl.build_goal_sentinel(event, condition)
+            history.append(sentinel)
+            if settings.snapshot.enabled:
+                append_messages_to_snapshot(cwd=env.cwd, messages=[sentinel])
 
         # D48.7 — --resume restores an active goal from transcript sentinels
         # (counters/timer/token baseline reset, CC 同款).
@@ -1946,7 +1963,7 @@ async def _run_chat(
                     if goal is None:
                         typer.echo("(no goal to clear)")
                     else:
-                        history.append(_repl.build_goal_sentinel("cleared", goal.condition))
+                        _extinguish_goal("cleared", goal.condition)
                         typer.echo(f"(goal cleared: {goal.condition})")
                         goal = None
                         goal_auto_turns = 0
@@ -2320,7 +2337,7 @@ async def _run_chat(
                         0,
                         _goal_estimate_tokens(history, model=model) - goal.tokens_at_start,
                     )
-                    history.append(_repl.build_goal_sentinel("met", goal.condition))
+                    _extinguish_goal("met", goal.condition)
                     typer.echo(
                         f"\a(goal met after {goal_auto_turns} auto-turn(s), "
                         f"~{tokens_delta} tokens, {elapsed:.0f}s — {verdict.feedback})"

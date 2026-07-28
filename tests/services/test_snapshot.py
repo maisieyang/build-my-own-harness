@@ -34,6 +34,7 @@ from openharness.services.snapshot import (
     SnapshotVersionMismatch,
     _current_git_head,
     _serialize_snapshot,
+    append_messages_to_snapshot,
     get_snapshot_dir,
     load_snapshot,
     write_session_snapshot,
@@ -563,6 +564,97 @@ class TestErrorHierarchy:
         # NotFound shouldn't accidentally subclass CwdMismatch etc.
         assert not issubclass(SnapshotNotFound, SnapshotCwdMismatch)
         assert not issubclass(SnapshotCwdMismatch, SnapshotVersionMismatch)
+
+
+class TestAppendMessagesToSnapshot:
+    """F17 — amend the turn that just ended, without rotating it away.
+
+    Motivating case: the ``/goal`` judge's ``met``/``cleared`` sentinels
+    are appended by the REPL *after* the engine already wrote this turn's
+    snapshot. See ``tests/cli/test_chat_goal.py::TestGoalSentinelPersistence``
+    for the seam these support.
+    """
+
+    @staticmethod
+    def _seed(cwd: Path) -> Path:
+        return write_session_snapshot(
+            cwd=cwd,
+            tool_metadata={"recent_files": ["a.py"]},
+            messages=_sample_messages(),
+            context=_StubContext(),  # type: ignore[arg-type]
+        )
+
+    def test_appends_after_existing_messages(self, tmp_path: Path) -> None:
+        self._seed(tmp_path)
+        seeded = len(_sample_messages())
+        extra = ConversationMessage(role="user", content=[TextBlock(text="[goal-status] met: x")])
+
+        path = append_messages_to_snapshot(cwd=tmp_path, messages=[extra])
+
+        assert path is not None
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+        assert len(loaded["messages"]) == seeded + 1
+        assert loaded["messages"][-1]["content"][0]["text"] == "[goal-status] met: x"
+
+    def test_preserves_every_other_field(self, tmp_path: Path) -> None:
+        seeded_path = self._seed(tmp_path)
+        before = json.loads(seeded_path.read_text(encoding="utf-8"))
+        extra = ConversationMessage(role="user", content=[TextBlock(text="s")])
+
+        append_messages_to_snapshot(cwd=tmp_path, messages=[extra])
+
+        after = json.loads(seeded_path.read_text(encoding="utf-8"))
+        assert {k: v for k, v in after.items() if k != "messages"} == {
+            k: v for k, v in before.items() if k != "messages"
+        }
+
+    def test_round_trips_through_load_snapshot(self, tmp_path: Path) -> None:
+        self._seed(tmp_path)
+        extra = ConversationMessage(role="user", content=[TextBlock(text="sentinel")])
+
+        append_messages_to_snapshot(cwd=tmp_path, messages=[extra])
+
+        loaded = load_snapshot(tmp_path)
+        rebuilt = [ConversationMessage.model_validate(m) for m in loaded["messages"]]
+        assert isinstance(rebuilt[-1].content[0], TextBlock)
+        assert rebuilt[-1].content[0].text == "sentinel"
+
+    def test_does_not_rotate_into_history(self, tmp_path: Path) -> None:
+        # An amendment continues the same turn — rotating would file a
+        # near-duplicate into history/ on every goal completion.
+        self._seed(tmp_path)
+        extra = ConversationMessage(role="user", content=[TextBlock(text="s")])
+
+        append_messages_to_snapshot(cwd=tmp_path, messages=[extra])
+
+        history_dir = get_snapshot_dir(tmp_path) / "history"
+        assert not history_dir.exists() or list(history_dir.glob("*.json")) == []
+
+    def test_no_snapshot_returns_none(self, tmp_path: Path) -> None:
+        extra = ConversationMessage(role="user", content=[TextBlock(text="s")])
+        assert append_messages_to_snapshot(cwd=tmp_path, messages=[extra]) is None
+
+    def test_empty_messages_returns_none(self, tmp_path: Path) -> None:
+        self._seed(tmp_path)
+        assert append_messages_to_snapshot(cwd=tmp_path, messages=[]) is None
+
+    def test_malformed_snapshot_returns_none_without_raising(self, tmp_path: Path) -> None:
+        # A broken snapshot must not take down the session (D30.9 spirit).
+        self._seed(tmp_path)
+        (get_snapshot_dir(tmp_path) / "current.json").write_text("{not json", encoding="utf-8")
+        extra = ConversationMessage(role="user", content=[TextBlock(text="s")])
+
+        assert append_messages_to_snapshot(cwd=tmp_path, messages=[extra]) is None
+
+    def test_messages_field_not_a_list_returns_none(self, tmp_path: Path) -> None:
+        self._seed(tmp_path)
+        path = get_snapshot_dir(tmp_path) / "current.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["messages"] = "oops"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        extra = ConversationMessage(role="user", content=[TextBlock(text="s")])
+
+        assert append_messages_to_snapshot(cwd=tmp_path, messages=[extra]) is None
 
 
 class TestServicesInitExports:

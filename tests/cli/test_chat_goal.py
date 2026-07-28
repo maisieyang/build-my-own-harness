@@ -246,6 +246,99 @@ class TestGoalCommandSurface:
         assert judge_calls == []
 
 
+class TestGoalSentinelPersistence:
+    """F17 (dogfood 2026-07-28) — 哨兵必须跨"内存→磁盘"这道缝.
+
+    上面 ``TestGoalResume`` 两例喂的都是**手工构造**的 snapshot dict:
+    它们证明 ``find_active_goal`` 认得 met/cleared 哨兵,却从没验证过这些
+    哨兵**进不进得去** snapshot。真实缝在于:快照由引擎在 turn 结束写
+    (``engine/query.py`` ``write_session_snapshot(final_messages)``),而
+    判官与哨兵追加跑在引擎之外、turn 之后(``cli.py`` 判官段)——达成后
+    直接退出,met 哨兵从未落盘,``--resume`` 复活已达成的 goal 并自动
+    kickoff。这里的 ``run_query`` 替身照真引擎的时点落盘,把缝暴露出来。
+    """
+
+    @staticmethod
+    def _install_capture_with_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+        from openharness.services.snapshot import write_session_snapshot
+
+        async def _snapshotting_run_query(
+            initial_messages: list[ConversationMessage], context: QueryContext
+        ) -> AsyncIterator[ApiStreamEvent]:
+            assistant = ConversationMessage(role="assistant", content=[TextBlock(text="reply")])
+            final_messages = [*initial_messages, assistant]
+            yield ApiMessageCompleteEvent(
+                message=assistant,
+                usage=UsageSnapshot(input_tokens=1, output_tokens=1),
+                stop_reason="end_turn",
+            )
+            # 引擎的落盘时点:turn 结束、返回给 REPL 之前.
+            write_session_snapshot(
+                cwd=context.cwd,
+                tool_metadata={},
+                messages=final_messages,
+                context=context,
+            )
+            yield ConversationCompleteEvent(messages=final_messages)
+
+        monkeypatch.setattr(cli_module, "run_query", _snapshotting_run_query)
+
+    @staticmethod
+    def _persisted_goal() -> str | None:
+        """活跃 goal,按 ``--resume`` 会读到的那份磁盘快照判定。"""
+        from pathlib import Path
+
+        from openharness.repl import find_active_goal
+        from openharness.services.snapshot import load_snapshot
+
+        snapshot = load_snapshot(Path.cwd())
+        messages = [ConversationMessage.model_validate(m) for m in snapshot["messages"]]
+        return find_active_goal(messages)
+
+    def test_met_sentinel_survives_to_disk(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
+        self._install_capture_with_snapshot(monkeypatch)
+        _install_judge(monkeypatch, [(True, "evidence visible")])
+        # 达成即退出 —— 达成后没有第二个 turn 帮忙把哨兵捎上.
+        _stub_input_sequence(monkeypatch, ["/goal tests pass", "/exit"])
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["chat"])
+        assert result.exit_code == 0
+        assert "goal met" in result.stdout
+        # 下次 --resume 读的就是这份:已达成的 goal 不能复活.
+        assert self._persisted_goal() is None
+
+    def test_cleared_sentinel_survives_to_disk(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
+        self._install_capture_with_snapshot(monkeypatch)
+        _install_judge(monkeypatch, [(False, "not yet")])
+        _stub_input_sequence(monkeypatch, ["/goal tests pass", "/goal clear", "/exit"])
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["chat"])
+        assert result.exit_code == 0
+        assert "goal cleared" in result.stdout
+        assert self._persisted_goal() is None
+
+    def test_active_goal_still_persists(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 反向守卫:修 F17 不能把"活跃 goal 可恢复"(D48.7 本意)弄丢.
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("OPENHARNESS_GOAL_MAX_AUTO_TURNS", "1")
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
+        self._install_capture_with_snapshot(monkeypatch)
+        _install_judge(monkeypatch, [(False, "still failing")])
+        # kickoff→fail→续(1/1)→fail→上限暂停,goal 仍活跃时退出.
+        _stub_input_sequence(monkeypatch, ["/goal tests pass", "/exit"])
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["chat"])
+        assert result.exit_code == 0
+        assert self._persisted_goal() == "tests pass"
+
+
 class TestGoalResume:
     def test_resume_restores_active_goal(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_minimum_env(monkeypatch)
