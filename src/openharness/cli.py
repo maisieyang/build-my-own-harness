@@ -42,6 +42,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import difflib
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -68,6 +69,7 @@ from openharness._stream_render import (
     build_result_obj,
     collect_print_result,
     collect_transcript,
+    render_history_transcript,
     render_stream,
     render_stream_json,
 )
@@ -151,6 +153,7 @@ from openharness.verification.repair import GateResult, build_repair_prompt
 from openharness.verification.semantic_gate import (
     SemanticGateResult,
     maybe_run_semantic_verification,
+    run_semantic_verification,
 )
 
 # Default per-call output cap. Phase 1 originally shipped 1024 (no tools),
@@ -1504,6 +1507,10 @@ oh chat — multi-turn REPL commands:
   /plan              enter plan mode (D47) — edits/commands are clamped
                      to read-only exploration; an approval menu appears
                      after each reply (approve = execute in this session)
+  /goal <condition>  set a session goal (D48) — an independent checker
+                     evaluates the conversation after each reply and
+                     auto-continues turns until the condition holds;
+                     bare /goal shows status, /goal clear stops early
   /skills            list available skills (Phase 18 D38.4)
   /memory            list memories in this project's memory store
   /help              show this message
@@ -1792,6 +1799,30 @@ async def _run_chat(
         # an error path that aborts the turn cannot leak it forward (D47.4).
         execution_grant: _repl.PlanMenuChoice | None = None
 
+        # D48 session goal — 续跑式条件循环. ``goal_auto_turns`` counts
+        # consecutive auto-continued turns toward the settings backstop cap;
+        # any manual input resets it. ``pending_is_goal_feedback`` marks a
+        # queued continuation so it is NOT echoed as ``>>> `` user input
+        # (D48.2: checker feedback must never impersonate the user).
+        goal: _repl.GoalState | None = None
+        goal_auto_turns = 0
+        pending_is_goal_feedback = False
+        from openharness.services.compact import (
+            estimate_message_tokens as _goal_estimate_tokens,
+        )
+
+        # D48.7 — --resume restores an active goal from transcript sentinels
+        # (counters/timer/token baseline reset, CC 同款).
+        if history:
+            restored_condition = _repl.find_active_goal(history)
+            if restored_condition is not None:
+                goal = _repl.GoalState(
+                    condition=restored_condition,
+                    set_at=time.time(),
+                    tokens_at_start=_goal_estimate_tokens(history, model=model),
+                )
+                typer.echo(f"(goal restored: {restored_condition})")
+
         # repl-ux plan §2/§3: on a real terminal, input goes through a
         # prompt_toolkit session — ``/`` pops the completion menu
         # (built-ins + commands + skills, D38.1 order), input history
@@ -1818,6 +1849,7 @@ async def _run_chat(
                     # reads the current mode each render, so the toolbar
                     # flips the instant /plan or the approval menu does.
                     mode=("plan" if chat_mode is _repl.ChatMode.PLAN else None),
+                    goal_active=goal is not None,
                 )
 
             prompt_session = _repl.create_prompt_session(
@@ -1837,11 +1869,20 @@ async def _run_chat(
                 if pending_input is not None:
                     user_input = pending_input
                     pending_input = None
-                    typer.echo(f">>> {user_input}")
+                    if pending_is_goal_feedback:
+                        # D48.2 — checker feedback is queued input but NOT
+                        # user speech: the "(goal not met — continuing)" line
+                        # was already shown; echoing ``>>> `` here would
+                        # impersonate the user.
+                        pending_is_goal_feedback = False
+                    else:
+                        typer.echo(f">>> {user_input}")
                 elif prompt_session is not None:
                     user_input = await prompt_session.prompt_async(">>> ")
+                    goal_auto_turns = 0  # manual input re-arms the loop (D48.5)
                 else:
                     user_input = await asyncio.to_thread(input, ">>> ")
+                    goal_auto_turns = 0  # manual input re-arms the loop (D48.5)
             except EOFError:
                 if eof_armed:
                     typer.echo("")  # newline after EOF
@@ -1882,6 +1923,53 @@ async def _run_chat(
                         "(plan mode: edits and shell commands are blocked; an "
                         "approval menu appears after each reply)"
                     )
+                continue
+            # D48 — session goal command surface (set / show / clear).
+            if user_input == "/goal" or user_input.startswith("/goal "):
+                goal_cmd = _repl.parse_goal_command(user_input)
+                if goal_cmd.action == "show":
+                    if goal is None:
+                        typer.echo("(no goal set — /goal <condition> to set one)")
+                    else:
+                        elapsed = time.time() - goal.set_at
+                        tokens_delta = max(
+                            0,
+                            _goal_estimate_tokens(history, model=model) - goal.tokens_at_start,
+                        )
+                        typer.echo(
+                            f"(goal: {goal.condition}\n"
+                            f"  checks: {goal.iterations} · auto-turns: {goal_auto_turns} · "
+                            f"elapsed: {elapsed:.0f}s · ~tokens since set: {tokens_delta}\n"
+                            f"  last checker reason: {goal.last_reason or '(not yet evaluated)'})"
+                        )
+                elif goal_cmd.action == "clear":
+                    if goal is None:
+                        typer.echo("(no goal to clear)")
+                    else:
+                        history.append(_repl.build_goal_sentinel("cleared", goal.condition))
+                        typer.echo(f"(goal cleared: {goal.condition})")
+                        goal = None
+                        goal_auto_turns = 0
+                else:  # set
+                    assert goal_cmd.condition is not None  # parse contract for "set"
+                    goal = _repl.GoalState(
+                        condition=goal_cmd.condition,
+                        set_at=time.time(),
+                        tokens_at_start=_goal_estimate_tokens(history, model=model),
+                    )
+                    goal_auto_turns = 0
+                    history.append(_repl.build_goal_sentinel("set", goal_cmd.condition))
+                    typer.echo(
+                        f"(goal set: {goal_cmd.condition}\n"
+                        "  an independent checker evaluates after each reply; "
+                        "tip: include a bound in the condition, e.g. "
+                        "'or stop after 20 turns')"
+                    )
+                    # D48.9 — set 即开工:kickoff turn 立即发起,不等下一条
+                    # 用户输入(CC "immediately start working" 同款).走 goal
+                    # 注入通道,不回显为 ``>>> `` 用户输入.
+                    pending_input = _repl.build_goal_kickoff(goal_cmd.condition)
+                    pending_is_goal_feedback = True
                 continue
             # Phase 18 D38.4: list available skills. Dogfood entry point so
             # users can confirm a freshly dropped SKILL.md was discovered.
@@ -2074,12 +2162,17 @@ async def _run_chat(
                 if turn_permissions is effective_settings.permissions
                 else effective_settings.model_copy(update={"permissions": turn_permissions})
             )
-            # Posture (D47.6), not contract — appended per turn, never stored.
-            turn_system_prompt = (
-                f"{system_prompt}\n\n{PLAN_MODE_PROMPT_SECTION}"
-                if chat_mode is _repl.ChatMode.PLAN
-                else system_prompt
-            )
+            # Posture (D47.6 / D48.8), not contract — appended per turn,
+            # never stored. Plan posture and goal posture can coexist only
+            # nominally (judge won't fire in plan mode, D48.1), but the goal
+            # section stays visible so planning happens goal-aware.
+            turn_system_prompt = system_prompt
+            if chat_mode is _repl.ChatMode.PLAN:
+                turn_system_prompt = f"{turn_system_prompt}\n\n{PLAN_MODE_PROMPT_SECTION}"
+            if goal is not None:
+                turn_system_prompt = (
+                    f"{turn_system_prompt}\n\n{_repl.goal_prompt_section(goal.condition)}"
+                )
 
             context = QueryContext(
                 api_client=client,
@@ -2203,6 +2296,53 @@ async def _run_chat(
                     chat_mode = _repl.ChatMode.DEFAULT
                     typer.echo("(plan discarded — back to default mode)")
                 # KEEP_PLANNING: stay clamped; the next input keeps planning.
+
+            # D48 — goal judge after every DEFAULT-state turn. Trigger is
+            # mutually exclusive with the plan menu (chat_mode gate) and with
+            # a just-queued turn (pending_input gate: a plan-approval launch
+            # must run before the judge sees it). Fail-closed: any judge
+            # failure reads as not-met and consumes an auto-turn — the cap +
+            # the visible reason keep a broken judge from spinning silently.
+            if goal is not None and chat_mode is _repl.ChatMode.DEFAULT and pending_input is None:
+                transcript = render_history_transcript(history)
+                verdict = await run_semantic_verification(
+                    goal.condition,
+                    transcript,
+                    api_client=client,
+                    model=settings.goal_judge_model or model,
+                    timeout_seconds=60.0,
+                )
+                goal.iterations += 1
+                goal.last_reason = verdict.feedback
+                if verdict.passed:
+                    elapsed = time.time() - goal.set_at
+                    tokens_delta = max(
+                        0,
+                        _goal_estimate_tokens(history, model=model) - goal.tokens_at_start,
+                    )
+                    history.append(_repl.build_goal_sentinel("met", goal.condition))
+                    typer.echo(
+                        f"\a(goal met after {goal_auto_turns} auto-turn(s), "
+                        f"~{tokens_delta} tokens, {elapsed:.0f}s — {verdict.feedback})"
+                    )
+                    goal = None
+                    goal_auto_turns = 0
+                elif goal_auto_turns >= settings.goal_max_auto_turns:
+                    typer.echo(
+                        f"\a(goal not met after {goal_auto_turns} auto-turns — "
+                        "paused; send a message to continue or /goal clear. "
+                        f"checker: {verdict.feedback})"
+                    )
+                    goal_auto_turns = 0
+                else:
+                    goal_auto_turns += 1
+                    typer.echo(
+                        f"(goal not met — continuing "
+                        f"({goal_auto_turns}/{settings.goal_max_auto_turns}): "
+                        f"{verdict.feedback})"
+                    )
+                    pending_input = _repl.build_goal_continuation(goal.condition, verdict.feedback)
+                    pending_is_goal_feedback = True
 
 
 # --------------------------------------------------------------------------- #

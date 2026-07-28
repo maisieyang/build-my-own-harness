@@ -39,7 +39,7 @@ from rich.live import Live
 from rich.spinner import Spinner
 from rich.table import Table
 
-from openharness.protocols.content import TextBlock
+from openharness.protocols.content import TextBlock, ToolResultBlock, ToolUseBlock
 from openharness.protocols.stream_events import (
     ApiMessageCompleteEvent,
     ApiRetryEvent,
@@ -55,6 +55,7 @@ if TYPE_CHECKING:
 
     from rich.console import ConsoleOptions, RenderResult
 
+    from openharness.protocols.messages import ConversationMessage
     from openharness.protocols.stream_events import ApiStreamEvent
     from openharness.verification.repair import GateResult
 
@@ -272,6 +273,39 @@ async def collect_transcript(events: AsyncIterator[ApiStreamEvent]) -> tuple[Pri
         final, input_tokens=input_tokens, output_tokens=output_tokens, num_turns=num_turns
     )
     return result, "".join(lines)
+
+
+def render_history_transcript(messages: list[ConversationMessage]) -> str:
+    """Render a REPL ``history`` (message list) into judge-readable text —
+    the message-list twin of :func:`collect_transcript` (D48 T1).
+
+    Same rationale as collect_transcript's docstring: the L3' judge must see
+    what the agent actually DID ([tool call]/[tool result] lines, results
+    truncated to ``_TRANSCRIPT_TOOL_OUTPUT_PREVIEW``), not just final-turn
+    prose. Adds ``[assistant turn N]`` boundary markers so the judge can
+    count turns — that is what makes "or stop after N turns"-style goal
+    conditions judgeable (D48.5).
+    """
+    lines: list[str] = []
+    turn = 0
+    for message in messages:
+        if message.role == "assistant":
+            turn += 1
+            lines.append(f"\n[assistant turn {turn}]\n")
+            for block in message.content:
+                if isinstance(block, TextBlock):
+                    lines.append(block.text)
+                elif isinstance(block, ToolUseBlock):
+                    lines.append(f"\n[tool call: {block.name}({block.input!r})]\n")
+        else:
+            for block in message.content:
+                if isinstance(block, TextBlock):
+                    lines.append(f"\n[user]: {block.text}\n")
+                elif isinstance(block, ToolResultBlock):
+                    status = "error" if block.is_error else "ok"
+                    output = block.content[:_TRANSCRIPT_TOOL_OUTPUT_PREVIEW]
+                    lines.append(f"[tool result ({status}): {output}]\n")
+    return "".join(lines)
 
 
 def build_result_obj(

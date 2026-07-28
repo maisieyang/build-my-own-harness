@@ -402,6 +402,29 @@ class Settings(BaseSettings):
         default="qwen3.7-max",
         description="Default model name; overridden by CLI --model.",
     )
+    goal_judge_model: str | None = Field(
+        default=None,
+        description=(
+            "Override the model used for the /goal session judge (D48.4). "
+            "``None`` (default) uses the main conversation's model. Set to "
+            "a cheaper variant to reduce per-turn evaluation cost — but "
+            "note the judge's reliability drops with weak models; the "
+            "default stays on the main model on purpose (provider-reality "
+            "divergence from CC's small-fast-model default). Env: "
+            "OPENHARNESS_GOAL_JUDGE_MODEL."
+        ),
+    )
+    goal_max_auto_turns: int = Field(
+        default=25,
+        ge=1,
+        description=(
+            "Backstop cap on consecutive /goal auto-continued turns before "
+            "the loop pauses for human input (D48.5). The recommended "
+            "bound lives in the condition itself (e.g. 'or stop after 20 "
+            "turns'); this is the fail-closed ceiling behind it. Env: "
+            "OPENHARNESS_GOAL_MAX_AUTO_TURNS."
+        ),
+    )
     extra_body: dict[str, Any] | None = Field(
         default=None,
         description=(

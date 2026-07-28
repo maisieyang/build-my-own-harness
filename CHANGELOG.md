@@ -15,6 +15,24 @@ records + framework-level lessons), see
 
 ## [Unreleased]
 
+### Added — session goal: `/goal` 续跑式条件循环 (decisions/48)
+
+`oh chat` gains `/goal <condition>`: an independent checker (the L3'
+semantic judge, injection-guarded and meta-evaluated) evaluates the
+conversation after every reply and auto-continues turns until the
+condition holds — completion is decided by a fresh judge call, never by
+the working model's self-report. Not-met verdicts feed back as
+`[goal checker]`-framed guidance (never echoed as user input); met
+clears the goal with a bell plus turns/tokens/elapsed stats. Bare
+`/goal` shows status; `/goal clear` (aliases: stop/off/reset/none/
+cancel) stops early. A settings backstop (`goal_max_auto_turns`,
+default 25) pauses runaway loops — the recommended bound lives in the
+condition itself ("or stop after 20 turns"). Goals survive `--resume`
+via transcript sentinels (condition restored, counters reset). Judge
+model configurable via `goal_judge_model` (defaults to the main model).
+Behavior aligned with Claude Code's /goal (design researched from docs
++ binary, see docs/ideas/cc-goal-design-reverse.md).
+
 ### Added — plan mode: `/plan` + 审批菜单 (decisions/47)
 
 `oh chat` gains a plan mode: `/plan` clamps the session to read-only

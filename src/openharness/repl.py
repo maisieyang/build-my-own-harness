@@ -40,6 +40,8 @@ if TYPE_CHECKING:
     from prompt_toolkit.completion import CompleteEvent
     from prompt_toolkit.document import Document
 
+    from openharness.protocols.messages import ConversationMessage
+
 
 @dataclass(frozen=True)
 class SlashCommand:
@@ -73,6 +75,9 @@ BUILTIN_SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/clear", "reset conversation history (keeps tools + mode)"),
     SlashCommand("/compact", "force full LLM-based compaction of the conversation"),
     SlashCommand("/plan", "enter plan mode — read-only exploration until you approve a plan"),
+    SlashCommand(
+        "/goal", "set a session goal — an independent checker auto-continues turns until met"
+    ),
     SlashCommand("/skills", "list available skills"),
     SlashCommand("/memory", "list memories in this project's memory store"),
     SlashCommand("/exit", "leave the REPL"),
@@ -156,6 +161,145 @@ def overlay_plan_permissions(
     return base
 
 
+# --------------------------------------------------------------------------- #
+# session goal (D48) — 续跑式条件循环的原语层, pure + TTY-free                #
+# --------------------------------------------------------------------------- #
+
+# CC 同款清除别名(逆向 2.1.218:clear/stop/off/reset/none/cancel).
+_GOAL_CLEAR_ALIASES = frozenset({"clear", "stop", "off", "reset", "none", "cancel"})
+
+# D48.2 — 续跑消息的判官身份框架:进 history 的是 user 角色(API 只有
+# user/assistant),但内容明确框定为 checker 反馈,不冒充用户口吻.
+GOAL_FEEDBACK_PREFIX = "[goal checker] not met: "
+
+# D48.9(dogfood 修正)— set 即开工:kickoff 指令框架.CC 同款语义
+# ("treat the condition itself as your directive... immediately start
+# working... do not pause to ask"),不等用户再输入.
+GOAL_KICKOFF_PREFIX = "[goal set] "
+
+# D48.7 — transcript 哨兵前缀:设定/达成/清除都以带标记消息落进 history,
+# snapshot 自然持久化;resume 时扫描重建(对话流是唯一事实源,CC 同构).
+_GOAL_SENTINEL_PREFIX = "[goal-status] "
+
+
+@dataclass
+class GoalState:
+    """Active session goal (D48.1) — REPL-memory; counters reset on resume.
+
+    Mutable on purpose: ``iterations``/``last_reason`` advance every judge
+    round; ``tokens_at_start`` anchors the estimate-based spend report
+    (CC's ``tokensAtStart`` twin, D48.6).
+    """
+
+    condition: str
+    set_at: float
+    tokens_at_start: int
+    iterations: int = 0
+    last_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class GoalCommand:
+    """Parsed ``/goal`` invocation: set (with condition) / show / clear."""
+
+    action: str  # "set" | "show" | "clear"
+    condition: str | None
+
+
+def parse_goal_command(raw: str) -> GoalCommand:
+    """Parse a ``/goal ...`` line (caller guarantees the ``/goal`` prefix).
+
+    Bare ``/goal`` → show; a single clear-alias token → clear; anything
+    else → set with the full remaining text as the condition. Alias match
+    is exact-single-word only — "clearly document the API" is a condition.
+    """
+    rest = raw.strip().removeprefix("/goal").strip()
+    if not rest:
+        return GoalCommand(action="show", condition=None)
+    if rest.lower() in _GOAL_CLEAR_ALIASES:
+        return GoalCommand(action="clear", condition=None)
+    return GoalCommand(action="set", condition=rest)
+
+
+def goal_prompt_section(condition: str) -> str:
+    """Turn-scoped system-prompt section while a goal is active (D48.8).
+
+    Posture, not contract — the loop's authority is the independent judge.
+    Mirrors CC's design note: evidence must land in the conversation for
+    the checker to see, so the section tells the model to surface it.
+    """
+    return (
+        "## Session goal\n\n"
+        "An independent checker evaluates the conversation after each turn "
+        "against this goal condition; turns auto-continue until it holds:\n\n"
+        f"    {condition}\n\n"
+        "Work toward the condition and surface verifiable evidence in the "
+        "conversation (e.g. actually run the relevant checks so their output "
+        "is visible) — the checker judges only what appears here."
+    )
+
+
+def build_goal_kickoff(condition: str) -> str:
+    """Kickoff directive launched the moment a goal is set (D48.9).
+
+    CC's /goal injects "immediately start working toward it — treat the
+    condition itself as your directive"; setting a goal that then waits
+    for the user to speak is a dead condition (dogfood 2026-07-24)."""
+    return (
+        f"{GOAL_KICKOFF_PREFIX}Work toward this goal now: {condition}\n"
+        "Treat the condition itself as your directive — briefly acknowledge "
+        "it, then immediately start working toward it; do not pause to ask "
+        "what to do. Surface verifiable evidence as you go."
+    )
+
+
+def build_goal_continuation(condition: str, feedback: str) -> str:
+    """Continuation message after a not-met verdict (D48.2).
+
+    Framed as checker feedback (CC's "Stop hook feedback" twin), carrying
+    the judge's reason plus the condition so the next turn re-anchors."""
+    return (
+        f"{GOAL_FEEDBACK_PREFIX}{feedback}\n"
+        f"Goal condition: {condition}\n"
+        "Continue working toward the goal and surface verifiable evidence."
+    )
+
+
+def build_goal_sentinel(event: str, condition: str) -> ConversationMessage:
+    """A goal-status sentinel message (``event`` ∈ set/met/cleared, D48.7)."""
+    from openharness.protocols.content import TextBlock
+    from openharness.protocols.messages import ConversationMessage
+
+    return ConversationMessage(
+        role="user",
+        content=[TextBlock(text=f"{_GOAL_SENTINEL_PREFIX}{event}: {condition}")],
+    )
+
+
+def find_active_goal(messages: list[ConversationMessage]) -> str | None:
+    """Scan history newest-first for the latest goal sentinel (D48.7).
+
+    Latest "set" that isn't followed by a "met"/"cleared" → its condition;
+    otherwise ``None``. Used by ``--resume`` to restore an active goal
+    (counters reset, CC 同款)."""
+    from openharness.protocols.content import TextBlock
+
+    for message in reversed(messages):
+        if message.role != "user":
+            continue
+        for block in message.content:
+            if not isinstance(block, TextBlock):
+                continue
+            text = block.text
+            if not text.startswith(_GOAL_SENTINEL_PREFIX):
+                continue
+            event, _, condition = text.removeprefix(_GOAL_SENTINEL_PREFIX).partition(": ")
+            if event == "set":
+                return condition
+            return None  # met / cleared — goal extinguished
+    return None
+
+
 def is_interactive() -> bool:
     """True when both stdin and stdout are terminals.
 
@@ -223,6 +367,7 @@ def format_status_bar(
     context_window: int,
     threshold_ratio: float | None,
     mode: str | None = None,
+    goal_active: bool = False,
 ) -> str:
     """Render the bottom-toolbar line: [mode] · model · context · threshold.
 
@@ -237,6 +382,8 @@ def format_status_bar(
     bar = f"{model} · ctx {used_tokens / 1000:.1f}k/{context_window // 1000}k ({percent}%)"
     if mode is not None:
         bar = f"[{mode}] {bar}"
+    if goal_active:
+        bar += " · ◎ goal"
     if threshold_ratio is not None:
         bar += f" · auto-compact @{threshold_ratio:.0%}"
     return bar
