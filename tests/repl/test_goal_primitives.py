@@ -18,7 +18,9 @@ from openharness.repl import (
     GOAL_FEEDBACK_PREFIX,
     GoalState,
     build_goal_continuation,
+    build_goal_kickoff,
     build_goal_sentinel,
+    build_plan_approval_sentinel,
     find_active_goal,
     format_status_bar,
     goal_prompt_section,
@@ -73,6 +75,29 @@ class TestPromptAndContinuation:
         assert msg.startswith(GOAL_FEEDBACK_PREFIX)
         assert "pytest was never run" in msg
         assert "tests pass" in msg
+
+    def test_plan_approval_sentinel_guides_goal_command_quality(self) -> None:
+        msg = build_plan_approval_sentinel()
+        text = "".join(b.text for b in msg.content if isinstance(b, TextBlock))
+
+        assert "concrete /goal condition" in text
+        assert "--no-cov" in text
+        assert "targeted pytest" in text
+        assert "stop bounds" in text
+
+    def test_goal_kickoff_mentions_permission_blockers_without_temp_files(self) -> None:
+        msg = build_goal_kickoff("tests pass")
+
+        assert "tests pass" in msg
+        assert "Bash is permission-denied" in msg
+        assert "Do not create temporary files" in msg
+
+    def test_goal_continuation_keeps_blocker_strategy(self) -> None:
+        msg = build_goal_continuation("tests pass", "pytest was never run")
+
+        assert "pytest was never run" in msg
+        assert "Bash is permission-denied" in msg
+        assert "Do not create temporary files" in msg
 
 
 class TestGoalSentinel:

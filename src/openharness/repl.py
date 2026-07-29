@@ -144,7 +144,9 @@ def build_plan_approval_sentinel() -> ConversationMessage:
                     "plan and returned to default mode. Do not execute the plan unless "
                     "the user explicitly asks. If the user asks for a /goal, convert "
                     "the approved plan into a concrete /goal condition with verification "
-                    "criteria and stop bounds."
+                    "criteria, runnable verification commands, and stop bounds. In this "
+                    "repo, targeted pytest commands should include --no-cov unless the "
+                    "goal is specifically to validate the full coverage gate."
                 )
             )
         ],
@@ -267,7 +269,13 @@ def build_goal_kickoff(condition: str) -> str:
         f"{GOAL_KICKOFF_PREFIX}Work toward this goal now: {condition}\n"
         "Treat the condition itself as your directive — briefly acknowledge "
         "it, then immediately start working toward it; do not pause to ask "
-        "what to do. Surface verifiable evidence as you go."
+        "what to do. Surface verifiable evidence as you go. If the goal "
+        "contains verification commands, run the commands as written when "
+        "allowed; for targeted pytest commands in this repo, prefer --no-cov "
+        "unless the goal is specifically validating the full coverage gate. "
+        "If Bash is permission-denied, report the exact blocker and the needed "
+        "permission or sandbox setting. Do not create temporary files or scripts "
+        "as a substitute for running a denied command."
     )
 
 
@@ -279,7 +287,10 @@ def build_goal_continuation(condition: str, feedback: str) -> str:
     return (
         f"{GOAL_FEEDBACK_PREFIX}{feedback}\n"
         f"Goal condition: {condition}\n"
-        "Continue working toward the goal and surface verifiable evidence."
+        "Continue working toward the goal and surface verifiable evidence. If "
+        "Bash is permission-denied, report the exact blocker and the needed "
+        "permission or sandbox setting. Do not create temporary files or scripts "
+        "as a substitute for running a denied command."
     )
 
 
