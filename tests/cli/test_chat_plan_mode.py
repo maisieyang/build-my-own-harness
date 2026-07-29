@@ -22,7 +22,6 @@ from openharness.protocols.stream_events import (
     ConversationCompleteEvent,
 )
 from openharness.protocols.usage import UsageSnapshot
-from openharness.repl import PLAN_APPROVAL_MESSAGE
 from openharness.tools import ToolExecutionContext
 
 if TYPE_CHECKING:
@@ -58,19 +57,26 @@ class _ChatStubClient:
         )
 
 
-def _stub_input_sequence(monkeypatch: pytest.MonkeyPatch, lines: list[str]) -> None:
-    iterator = iter(lines)
+def _stub_input_events(monkeypatch: pytest.MonkeyPatch, events: list[str | BaseException]) -> None:
+    iterator = iter(events)
 
     def _next(prompt: str = "") -> str:
         del prompt
         try:
-            return next(iterator)
+            item = next(iterator)
         except StopIteration as exc:
             raise EOFError from exc
+        if isinstance(item, BaseException):
+            raise item
+        return item
 
     import builtins
 
     monkeypatch.setattr(builtins, "input", _next)
+
+
+def _stub_input_sequence(monkeypatch: pytest.MonkeyPatch, lines: list[str]) -> None:
+    _stub_input_events(monkeypatch, lines)
 
 
 def _install_capture(
@@ -114,7 +120,7 @@ class TestEnterPlanMode:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
         contexts, _ = _install_capture(monkeypatch)
         # /plan → one exploratory turn → menu appears → keep planning → exit.
-        _stub_input_sequence(monkeypatch, ["/plan", "explore the codebase", "3", "/exit"])
+        _stub_input_sequence(monkeypatch, ["/plan", "explore the codebase", "2", "/exit"])
 
         runner = CliRunner()
         result = runner.invoke(cli_module.app, ["chat"])
@@ -136,6 +142,24 @@ class TestEnterPlanMode:
         )
         assert read.decision is Decision.ALLOW
 
+    def test_plan_with_trailing_prompt_enters_plan_and_runs_prompt(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
+        contexts, messages = _install_capture(monkeypatch)
+        _stub_input_sequence(monkeypatch, ["/plan explore the approval behavior", "2", "/exit"])
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["chat"])
+        assert result.exit_code == 0
+        assert "plan mode" in result.stdout
+        assert len(contexts) == 1
+        assert _write_denied(contexts[0], tmp_path)
+        text = "".join(b.text for b in messages[0][-1].content if isinstance(b, TextBlock))
+        assert text == "explore the approval behavior"
+        assert "plan mode" in contexts[0].system_prompt.lower()
+
     def test_plan_prompt_injected_only_in_plan_mode(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -144,7 +168,7 @@ class TestEnterPlanMode:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
         contexts, _ = _install_capture(monkeypatch)
         # default turn → /plan → plan turn → keep planning → exit.
-        _stub_input_sequence(monkeypatch, ["hello", "/plan", "make a plan", "3", "/exit"])
+        _stub_input_sequence(monkeypatch, ["hello", "/plan", "make a plan", "2", "/exit"])
 
         runner = CliRunner()
         result = runner.invoke(cli_module.app, ["chat"])
@@ -153,6 +177,8 @@ class TestEnterPlanMode:
         # T4: 姿态注入只在 plan 态 — 组装层断言(D47.6).
         assert "plan mode" not in contexts[0].system_prompt.lower()
         assert "plan mode" in contexts[1].system_prompt.lower()
+        assert "execution starts only after" not in contexts[1].system_prompt.lower()
+        assert "approval returns the session to default mode" in contexts[1].system_prompt.lower()
 
     def test_repeat_plan_is_noop(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_minimum_env(monkeypatch)
@@ -178,27 +204,35 @@ class TestEnterPlanMode:
 
 
 class TestApprovalMenu:
-    def test_approve_manual_launches_execution_and_unclamps(
+    def test_approve_manual_returns_to_default_without_auto_execution(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         _set_minimum_env(monkeypatch)
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
         contexts, messages = _install_capture(monkeypatch)
-        # 批准([1])后不需要用户再输入 — canned 消息自动发起执行 turn.
-        _stub_input_sequence(monkeypatch, ["/plan", "draft the plan", "1", "/exit"])
+        # Approval exits plan mode without auto-execution; the next user
+        # message starts the default turn.
+        _stub_input_sequence(
+            monkeypatch, ["/plan", "draft the plan", "1", "turn this into a /goal", "/exit"]
+        )
 
         runner = CliRunner()
         result = runner.invoke(cli_module.app, ["chat"])
         assert result.exit_code == 0
-        assert len(contexts) == 2  # plan turn + auto-launched execution turn
-        # 执行 turn 的最后一条 user 消息 = canned 批准消息.
+        assert "plan approved" in result.stdout
+        assert len(contexts) == 2  # plan turn + user-authored follow-up turn
         last = messages[1][-1]
         assert last.role == "user"
         text = "".join(b.text for b in last.content if isinstance(b, TextBlock))
-        assert text == PLAN_APPROVAL_MESSAGE
+        assert text == "turn this into a /goal"
+        all_text = "\n".join(
+            b.text for message in messages[1] for b in message.content if isinstance(b, TextBlock)
+        )
+        assert "[plan-status] approved:" in all_text
+        assert "convert the approved plan into a concrete /goal condition" in all_text
         # deny 钳制已撤(交互 DEFAULT 姿态 in-cwd 写恢复 ALLOW).
         assert not _write_denied(contexts[1], tmp_path)
-        # 执行 turn 的 system prompt 不再带 plan 姿态.
+        # follow-up turn 的 system prompt 不再带 plan 姿态.
         assert "plan mode" not in contexts[1].system_prompt.lower()
         # D47 T4: 姿态注入是 turn 级 system prompt,不落进消息历史(历史是
         # 唯一被 snapshot 持久化的对话状态).
@@ -208,26 +242,24 @@ class TestApprovalMenu:
                     if isinstance(block, TextBlock):
                         assert "You are in plan mode" not in block.text
 
-    def test_accept_edits_grant_scoped_to_one_turn(
+    def test_approve_accept_edits_does_not_arm_hidden_execution_grant(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         _set_minimum_env(monkeypatch)
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
         contexts, _ = _install_capture(monkeypatch)
         _stub_input_sequence(
-            monkeypatch, ["/plan", "draft the plan", "2", "one more message", "/exit"]
+            monkeypatch, ["/plan", "draft the plan", "1", "one more message", "/exit"]
         )
 
         runner = CliRunner()
         result = runner.invoke(cli_module.app, ["chat"])
         assert result.exit_code == 0
-        assert len(contexts) == 3  # plan / execution / follow-up
-        # D47.4 回落:执行 turn 带 acceptEdits allow,后续 turn 不带.
-        exec_rules = contexts[1].permission_checker._permissions
-        follow_rules = contexts[2].permission_checker._permissions
-        assert "Edit(*)" in exec_rules.allow
+        assert len(contexts) == 2  # plan / user-authored follow-up
+        follow_rules = contexts[1].permission_checker._permissions
         assert "Edit(*)" not in follow_rules.allow
         assert follow_rules.deny == ()  # plan deny 也不残留
+        assert not _write_denied(contexts[1], tmp_path)
 
     def test_discard_returns_to_default(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -235,7 +267,7 @@ class TestApprovalMenu:
         _set_minimum_env(monkeypatch)
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
         contexts, _ = _install_capture(monkeypatch)
-        _stub_input_sequence(monkeypatch, ["/plan", "explore", "4", "back to normal", "/exit"])
+        _stub_input_sequence(monkeypatch, ["/plan", "explore", "3", "back to normal", "/exit"])
 
         runner = CliRunner()
         result = runner.invoke(cli_module.app, ["chat"])
@@ -254,7 +286,7 @@ class TestApprovalMenu:
         runner = CliRunner()
         result = runner.invoke(cli_module.app, ["chat"])
         assert result.exit_code == 0
-        assert "1-4" in result.stdout  # re-prompt hint
+        assert "1-3" in result.stdout  # re-prompt hint
 
     def test_menu_eof_fails_closed_to_discard(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # 非 TTY / 输入耗尽:菜单读到 EOF → 视为放弃(fail-closed),不挂死,
@@ -269,3 +301,24 @@ class TestApprovalMenu:
         assert result.exit_code == 0
         assert "discarded" in result.stdout
         assert len(contexts) == 1  # 没有偷跑执行 turn
+
+    def test_menu_ctrl_c_keeps_planning(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
+        contexts, messages = _install_capture(monkeypatch)
+        _stub_input_events(
+            monkeypatch,
+            ["/plan", "explore", KeyboardInterrupt(), "still planning", "2", "/exit"],
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["chat"])
+        assert result.exit_code == 0
+        assert len(contexts) == 2
+        assert _write_denied(contexts[1], tmp_path)
+        followup = messages[1][-1]
+        assert followup.role == "user"
+        text = "".join(b.text for b in followup.content if isinstance(b, TextBlock))
+        assert text == "still planning"

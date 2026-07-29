@@ -30,7 +30,6 @@ from prompt_toolkit.history import FileHistory
 
 from openharness.permissions.rules import (
     PermissionRules,
-    accept_edits_preset,
     plan_mode_preset,
 )
 
@@ -74,7 +73,9 @@ BUILTIN_SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/help", "show available commands"),
     SlashCommand("/clear", "reset conversation history (keeps tools + mode)"),
     SlashCommand("/compact", "force full LLM-based compaction of the conversation"),
-    SlashCommand("/plan", "enter plan mode — read-only exploration until you approve a plan"),
+    SlashCommand(
+        "/plan", "enter plan mode, optionally with a first prompt — read-only until approval"
+    ),
     SlashCommand(
         "/goal", "set a session goal — an independent checker auto-continues turns until met"
     ),
@@ -104,29 +105,50 @@ class ChatMode(Enum):
 
 
 class PlanMenuChoice(Enum):
-    """The four approval-menu options (D47.2). Values are the input keys."""
+    """The approval-menu options (D47.2). Values are the input keys."""
 
-    APPROVE_MANUAL = "1"
-    APPROVE_ACCEPT_EDITS = "2"
-    KEEP_PLANNING = "3"
-    DISCARD = "4"
+    APPROVE = "1"
+    KEEP_PLANNING = "2"
+    DISCARD = "3"
 
 
-# Rendered by the harness after every assistant turn while in plan mode
-# (D47.5: no plan-presented detection in v1 — option 3 covers "not ready").
-# The approve options name their landing permission mode (follow CC:
-# "选项即落地模式", D47.3).
+# Rendered by the harness after every assistant turn while in plan mode.
+# Approval exits the read-only planning clamp; it does not auto-launch an
+# execution turn. The next user message is the handoff point where they can
+# refine the plan, ask for a goal-shaped condition, or start ``/goal``.
 PLAN_MENU_TEXT = """\
 plan mode — approve this plan?
-  [1] yes, approve — execute with edits reviewed as usual (default permissions)
-  [2] yes, approve — auto-accept edits for the execution turn
-  [3] no, keep planning
-  [4] no, discard plan mode (back to default)"""
+  [1] yes, approve — return to default mode
+  [2] no, keep planning
+  [3] no, discard plan mode (back to default)"""
+
+_PLAN_SENTINEL_PREFIX = "[plan-status] "
 
 
-# Injected as the auto-launched execution turn after approval (D47.3):
-# approval must start execution, not silently flip permissions and wait.
-PLAN_APPROVAL_MESSAGE = "The plan has been approved. Execute the plan you presented now."
+def build_plan_approval_sentinel() -> ConversationMessage:
+    """Message-history marker for the post-plan handoff.
+
+    The menu event is UI-owned, but the next model turn needs to know that
+    the preceding plan was approved and that approval did not mean "execute
+    now". This marker is context, not a queued turn.
+    """
+    from openharness.protocols.content import TextBlock
+    from openharness.protocols.messages import ConversationMessage
+
+    return ConversationMessage(
+        role="user",
+        content=[
+            TextBlock(
+                text=(
+                    f"{_PLAN_SENTINEL_PREFIX}approved: The user approved the preceding "
+                    "plan and returned to default mode. Do not execute the plan unless "
+                    "the user explicitly asks. If the user asks for a /goal, convert "
+                    "the approved plan into a concrete /goal condition with verification "
+                    "criteria and stop bounds."
+                )
+            )
+        ],
+    )
 
 
 def parse_plan_menu_choice(raw: str) -> PlanMenuChoice | None:
@@ -148,16 +170,12 @@ def overlay_plan_permissions(
 
     - ``mode=PLAN`` → append :func:`plan_mode_preset` to ``deny`` (the clamp;
       engine precedence deny > allow keeps it authoritative over any allow).
-    - ``grant=APPROVE_ACCEPT_EDITS`` → append :func:`accept_edits_preset` to
-      ``allow`` for the one execution turn (D47.4: the caller consumes the
-      grant so it never outlives that turn).
     - Anything else → ``base`` unchanged (identity, so the ground state stays
       byte-for-byte on the pre-plan code path).
     """
+    del grant
     if mode is ChatMode.PLAN:
         return base.model_copy(update={"deny": (*base.deny, *plan_mode_preset())})
-    if grant is PlanMenuChoice.APPROVE_ACCEPT_EDITS:
-        return base.model_copy(update={"allow": (*base.allow, *accept_edits_preset())})
     return base
 
 

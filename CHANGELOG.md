@@ -38,14 +38,14 @@ Behavior aligned with Claude Code's /goal (design researched from docs
 `oh chat` gains a plan mode: `/plan` clamps the session to read-only
 exploration (`Edit`/`Write`/`Bash` denied via a rules preset — the
 clamp is the permission layer, not a prompt), the status toolbar shows
-`[plan]`, and after every reply the harness renders a 4-option approval
-menu (approve with default permissions / approve with auto-accepted
-edits for the execution turn / keep planning / discard). Approving
-launches the execution turn in the same session immediately; the
-acceptEdits grant is one-shot and permissions fall back to default when
-that turn ends. The model has no exit tool — only a menu choice can
+`[plan]`, and after every reply the harness renders a 3-option approval
+menu (approve / keep planning / discard). Approving returns the session
+to default mode without auto-executing the plan; the user decides the
+next step (e.g. refine the plan or start `/goal`). A sentinel message
+is injected into history so the model knows approval does not mean
+"execute now". The model has no exit tool — only a menu choice can
 leave plan mode. Menu EOF (non-interactive input) fails closed to
-discard.
+discard; Ctrl+C keeps planning.
 
 ### Added — REPL UX: 正门 / `/` 识别层 / 状态行 (decisions/42)
 

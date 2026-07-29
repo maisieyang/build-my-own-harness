@@ -103,7 +103,9 @@ permission layer. Research the task with read-only tools, ask clarifying
 questions if needed, then converge on ONE concise, reviewable plan (aim
 for a single screen) and present it as plain text. Do not attempt to
 edit files or run commands — an approval menu is shown to the user after
-your reply; execution starts only after they approve the plan."""
+your reply. Approval returns the session to default mode; it does not
+auto-execute the plan. The user decides the next step, such as asking you
+to refine the approved plan or turn it into a /goal condition."""
 
 
 def build_system_prompt(

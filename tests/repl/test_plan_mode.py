@@ -11,12 +11,10 @@ from __future__ import annotations
 
 from openharness.permissions.rules import (
     PermissionRules,
-    accept_edits_preset,
     plan_mode_preset,
 )
 from openharness.repl import (
     BUILTIN_SLASH_COMMANDS,
-    PLAN_APPROVAL_MESSAGE,
     PLAN_MENU_TEXT,
     ChatMode,
     PlanMenuChoice,
@@ -34,21 +32,20 @@ class TestSlashMenuHasPlan:
 
 class TestParsePlanMenuChoice:
     def test_valid_choices(self) -> None:
-        assert parse_plan_menu_choice("1") is PlanMenuChoice.APPROVE_MANUAL
-        assert parse_plan_menu_choice("2") is PlanMenuChoice.APPROVE_ACCEPT_EDITS
-        assert parse_plan_menu_choice("3") is PlanMenuChoice.KEEP_PLANNING
-        assert parse_plan_menu_choice("4") is PlanMenuChoice.DISCARD
+        assert parse_plan_menu_choice("1") is PlanMenuChoice.APPROVE
+        assert parse_plan_menu_choice("2") is PlanMenuChoice.KEEP_PLANNING
+        assert parse_plan_menu_choice("3") is PlanMenuChoice.DISCARD
 
     def test_whitespace_tolerated(self) -> None:
-        assert parse_plan_menu_choice("  2  ") is PlanMenuChoice.APPROVE_ACCEPT_EDITS
+        assert parse_plan_menu_choice("  2  ") is PlanMenuChoice.KEEP_PLANNING
 
     def test_invalid_returns_none(self) -> None:
         assert parse_plan_menu_choice("") is None
         assert parse_plan_menu_choice("yes") is None
-        assert parse_plan_menu_choice("5") is None
+        assert parse_plan_menu_choice("4") is None
 
-    def test_menu_text_lists_all_four(self) -> None:
-        for key in ("1", "2", "3", "4"):
+    def test_menu_text_lists_all_three(self) -> None:
+        for key in ("1", "2", "3"):
             assert key in PLAN_MENU_TEXT
 
 
@@ -61,21 +58,14 @@ class TestOverlayPlanPermissions:
         # 既有规则保留 — overlay 是叠加不是替换.
         assert "Bash(git status:*)" in result.allow
 
-    def test_accept_edits_grant_appends_allow_preset(self) -> None:
+    def test_approve_grant_is_identity(self) -> None:
         base = PermissionRules()
-        result = overlay_plan_permissions(
-            base, mode=ChatMode.DEFAULT, grant=PlanMenuChoice.APPROVE_ACCEPT_EDITS
-        )
-        for rule in accept_edits_preset():
-            assert rule in result.allow
-        assert result.deny == ()
+        result = overlay_plan_permissions(base, mode=ChatMode.DEFAULT, grant=PlanMenuChoice.APPROVE)
+        assert result is base
 
     def test_manual_grant_is_identity(self) -> None:
-        # [1] 手动批 = 落 DEFAULT 原样姿态,无 overlay.
         base = PermissionRules(allow=("Read(*)",))
-        result = overlay_plan_permissions(
-            base, mode=ChatMode.DEFAULT, grant=PlanMenuChoice.APPROVE_MANUAL
-        )
+        result = overlay_plan_permissions(base, mode=ChatMode.DEFAULT, grant=PlanMenuChoice.APPROVE)
         assert result is base
 
     def test_default_no_grant_is_identity(self) -> None:
@@ -98,6 +88,6 @@ class TestStatusBarMode:
 
 
 class TestApprovalMessage:
-    def test_canned_message_mentions_the_plan(self) -> None:
-        # 批准消息触发执行 turn — 它要指回模型自己呈交的计划.
-        assert "plan" in PLAN_APPROVAL_MESSAGE.lower()
+    def test_menu_does_not_promise_auto_execution(self) -> None:
+        assert "execute" not in PLAN_MENU_TEXT.lower()
+        assert "return to default mode" in PLAN_MENU_TEXT

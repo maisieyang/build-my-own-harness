@@ -1504,9 +1504,9 @@ oh chat — multi-turn REPL commands:
   /compact           force full LLM-based compaction of the conversation
                      (Phase 11 D29.6) — replaces history with a 9-slot
                      summary regardless of token threshold
-  /plan              enter plan mode (D47) — edits/commands are clamped
+  /plan [prompt]     enter plan mode (D47) — edits/commands are clamped
                      to read-only exploration; an approval menu appears
-                     after each reply (approve = execute in this session)
+                     after each reply (approve = return to default mode)
   /goal <condition>  set a session goal (D48) — an independent checker
                      evaluates the conversation after each reply and
                      auto-continues turns until the condition holds;
@@ -1794,10 +1794,6 @@ async def _run_chat(
         # D47 plan-mode state machine — REPL-memory only (D47.7: not
         # persisted; a dead session falls back to the ground state).
         chat_mode = _repl.ChatMode.DEFAULT
-        # One-shot acceptEdits grant for the approval-launched execution
-        # turn. Consumed at context build (never merely after the turn) so
-        # an error path that aborts the turn cannot leak it forward (D47.4).
-        execution_grant: _repl.PlanMenuChoice | None = None
 
         # D48 session goal — 续跑式条件循环. ``goal_auto_turns`` counts
         # consecutive auto-continued turns toward the settings backstop cap;
@@ -1931,16 +1927,19 @@ async def _run_chat(
             # Leaving plan mode is menu-only (harness-owned gate, D47.2) —
             # there is deliberately no /default escape command and no
             # model-callable exit tool.
-            if user_input == "/plan":
+            if user_input == "/plan" or user_input.startswith("/plan "):
                 if chat_mode is _repl.ChatMode.PLAN:
                     typer.echo("(already in plan mode)")
-                else:
-                    chat_mode = _repl.ChatMode.PLAN
-                    typer.echo(
-                        "(plan mode: edits and shell commands are blocked; an "
-                        "approval menu appears after each reply)"
-                    )
-                continue
+                    continue
+                chat_mode = _repl.ChatMode.PLAN
+                typer.echo(
+                    "(plan mode: edits and shell commands are blocked; an "
+                    "approval menu appears after each reply)"
+                )
+                plan_prompt = user_input.removeprefix("/plan").strip()
+                if not plan_prompt:
+                    continue
+                user_input = plan_prompt
             # D48 — session goal command surface (set / show / clear).
             if user_input == "/goal" or user_input.startswith("/goal "):
                 goal_cmd = _repl.parse_goal_command(user_input)
@@ -2165,14 +2164,11 @@ async def _run_chat(
                     web_enabled=effective_web,
                 )
 
-            # D47 — turn-scoped permission overlay + posture prompt. The
-            # acceptEdits grant is consumed here (one-shot swap) so it is
-            # spent whether or not the turn survives. ``overlay`` returns the
-            # base object untouched for the ground state, so the identity
-            # check keeps the pre-plan path byte-for-byte.
-            turn_grant, execution_grant = execution_grant, None
+            # D47 — turn-scoped permission overlay + posture prompt. Plan
+            # mode clamps mutating tools; approval only exits that clamp and
+            # never arms a hidden execution turn or permission grant.
             turn_permissions = _repl.overlay_plan_permissions(
-                effective_settings.permissions, mode=chat_mode, grant=turn_grant
+                effective_settings.permissions, mode=chat_mode, grant=None
             )
             turn_settings = (
                 effective_settings
@@ -2265,7 +2261,7 @@ async def _run_chat(
 
             # D47.2/D47.5 — approval menu after EVERY assistant turn while in
             # plan mode (v1 declared simplification: no plan-presented
-            # detection; option 3 covers "model is still exploring"). This is
+            # detection; option 2 covers "model is still exploring"). This is
             # the harness-owned gate: the model has no exit tool, and natural
             # language cannot flip the mode — only a menu choice can.
             if chat_mode is _repl.ChatMode.PLAN:
@@ -2292,23 +2288,16 @@ async def _run_chat(
                     if parsed is not None:
                         choice = parsed
                         break
-                    typer.echo("(enter 1-4)")
-                if choice in (
-                    _repl.PlanMenuChoice.APPROVE_MANUAL,
-                    _repl.PlanMenuChoice.APPROVE_ACCEPT_EDITS,
-                ):
-                    # 批准即执行 (D47.3): flip to ground state, arm the
-                    # one-shot grant, and seed the canned approval message so
-                    # the execution turn launches without further input.
+                    typer.echo("(enter 1-3)")
+                if choice is _repl.PlanMenuChoice.APPROVE:
+                    # Approval only exits the plan clamp and returns to the
+                    # default conversational ground. Do not auto-execute or
+                    # synthesize a goal: the user needs this interruption
+                    # point to turn the plan into an explicit "/goal <target
+                    # + verification>" before starting D48's loop.
                     chat_mode = _repl.ChatMode.DEFAULT
-                    execution_grant = choice
-                    pending_input = _repl.PLAN_APPROVAL_MESSAGE
-                    landing = (
-                        "auto-accepted edits for this turn"
-                        if choice is _repl.PlanMenuChoice.APPROVE_ACCEPT_EDITS
-                        else "default permissions"
-                    )
-                    typer.echo(f"(plan approved — executing now with {landing})")
+                    history.append(_repl.build_plan_approval_sentinel())
+                    typer.echo("(plan approved — back to default mode)")
                 elif choice is _repl.PlanMenuChoice.DISCARD:
                     chat_mode = _repl.ChatMode.DEFAULT
                     typer.echo("(plan discarded — back to default mode)")
@@ -2316,8 +2305,8 @@ async def _run_chat(
 
             # D48 — goal judge after every DEFAULT-state turn. Trigger is
             # mutually exclusive with the plan menu (chat_mode gate) and with
-            # a just-queued turn (pending_input gate: a plan-approval launch
-            # must run before the judge sees it). Fail-closed: any judge
+            # a just-queued turn (pending_input gate: a goal kickoff or
+            # continuation must run before the judge sees it). Fail-closed: any judge
             # failure reads as not-met and consumes an auto-turn — the cap +
             # the visible reason keep a broken judge from spinning silently.
             if goal is not None and chat_mode is _repl.ChatMode.DEFAULT and pending_input is None:

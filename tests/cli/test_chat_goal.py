@@ -237,7 +237,7 @@ class TestGoalCommandSurface:
         judge_calls = _install_judge(monkeypatch, [(True, "ok")])
         # plan 态下设 goal:kickoff turn 在钳制内跑,turn 结束走审批菜单
         # ([3] 继续规划),判官不被调(D48.1 触发互斥).
-        _stub_input_sequence(monkeypatch, ["/plan", "/goal t", "3", "/exit"])
+        _stub_input_sequence(monkeypatch, ["/plan", "/goal t", "2", "/exit"])
 
         runner = CliRunner()
         result = runner.invoke(cli_module.app, ["chat"])

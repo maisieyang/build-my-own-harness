@@ -1,4 +1,4 @@
-# Decision 47 — plan-mode v1（REPL 三态：默认 / plan / 执行落地）
+# Decision 47 — plan-mode v1（REPL 双态：默认 / plan）
 
 > Date: 2026-07-24 · 上游: [docs/ideas/mode-spectrum-plan-mode-design.md](../docs/ideas/mode-spectrum-plan-mode-design.md)
 > 配套读物:
@@ -17,8 +17,7 @@ goal/autopilot 执行模式）均已建成。依赖全部就位（permissions �
 
 - `plan_mode_preset()` deny 预设（Edit/Write/Bash）
 - REPL mode 状态机（default | plan）+ `/plan` 命令 + 状态栏标识
-- plan 态 turn 结束审批菜单（四选项）+ 批准落地模式 + canned 消息自动发起执行
-- 执行 turn 结束回落 DEFAULT
+- plan 态 turn 结束审批菜单（三选项）+ 批准回 DEFAULT + sentinel 注入历史（不自动执行）
 - planning prompt 姿态注入
 
 **OUT（推迟 / 不做）**:
@@ -46,9 +45,9 @@ goal/autopilot 执行模式）均已建成。依赖全部就位（permissions �
 
 ### D47.2 — 审批 = harness 渲染菜单，模型无退出工具
 
-**Chosen**: plan 态每个 assistant turn 结束渲染四选项菜单：[1] 批准·手动批 / [2] 批准·acceptEdits / [3] 继续规划 / [4] 放弃回默认。
+**Chosen**: plan 态每个 assistant turn 结束渲染三选项菜单：[1] 批准回 DEFAULT / [2] 继续规划 / [3] 放弃回默认。
 
-**Why**: follow CC（ExitPlanMode 已移除，审批是 harness 直接接管的 UI 硬闸）；模型连提议退出的工具资格都没有。
+**Why**: follow CC（ExitPlanMode 已移除，审批是 harness 直接接管的 UI 硬闸）；模型连提议退出的工具资格都没有。原 v1 设计中更复杂的批准落地模式在实践中简化为三选项——额外的权限提升分支与 D48 goal 循环职责重叠，移除后用户通过 `/goal` 显式启动执行更安全可控。
 
 **Alternatives**: `/execute` 用户命令（对话中被否：与 CC 对标形状不符）/ ExitPlanMode 类工具（CC 已弃），选菜单。
 
@@ -56,31 +55,25 @@ goal/autopilot 执行模式）均已建成。依赖全部就位（permissions �
 
 **Anti-scope**: 明确**不**注册任何模型可调的退出/审批工具——审批权永远在 harness/人。
 
-### D47.3 — 批准选项即落地模式，批准即执行
+### D47.3 — 批准 = 回 DEFAULT + sentinel 注入，不自动执行
 
-**Chosen**: [1] 落 DEFAULT（逐个批边改）；[2] 落 `accept_edits_preset()`；批准即注入 canned 批准消息，自动发起执行 turn。
+**Chosen**: [1] 回 DEFAULT，注入 `[plan-status] approved:` sentinel 到历史；不自动发起执行 turn，等用户下一条消息决定下一步（refine / `/goal` / 其他）。
 
-**Why**: follow CC"选项即落地模式"；只翻权限干等下一条输入是半吊子批准。
+**Why**: 批准 ≠ 执行。用户需要审批后的中断点来将计划转化为显式 `/goal <target + verification>` 再启动 D48 循环。自动执行跳过这一审查环节，与 goal mode 的设计意图冲突。
 
-**Alternatives**: 批准后等用户手动开口（多一步无信息量的仪式），选自动发起。
-
-**Reversibility**: `easy`。
-
-### D47.4 — 执行 turn 结束回落 DEFAULT
-
-**Chosen**: 执行 turn 结束即撤 acceptEdits、回 DEFAULT 地面。
-
-**Why**: 批准的授权范围 = 这份计划；授权不跨事延伸，防 acceptEdits 静默残留。
-
-**Alternatives**: 停留 acceptEdits 到 session 结束（CC auto 模式类似，但违背授权语义），选回落。
+**Alternatives**: 批准即自动发起执行 turn（原 v1 设计，实践中发现与 D48 职责重叠且跳过用户审查），选不自动执行。
 
 **Reversibility**: `easy`。
+
+### D47.4 — （已合并入 D47.3）
+
+原 v1 设计的一键执行+回落机制已随三选项简化一并移除。approve 仅回 DEFAULT 地面，无临时权限提升。
 
 ### D47.5 — v1 每 turn 结束弹菜单（声明简化）
 
 **Chosen**: 不识别"计划是否已呈交"，plan 态每个 assistant turn 结束都弹菜单。
 
-**Why**: 简单可预测；模型还在追问/探索时人选 [3] 继续规划即兜住。
+**Why**: 简单可预测；模型还在追问/探索时人选 [2] 继续规划即兜住。
 
 **Alternatives**: 结构化信号识别计划完成（v2）/ 模型自报完成（自评不可信），选每 turn 弹。
 
@@ -107,7 +100,7 @@ goal/autopilot 执行模式）均已建成。依赖全部就位（permissions �
 ## 四、Acceptance（phase 级，跨 task）
 
 - [x] regression: 全仓 `uv run pytest -q` 绿（2717 passed）+ `uv run mypy --strict src/` + `uv run ruff check && uv run ruff format --check`（2026-07-24）
-- [x] dogfood: `oh chat` 亲手跑一遍 /plan → 只读探索（Edit 被拒可见）→ 菜单批准 → 执行 → 回落 DEFAULT（作者亲手跑过，2026-07-24）
+- [x] dogfood: `oh chat` 亲手跑一遍 /plan → 只读探索（Edit 被拒可见）→ 菜单批准 → 回落 DEFAULT 且不偷跑执行（作者亲手跑过，2026-07-24；2026-07-29 行为收窄）
 - [ ] 文档同步：CHANGELOG 一行（已加）；learnings/retro 留待 debrief
 - [ ] §六 wiring audit verdict 实测对照回填
 
@@ -133,11 +126,11 @@ goal/autopilot 执行模式）均已建成。依赖全部就位（permissions �
 
 ### T3 — 审批菜单 + 状态转移
 
-**Description**: plan 态 assistant turn 结束渲染四选项菜单（复用 D44 交互 prompt 机制）；选项分发按 D47.2-D47.5。
+**Description**: plan 态 assistant turn 结束渲染三选项菜单（复用 D44 交互 prompt 机制）；选项分发按 D47.2-D47.5。
 
 **Acceptance**:
-- [ ] 四选项渲染且各自转移正确：[1]/[2] 撤 deny、落对应模式、注入 canned 消息自动发起执行 turn；[3] 留 plan；[4] 回默认
-- [ ] 执行 turn 结束回落 DEFAULT（含 acceptEdits 撤销）
+- [ ] 三选项渲染且各自转移正确：[1] 撤 deny、回 DEFAULT、注入 approved sentinel 但不启动执行；[2] 留 plan；[3] 回默认
+- [ ] 批准后的下一 turn 必须来自用户新输入，不由 harness 合成
 - [ ] 非 TTY 环境 plan 态行为 fail-closed（不挂死等菜单）
 
 ### T4 — planning prompt 姿态注入
