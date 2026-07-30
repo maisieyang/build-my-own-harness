@@ -11,194 +11,332 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 ![Type checked: mypy](https://img.shields.io/badge/type%20checked-mypy%20strict-1f5082)
 
-> **An LLM agent harness rebuilt from scratch in Python, to a production bar —
-> every subsystem owned by hand, every trade-off on record.**
-> *What I cannot create, I do not understand.*
+> **A local-first LLM agent harness rebuilt from scratch in Python.**
+>
+> It turns an OpenAI-compatible model into a coding agent with typed tool
+> execution, explicit approval boundaries, resumable long-context state,
+> independent completion judges, and bounded unattended repair loops.
 
----
+The model supplies intelligence. OpenHarness owns the control plane around it:
+what the model may do, where actions run, what survives the context window, how
+work resumes, and who decides that a task is actually complete.
 
-## What is a harness?
+This is an independent learning implementation built by one developer with
+coding agents. It is not a wrapper around another agent CLI, and it is not a
+copy of the upstream OpenHarness implementation.
 
-An LLM can only *talk*: you give it a prompt, it returns text. To make it
-**act**, **remember**, and **stay safe**, you have to wrap a layer around it.
-That layer is the harness.
+## Evidence
 
-At the bottom of this entire repository sits one loop:
+| Signal | Current evidence |
+|---|---|
+| SWE-bench Lite | **170/300 resolved (56.7%)** with qwen3.7-max, thinking off, evaluated with the self-hosted official harness |
+| Test suite | **2,783 tests**, **95.29% current coverage**, enforced by a **>=95% gate** |
+| Static quality | Ruff lint/format and `mypy --strict` across `src/` |
+| Compatibility | CI on Python 3.10 and 3.11 |
+| Design trace | Boundary decisions, capability plans, dogfood retrospectives, eval artifacts, and benchmark records are committed beside the code |
 
-```
+The benchmark was driven through the shipped `oh` CLI, not a private
+benchmark-only agent. The complete campaign record is in
+[`benchmarks/swebench/RUNLOG.md`](./benchmarks/swebench/RUNLOG.md), with the
+failure analysis in
+[`benchmarks/swebench/TAXONOMY.md`](./benchmarks/swebench/TAXONOMY.md) and raw
+artifacts under [`benchmarks/swebench/out/`](./benchmarks/swebench/out).
+
+## System model
+
+At the bottom of the repository is one model-driven tool loop:
+
+```python
 while True:
-    stream = llm.stream(messages)          # streaming API call
-    parse tool_use blocks                  # what does the model want to do?
-    for each tool_use:
-        check permission                   # gate it
-        execute tool                       # do it
-        append tool_result to messages     # feed it back
-    if stop_reason == "end_turn": break    # the model says it's done
+    stream = llm.stream(messages)
+    tool_calls = parse_tool_calls(stream)
+    for call in tool_calls:
+        decision = permission_checker.evaluate(call)
+        result = execute(call) if decision.allowed else deny(call)
+        messages.append(result)
+    if stop_reason == "end_turn":
+        break
 ```
 
-That is `engine/run_query` — the heart. **The LLM itself is the orchestrator;
-the loop just turns its words into actions and feeds the results back.**
-Everything else in this repo exists because running that loop for real,
-unattended, on real codebases, exposes a chain of problems — and each
-subsystem is the fix for one of them.
+Everything else exists because running this loop on a real repository exposes
+control problems that the model cannot solve by itself.
 
-## The problem chain (what's inside, and why)
+```mermaid
+flowchart LR
+    U["User, script, or queue"] --> C["REPL and headless CLI"]
+    C --> E["Agent engine"]
+    E <--> M["OpenAI-compatible model"]
+    E --> P["Permissions and hooks"]
+    P --> X["Host, Docker, or gVisor"]
+    E <--> S["Compaction, snapshots, and memory"]
+    C --> V["Command gate or independent LLM judge"]
+    V -->|"repair feedback"| E
+    C --> O["Journals, evals, and SWE-bench"]
+```
 
-Each ring below exists because the previous ring exposed it.
+The major ownership boundaries are:
 
-**1. The loop runs — but the model must not do whatever it wants.**
-Tool calls pass a permission gate *before* dispatch: hardcoded sensitive-path
-denies, glob deny rules, mode overrides (`--auto` / `--dry-run`), and an
-unconditional red line for irreversible git actions. A middleware chain of
-lifecycle **hooks** (`hooks/`) can deny, modify, or observe every step — it is
-also the seam that compaction, mode bundles, and plugins hang off.
-→ `permissions/` · `hooks/`
+1. **Runtime and protocol.** OpenAI-compatible streaming, Pydantic v2 wire
+   types, tool-call parsing, retries, event rendering, and structured logs.
+2. **Authorization and containment.** Allow/ask/deny rules, sensitive-path and
+   irreversible-git red lines, lifecycle hooks, headless fail-closed behavior,
+   and optional Docker/gVisor execution.
+3. **Long-running state.** Tool-result truncation, reactive context recovery,
+   explicit compaction, project memory, snapshots, and session resume.
+4. **Capability extension.** Skills, slash commands, mode bundles, stdio MCP
+   servers, native plugins, partial Claude Code plugin discovery, and
+   depth-bounded `SpawnAgent` delegation.
+5. **External completion.** Deterministic command gates, injection-guarded
+   semantic judges, repair loops, goal decomposition, run journals, worktree
+   isolation, and a persistent autopilot queue.
+6. **Evaluation.** Capability-level evals, programmatic scorers, LLM-judge
+   meta-evaluation, replay gates, and a subprocess-driven SWE-bench adapter.
 
-**2. Sessions get long — and the context window overflows.**
-Per-tool-result truncation plus reactive `PromptTooLong` recovery keep the
-loop alive past the window.
-→ `compaction/` · `services/`
+## Three execution loops
 
-**3. Sessions end — and the model forgets everything.**
-A Claude-Code-style auto-memory: the LLM itself decides what is worth
-remembering, persists it as Markdown per project, and gets it back next
-session. Gated by a multi-turn eval, inspectable via `oh memory`.
-→ `memory/` · `markdown_store/`
+OpenHarness exposes three distinct autonomy loops. They share the same agent
+engine, but deliberately use different context and stopping semantics.
 
-**4. Capability should grow without touching the core.**
-Four extension mechanisms, all feeding the same tool registry and hook
-catalog: **skills** (lazy-loaded Markdown expertise), **slash commands**
-(user-authored `/<name>` prompts), **plugins** (third-party Python via entry
-points or dropped `.py` files, Claude-Code plugin format included), and
-**MCP** (Model Context Protocol servers over stdio). **Mode bundles** compose
-prompt + tool whitelist + denies + hooks into one switchable mode.
-→ `skills/` · `commands/` · `plugins/` · `mcp/` · `bundles/`
+| Surface | Context | Completion gate | Intended use |
+|---|---|---|---|
+| `oh` / `oh chat` + `/goal` | One continuing conversation | Tool-disabled LLM judge after every reply | Interactive implementation with preserved context |
+| `oh ask -p` + `--max-iter` | Fresh attempt plus structured repair feedback | Command exit code or semantic judge | Scripts, CI, and bounded headless work |
+| `oh autopilot` | Persistent prioritized queue | Required command verification | Sequential unattended jobs |
 
-**5. One agent's context isn't enough.**
-`SpawnAgent` makes the agent loop itself a tool — recursive delegation with a
-depth limit and immutable context inheritance.
-→ `tools/spawn_agent.py`
+These controls are intentionally separate:
 
-**6. Executing model-chosen commands can wreck the host.**
-Opt-in process-level isolation: Docker via `--sandbox`, gVisor via
-`--sandbox-runtime runsc`, behind an `ExecutionEnvironment` protocol so the
-engine never knows which substrate it's on.
-→ `execution/`
+- `--auto` changes permission posture by skipping confirmations. It is not a
+  completion loop.
+- `/goal` continues the current interactive conversation.
+- `--goal-condition` judges a headless attempt semantically.
+- `--verify` uses deterministic command exit codes.
+- `autopilot` selects a queued card and runs the headless repair loop.
 
-**7. And still — a human sits in the chair for every iteration.**
-The interactive CLI leaves three chairs occupied by a person: *planning*,
-*verification*, *gatekeeping*. The **loop-runtime** layer hands all three to
-the harness:
+### Plan, approve, then execute
+
+Bare `oh` opens the conversation-first REPL. The main interactive path is:
+
+```text
+>>> /plan Review the implementation and propose a verification plan
+
+plan mode -- approve this plan?
+  [1] yes, approve -- return to default mode
+  [2] no, keep planning
+  [3] no, discard plan mode (back to default)
+plan> 1
+
+>>> /goal Implement the approved plan; run `uv run pytest -q`; stop after 10 turns
+```
+
+`/plan` is a permission-layer clamp, not a prompt convention: `Edit`, `Write`,
+and `Bash` are denied. The model has no tool that can exit plan mode. Approval
+only returns the session to default mode; it does not auto-execute the plan or
+grant a hidden permission preset.
+
+`/goal <condition>` starts work immediately. After every assistant reply, the
+harness gives the accumulated transcript to a separate, tool-disabled LLM call:
+
+```text
+working model turn
+        |
+        v
+untrusted transcript --> independent judge --> pass --> persist "met" and stop
+                                   |
+                                   +--> fail --> append checker feedback
+                                                 and continue the same session
+```
+
+Judge errors, malformed output, and invalid scores fail closed. The default
+backstop is 25 consecutive auto-turns; put the real stopping condition in the
+goal itself. Goals survive `oh chat --resume`.
+
+The implementation lives in
+[`src/openharness/verification/semantic_gate.py`](./src/openharness/verification/semantic_gate.py),
+with the session state machine in
+[`src/openharness/repl.py`](./src/openharness/repl.py) and
+[`src/openharness/cli.py`](./src/openharness/cli.py).
+
+### Headless repair loop
+
+Use a deterministic command gate when completion has an executable oracle:
 
 ```bash
-oh ask -p "fix the failing tests; do not touch assertions" \
-  --output-format json --verify "pytest -q" --max-iter 5 --isolate
+uv run oh ask -p "fix the failing tests; do not weaken assertions" \
+  --output-format json \
+  --verify "uv run pytest -q" \
+  --max-iter 5 \
+  --isolate
 ```
 
-Headless print mode (`-p`, JSON / stream-JSON, exit codes) is the atom.
-A **verification gate** decides done-ness deterministically — a command's
-exit code (`--verify`) or an independent LLM judge for semantic criteria
-(`--goal-condition`); the model's self-assessment is never the gate. An outer
-**repair loop** re-feeds the gate's feedback into a *fresh* context each round
-until the gate passes or the iteration cap hits. Around it: declarative
-headless permission policy (fail-closed, no TTY prompts), goal
-self-decomposition (`--decompose`), a cron-style intake queue
-(`oh autopilot`), git-worktree isolation (`--isolate`), and an append-only
-per-run journal that makes runs resumable (`--resume-run`) and inspectable
-(`oh run show`). You write the goal and the acceptance check once — then
-walk away.
-→ `verification/` · `services/` (worktree · run journal · run session) · `cli.py`
+Use an independent semantic judge for criteria that cannot be reduced to an
+exit code:
 
-Underneath it all: an OpenAI-compatible streaming client, Pydantic v2 wire
-types, `OPENHARNESS_*` config, and structured JSON logs with
-`run_id` / `turn_id` / `agent_depth` — a full trace reconstructable with `jq`.
-Provider-agnostic: the same loop runs Qwen, DeepSeek, or any
-OpenAI-compatible endpoint.
-→ `api/` · `protocols/` · `config/` · `prompts/` · `observability/`
+```bash
+uv run oh ask -p "bring the release documentation up to date" \
+  --output-format json \
+  --goal-condition "CHANGELOG and release notes match shipped behavior" \
+  --max-iter 4
+```
+
+Each failed attempt becomes structured feedback for a fresh context.
+`--decompose` first splits a goal into ordered sub-goals. `--isolate` executes
+inside a Git worktree. Append-only run journals support `oh run show` and
+`--resume-run`.
+
+### Autopilot queue
+
+Autopilot is a persistent, deduplicated, priority-scored intake queue. Every
+card requires at least one deterministic verification command.
+
+```bash
+uv run oh autopilot enqueue \
+  --goal "fix the login regression" \
+  --verify "uv run pytest -q" \
+  --max-iter 3 \
+  --source-ref "manual:login-regression" \
+  --label bug
+
+uv run oh autopilot list
+uv run oh autopilot run-next
+```
+
+`run-next` atomically claims the highest-priority queued card and records the
+repair-loop result as completed or failed.
+
+## What the benchmark changed
+
+The SWE-bench campaign was also a harness evaluation. Running all 300 Lite
+instances surfaced five concrete control-plane defects or gaps:
+
+- version metadata drifted from the package version;
+- child processes silently resolved a different configuration source;
+- the error path recommended a `--max-turns` option that did not exist;
+- retry policy did not cover mid-stream transport interruption;
+- provider-specific request parameters had no generic passthrough path.
+
+The fixes were made in the production path and then reused by the adapter. A
+provider changed the model's default thinking behavior during the campaign;
+the response was a generic `OPENHARNESS_EXTRA_BODY` passthrough rather than a
+Qwen-specific branch.
+
+The strongest behavioral result was not the score: resolved and unresolved
+completed runs had very similar turn-count distributions. A model can work for
+many turns, produce a plausible patch, and still be wrong. That evidence is why
+completion in OpenHarness belongs to an external oracle, never to the working
+model's self-report.
 
 ## Quick start
 
-Requires Python ≥ 3.10 and [uv](https://docs.astral.sh/uv/).
+Requires Python >=3.10, [uv](https://docs.astral.sh/uv/), and an
+OpenAI-compatible Chat Completions endpoint.
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh    # 1. install uv (once)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
 git clone https://github.com/maisieyang/build-my-own-harness.git
-cd build-my-own-harness && uv sync                  # 2. clone + sync
+cd build-my-own-harness
+uv sync
 
-cp .env.example .env && $EDITOR .env                # 3. set OPENHARNESS_API_KEY + BASE_URL
-                                                    #    (any OpenAI-compatible endpoint)
-uv run oh                                           # 4. enter the REPL
-                                                    #    (/ pops the command menu)
-uv run oh ask "list 5 git commands"                 #    or one-shot ask
+cp .env.example .env
+$EDITOR .env
+
+uv run oh
 ```
 
-All configuration is `OPENHARNESS_*` environment variables (via
-`pydantic-settings`); see [`.env.example`](./.env.example). Full command
-surface: `oh --help` (`ask` / `chat` / `tools` / `config` / `hooks` /
-`memory` / `plugins` / `snapshot` / `eval` / `autopilot` / `run`).
+Set `OPENHARNESS_API_KEY`, `OPENHARNESS_BASE_URL`, and
+`OPENHARNESS_MODEL` in `.env`. The defaults target Qwen through DashScope, but
+the loop contains no provider-specific branches.
+
+Type `/` in the REPL to open the combined menu of built-ins, user commands, and
+skills. An initial prompt can be supplied directly:
+
+```bash
+uv run oh "review this repository and identify the highest-risk gap"
+```
+
+## Command map
+
+| Command | Purpose |
+|---|---|
+| `oh` / `oh chat` | Interactive multi-turn session |
+| `oh ask` | One-shot or headless execution |
+| `oh tools` | Inspect registered tool schemas and metadata |
+| `oh config` | Show effective settings or edit the user `.env` |
+| `oh hooks` | Inspect framework and plugin hooks |
+| `oh memory` | Inspect the per-project memory store |
+| `oh plugins` | Inspect installed native and Claude Code-format plugins |
+| `oh snapshot` | List, show, and garbage-collect conversation snapshots |
+| `oh eval` | Run capability-anchored prompt evals |
+| `oh autopilot` | Enqueue, list, and run queued repair-loop goals |
+| `oh bench swebench` | Fetch and run SWE-bench Lite cases |
+| `oh run show` | Reconstruct a journal-backed headless run |
+
+Run `uv run oh --help` or `uv run oh <command> --help` for the authoritative
+option surface. All configuration uses the `OPENHARNESS_*` namespace; see
+[`.env.example`](./.env.example).
 
 ## Quality contract
 
-- `mypy --strict` across all of `src/` · `ruff` lint + format clean ·
-  **≥95% coverage gate** on the stable core
-- CI runs lint + type-check + the full suite on **Python 3.10 and 3.11**
-  ([`ci.yml`](./.github/workflows/ci.yml))
-- Tests pass with **zero external dependencies**; integration / sandbox tests
-  are gated behind env vars / Docker / gVisor and skip cleanly when absent
-- TDD as discipline: tests are written first and **seen red** before the code
-  that turns them green — a green that was never red is no green at all
-- Differentiated errors, no raw Python tracebacks in default mode
+```bash
+uv run pytest -q
+uv run mypy --strict src/
+uv run ruff check
+uv run ruff format --check
+```
 
-## How it was built
+- The default suite requires no live model or external service.
+- Integration, Docker, gVisor, and live-model tests are explicitly gated.
+- Coverage must remain at or above 95%.
+- CI runs lint, format, strict typing, and tests on Python 3.10 and 3.11.
+- Dogfood failures become regression tests and, when the boundary changes,
+  append-only decision amendments.
 
-Solo developer + Claude Code. The human stays at the contract layer — scope,
-trade-offs, acceptance criteria; the agent drives the implementation. Built
-from scratch and still iterating.
+## Deliberate boundaries
 
-The part you can't get from reading the code: **three append-only trails**
-preserve the complete design context of every module, written *around* the
-code, never after the fact —
+- The provider layer targets OpenAI-compatible Chat Completions. There is no
+  native Anthropic Messages adapter.
+- Claude Code plugin compatibility currently discovers plugin metadata and
+  `SKILL.md` trees. Claude Code `.mcp.json` and declarative agents are not
+  imported.
+- MCP transport is stdio only.
+- Docker/gVisor isolation is optional; host execution is the default.
+- Autopilot is a local sequential queue, not a distributed scheduler or GitHub
+  pull-request service.
+- Semantic judges are probabilistic and therefore fail closed behind explicit
+  turn/iteration caps. Prefer `--verify` whenever an executable oracle exists.
 
-| Trail | What | When written |
+## Design record
+
+The human owns scope, trade-offs, and acceptance criteria; coding agents drive
+implementation and verification inside those contracts.
+
+Three append-only trails preserve the reasoning around the code:
+
+| Trail | What it records | When |
 |---|---|---|
-| [`decisions/`](./decisions) | Boundary docs — what's in scope, what's out, which invariant holds | **before** each phase |
-| [`tasks/`](./tasks) | Capability-level plans (never sub-task granularity) | **before** each phase |
-| [`learnings/`](./learnings) | Retrospectives — which abstractions held, what to predict next | **after** each phase ships |
+| [`decisions/`](./decisions) | Boundaries, invariants, alternatives, and anti-scope | Before implementation |
+| [`tasks/`](./tasks) | Capability-level plans and acceptance checks | Before implementation |
+| [`learnings/`](./learnings) | Dogfood evidence, failures, and predictions | After shipping |
 
-Any design decision in the project can be reconstructed by reading its
-triplet in order: boundary → plan → retro. Start with
-[`tasks/README.md`](./tasks/README.md) for the phase index, or
+Start with [`tasks/README.md`](./tasks/README.md) for the phase index,
 [`learnings/openharness-first-principles.md`](./learnings/openharness-first-principles.md)
-for the compass this README's narrative comes from.
-[`REFERENCE.md`](./REFERENCE.md) is the frozen cognition map reverse-engineered
-from the upstream project — the anti-toy baseline everything was built against.
+for the architectural thesis, and [`REFERENCE.md`](./REFERENCE.md) for the
+frozen upstream cognition map used at the beginning of the project.
 
-## The bigger picture
+## Related work
 
-This harness is the substrate layer. The same build-to-understand move runs
-through three repos:
-
-- **harness** → **build-my-own-harness** (you are here) — the production-bar
-  agent runtime.
-- **plugin** → [**finance-skills**](https://github.com/maisieyang/finance-skills)
-  — the same move run into a vertical: study Anthropic's open-source
-  `financial-services` skills, then build
-  [`mybank-credit-risk`](https://github.com/maisieyang/finance-skills/tree/main/mybank-credit-risk)
-  from scratch. It runs *on* this harness.
-- **method** → [**my-skills**](https://github.com/maisieyang/my-skills) — the
-  working method itself, encoded as reusable skills (forked from agent-skills;
-  only what the substrate lacks).
+- [finance-skills](https://github.com/maisieyang/finance-skills): vertical
+  workflows that run on this harness.
+- [my-skills](https://github.com/maisieyang/my-skills): reusable skills encoding
+  the development method.
 
 ## Credits
 
-Name and module vocabulary follow
-[**HKUDS/OpenHarness**](https://github.com/HKUDS/OpenHarness) (MIT) — the
-original Python LLM harness. This repo is an **independent, from-scratch
-reimplementation** built as a learning artifact.
-[`REFERENCE.md`](./REFERENCE.md) captures the upstream v0.1.9 spec as a study
-target, not a copy source.
+The name and initial module vocabulary follow
+[HKUDS/OpenHarness](https://github.com/HKUDS/OpenHarness) (MIT). This repository
+is an independent, from-scratch implementation. [`REFERENCE.md`](./REFERENCE.md)
+records the upstream v0.1.9 study target; it is not a copy source.
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+MIT -- see [LICENSE](./LICENSE).
