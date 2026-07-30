@@ -123,7 +123,7 @@ async def render_stream(
     # underlying file's ``isatty()`` is True OR ``force_terminal=True``.
     if console is None:
         console = Console(file=out)
-    use_live = console.is_terminal
+    use_live = console.is_terminal and not console.is_dumb_terminal
 
     saw_text = False
     final: ApiMessageCompleteEvent | None = None
@@ -451,7 +451,10 @@ def _start_live(event: ToolExecutionStartedEvent, console: Console) -> Live:
         refresh_per_second=10,
         transient=True,
     )
-    live.start()
+    # Render the first frame synchronously. Rich 15 defaults to
+    # ``refresh=False`` here, so fast tools may otherwise finish before
+    # the 10 Hz refresh thread ever makes the spinner visible.
+    live.start(refresh=True)
     return live
 
 

@@ -380,7 +380,41 @@ class TestLiveBranch:
             color_system=None,
             width=80,
             legacy_windows=False,
+            _environ={"TERM": "xterm-256color"},
         )
+
+    @pytest.mark.asyncio
+    async def test_dumb_terminal_uses_plain_text_fallback(self) -> None:
+        out = io.StringIO()
+        err = io.StringIO()
+        console = Console(
+            file=out,
+            force_terminal=True,
+            color_system=None,
+            width=80,
+            legacy_windows=False,
+            _environ={"TERM": "dumb"},
+        )
+        events = _async_iter(
+            [
+                ToolExecutionStartedEvent(
+                    tool_use_id="t1",
+                    tool_name="Bash",
+                    tool_input={"command": "pwd"},
+                ),
+                ToolExecutionCompletedEvent(
+                    tool_use_id="t1",
+                    tool_name="Bash",
+                    output="/tmp",
+                    is_error=False,
+                ),
+                _final_event(),
+            ]
+        )
+
+        await render_stream(events, stdout=out, stderr=err, console=console)
+
+        assert out.getvalue() == "[Bash] command='pwd'\n[Bash] → /tmp\n"
 
     @pytest.mark.asyncio
     async def test_success_completion_shows_spinner_then_final_line(self) -> None:
