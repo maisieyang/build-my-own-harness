@@ -26,7 +26,6 @@ relies on:
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Annotated, Any
 
 from pydantic import BaseModel, Field, SecretStr, field_validator
@@ -344,24 +343,6 @@ class WebSettings(BaseModel):
             "on a :class:`WebFetch` call (D29.5). 10k chars of "
             "markdown is roughly 2-3k tokens — comfortable for one "
             "tool result in a multi-turn research workflow."
-        ),
-    )
-
-
-class AutopilotSettings(BaseModel):
-    """Tunables for the L6 intake queue (``oh autopilot``).
-
-    Env-var overrides use the double-underscore convention:
-    ``OPENHARNESS_AUTOPILOT__QUEUE_PATH=/tmp/queue.json`` sets
-    ``settings.autopilot.queue_path``.
-    """
-
-    queue_path: Path = Field(
-        default_factory=lambda: Path.home() / ".openharness" / "autopilot" / "queue.json",
-        description=(
-            "Path to the JSON intake queue file read/written by "
-            "``services/autopilot.py``. Defaults under the user's "
-            "``~/.openharness/`` state dir, parallel to memory/snapshots."
         ),
     )
 
@@ -743,14 +724,6 @@ class Settings(BaseSettings):
             "``OPENHARNESS_WEB__API_KEY`` etc. See :class:`WebSettings`. "
             "User-visible opt-in is also the ``--enable-web`` CLI flag, "
             "OR'd with this setting at startup."
-        ),
-    )
-    autopilot: AutopilotSettings = Field(
-        default_factory=AutopilotSettings,
-        description=(
-            "Nested L6 intake-queue tunables. Env var: "
-            "``OPENHARNESS_AUTOPILOT__QUEUE_PATH``. See "
-            ":class:`AutopilotSettings`."
         ),
     )
 

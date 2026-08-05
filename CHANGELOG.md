@@ -15,6 +15,29 @@ records + framework-level lessons), see
 
 ## [Unreleased]
 
+### Changed — `/goal` owns completion judging (decisions/50)
+
+Moved the independent judge out of the retired verification-gate package and
+gave the controller distinct `met`, `not_met`, and `error` outcomes. Judge
+transport or parse failures now pause automation instead of launching another
+worker turn, and each goal is evaluated only against evidence produced since
+that goal was set. Judge input now uses a JSON data envelope, and long tool
+results preserve both diagnostic head and final-verdict tail. Removed the dead
+headless transcript collector; generic prompts no longer contain
+repository-specific pytest advice. A `NOT_MET` goal now pauses when the worker
+encounters a permission decision that requires human confirmation.
+
+### Removed — parallel headless completion loops (decisions/49)
+
+Retired the fresh-context repair-loop product line: `--verify`,
+`--goal-condition`, `--max-iter`, `--decompose`, `--resume-run`,
+`oh autopilot`, and `oh run`, together with their command gate, repair,
+queue, and journal implementation. `/goal` is now the single completion
+controller. `oh ask -p` remains a one-run headless primitive, while
+`--isolate`, sandbox, worktree, and `RunSession` remain
+completion-neutral execution primitives. The injection-guarded goal judge and
+its evals remain because `/goal` uses them directly.
+
 ### Added — session goal: `/goal` 续跑式条件循环 (decisions/48)
 
 `oh chat` gains `/goal <condition>`: an independent checker (the L3'

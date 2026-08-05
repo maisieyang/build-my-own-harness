@@ -1,5 +1,4 @@
-"""Git worktree management for repair-loop physical isolation — loop-runtime
-Track B T1 (L7).
+"""Git worktree management for isolated execution.
 
 ``create_worktree``/``remove_worktree`` shell out to real ``git worktree``
 commands via ``asyncio.create_subprocess_exec`` (argv form, never a shell).
@@ -107,13 +106,12 @@ async def create_worktree(
 
 
 async def verify_existing_worktree(handle: WorktreeHandle) -> None:
-    """Review fix (Track B T7 ``--resume-run``): confirm a caller-supplied
-    ``WorktreeHandle`` (reconstructed from persisted state, not returned by
-    :func:`create_worktree`) still points at a real, registered git
+    """Confirm that a caller-supplied ``WorktreeHandle`` still points at a
+    real, registered git
     worktree before reusing it -- ``create_worktree``'s own validation is
     bypassed when a handle is supplied directly, so a stale or
     concurrently-``git worktree remove``d path must fail closed here
-    instead of surfacing as an opaque error deep inside the resumed run.
+    instead of surfacing as an opaque error deep inside execution.
     """
     if not handle.path.exists():
         raise WorktreeError(f"worktree path {handle.path} no longer exists")

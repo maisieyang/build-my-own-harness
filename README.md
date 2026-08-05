@@ -11,26 +11,28 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 ![Type checked: mypy](https://img.shields.io/badge/type%20checked-mypy%20strict-1f5082)
 
-> **A local-first LLM agent harness rebuilt from scratch in Python.**
+> **A local-first control plane for coding agents, built from scratch in Python.**
 >
-> It turns an OpenAI-compatible model into a coding agent with typed tool
-> execution, explicit approval boundaries, resumable long-context state,
-> independent completion judges, and bounded unattended repair loops.
+> OpenHarness turns an OpenAI-compatible model into a coding agent, then owns
+> the runtime around it: tools, authorization, execution, context, extension,
+> recovery, and external completion.
 
-The model supplies intelligence. OpenHarness owns the control plane around it:
-what the model may do, where actions run, what survives the context window, how
-work resumes, and who decides that a task is actually complete.
+The model supplies intelligence. The harness manages the consequences: what the
+model may do, where actions run, which evidence survives the context window,
+how domain capabilities are loaded, and who decides that a task is complete.
+The central claim of this project is that reliable coding agents are built as
+much from these control-plane decisions as from the model itself.
 
-This is an independent learning implementation built by one developer with
-coding agents. It is not a wrapper around another agent CLI, and it is not a
-copy of the upstream OpenHarness implementation.
+## Evidence snapshot
 
-## Evidence
+The figures below are anchored to the CLI-stable baseline at commit
+[`9b4375e`](https://github.com/maisieyang/build-my-own-harness/commit/9b4375e)
+(2026-08-02), rather than presented as permanently current counters.
 
 | Signal | Current evidence |
 |---|---|
-| SWE-bench Lite | **170/300 resolved (56.7%)** with qwen3.7-max, thinking off, evaluated with the self-hosted official harness |
-| Test suite | **2,783 tests**, **95.29% current coverage**, enforced by a **>=95% gate** |
+| SWE-bench Lite | **170/300 resolved (56.7%)** with qwen3.7-max, thinking off; evaluated with the official SWE-bench evaluator deployed on a self-hosted ECS |
+| Test suite | **2,783 collected test items**; stable-core coverage enforced by a **>=95% gate** |
 | Static quality | Ruff lint/format and `mypy --strict` across `src/` |
 | Compatibility | CI on Python 3.10 and 3.11 |
 | Design trace | Boundary decisions, capability plans, dogfood retrospectives, eval artifacts, and benchmark records are committed beside the code |
@@ -41,6 +43,28 @@ benchmark-only agent. The complete campaign record is in
 failure analysis in
 [`benchmarks/swebench/TAXONOMY.md`](./benchmarks/swebench/TAXONOMY.md) and raw
 artifacts under [`benchmarks/swebench/out/`](./benchmarks/swebench/out).
+
+## One-minute tour
+
+Bare `oh` opens the conversation-first REPL. Planning, approval, and execution
+are separate state transitions:
+
+```text
+>>> /plan Review the implementation and propose a verification plan
+
+plan mode -- approve this plan?
+  [1] yes, approve -- return to default mode
+  [2] no, keep planning
+  [3] no, discard plan mode (back to default)
+plan> 1
+
+>>> /goal Implement the approved plan; run `uv run pytest -m 'not integration' -q`; stop after 10 turns
+```
+
+`/plan` removes mutation tools at the permission layer. Approval returns control
+to the default posture but does not auto-execute. `/goal` starts work and asks
+an independent, tool-disabled judge to assess the accumulated evidence after
+each assistant turn.
 
 ## System model
 
@@ -63,78 +87,72 @@ control problems that the model cannot solve by itself.
 
 ```mermaid
 flowchart LR
-    U["User, script, or queue"] --> C["REPL and headless CLI"]
+    U["User or script"] --> C["REPL and headless CLI"]
     C --> E["Agent engine"]
     E <--> M["OpenAI-compatible model"]
     E --> P["Permissions and hooks"]
     P --> X["Host, Docker, or gVisor"]
     E <--> S["Compaction, snapshots, and memory"]
-    C --> V["Command gate or independent LLM judge"]
-    V -->|"repair feedback"| E
-    C --> O["Journals, evals, and SWE-bench"]
+    C --> V["Independent /goal judge"]
+    V -->|"checker feedback"| E
+    C --> O["Evals and SWE-bench"]
 ```
 
-The major ownership boundaries are:
+The ownership model has four parts:
 
-1. **Runtime and protocol.** OpenAI-compatible streaming, Pydantic v2 wire
-   types, tool-call parsing, retries, event rendering, and structured logs.
-2. **Authorization and containment.** Allow/ask/deny rules, sensitive-path and
-   irreversible-git red lines, lifecycle hooks, headless fail-closed behavior,
-   and optional Docker/gVisor execution.
-3. **Long-running state.** Tool-result truncation, reactive context recovery,
-   explicit compaction, project memory, snapshots, and session resume.
-4. **Capability extension.** Skills, slash commands, mode bundles, stdio MCP
-   servers, native plugins, partial Claude Code plugin discovery, and
-   depth-bounded `SpawnAgent` delegation.
-5. **External completion.** Deterministic command gates, injection-guarded
-   semantic judges, repair loops, goal decomposition, run journals, worktree
-   isolation, and a persistent autopilot queue.
-6. **Evaluation.** Capability-level evals, programmatic scorers, LLM-judge
-   meta-evaluation, replay gates, and a subprocess-driven SWE-bench adapter.
+1. **Actions.** Typed streaming and tool calls feed an allow/ask/deny
+   authorization layer, lifecycle hooks, irreversible-operation red lines, and
+   host or Docker/gVisor execution.
+2. **Evidence and state.** Tool results, compaction, memory, and snapshots
+   preserve enough trustworthy state for long tasks to recover.
+3. **Capabilities.** Skills, commands, mode bundles, MCP servers, plugins, and
+   subagents extend the action space without adding new engine dispatch paths.
+4. **Completion.** An independent semantic judge owns `/goal`'s stop decision;
+   evals measure that mechanism separately from benchmark task performance.
 
-## Three execution loops
+## Context and evidence lifecycle
 
-OpenHarness exposes three distinct autonomy loops. They share the same agent
-engine, but deliberately use different context and stopping semantics.
+Long-context work is not solved by making the prompt larger. A coding agent
+needs to preserve the evidence that future decisions depend on while discarding
+bulk that no longer earns its token cost.
 
-| Surface | Context | Completion gate | Intended use |
-|---|---|---|---|
-| `oh` / `oh chat` + `/goal` | One continuing conversation | Tool-disabled LLM judge after every reply | Interactive implementation with preserved context |
-| `oh ask -p` + `--max-iter` | Fresh attempt plus structured repair feedback | Command exit code or semantic judge | Scripts, CI, and bounded headless work |
-| `oh autopilot` | Persistent prioritized queue | Required command verification | Sequential unattended jobs |
+OpenHarness handles that lifecycle at several boundaries:
 
-These controls are intentionally separate:
+- tool output is truncated head-and-tail, preserving both identifying context
+  and terminal summaries or errors;
+- prompt-too-long errors trigger bounded reactive recovery rather than losing
+  the turn;
+- explicit compaction combines a structured summary with an uncompacted recent
+  tail;
+- project memory and per-turn checkpoints preserve durable facts separately
+  from the raw transcript;
+- snapshots and session resume make recovery a persisted state transition
+  instead of a prompt convention.
 
-- `--auto` changes permission posture by skipping confirmations. It is not a
-  completion loop.
-- `/goal` continues the current interactive conversation.
-- `--goal-condition` judges a headless attempt semantically.
-- `--verify` uses deterministic command exit codes.
-- `autopilot` selects a queued card and runs the headless repair loop.
+A dogfood run exposed why this is an evidence problem: head-only Bash
+truncation removed pytest's final result, leaving the model with no true count
+to quote. The model fabricated one and then repeated its own fabrication on the
+next turn. The production fix preserved both ends of command output and became
+a regression test. See
+[`learnings/dogfood-day1-tool-skill.md`](./learnings/dogfood-day1-tool-skill.md)
+and [`src/openharness/tools/bash.py`](./src/openharness/tools/bash.py).
 
-### Plan, approve, then execute
+## External completion and evaluation
 
-Bare `oh` opens the conversation-first REPL. The main interactive path is:
+The working model is not allowed to declare its own work correct. `/goal` is
+the single completion controller: it preserves one conversation and asks an
+independent judge to decide whether another turn is needed. `--auto` remains an
+orthogonal permission posture; it does not decide completion.
 
-```text
->>> /plan Review the implementation and propose a verification plan
-
-plan mode -- approve this plan?
-  [1] yes, approve -- return to default mode
-  [2] no, keep planning
-  [3] no, discard plan mode (back to default)
-plan> 1
-
->>> /goal Implement the approved plan; run `uv run pytest -q`; stop after 10 turns
-```
+### Interactive control: `/plan` and `/goal`
 
 `/plan` is a permission-layer clamp, not a prompt convention: `Edit`, `Write`,
-and `Bash` are denied. The model has no tool that can exit plan mode. Approval
-only returns the session to default mode; it does not auto-execute the plan or
-grant a hidden permission preset.
+and `Bash` are denied, and the model has no tool that can approve itself.
+Approval only returns the session to default mode.
 
-`/goal <condition>` starts work immediately. After every assistant reply, the
-harness gives the accumulated transcript to a separate, tool-disabled LLM call:
+`/goal <condition>` starts work immediately. After each assistant turn, the
+harness renders the accumulated transcript and sends it to a separate,
+tool-disabled LLM call:
 
 ```text
 working model turn
@@ -146,62 +164,72 @@ untrusted transcript --> independent judge --> pass --> persist "met" and stop
                                                  and continue the same session
 ```
 
-Judge errors, malformed output, and invalid scores fail closed. The default
-backstop is 25 consecutive auto-turns; put the real stopping condition in the
-goal itself. Goals survive `oh chat --resume`.
+Judge errors and malformed output fail closed. A hard turn cap bounds false
+negatives and provider failures. Goal state is persisted with the conversation,
+including terminal sentinels, so `oh chat --resume` does not resurrect work that
+was already completed.
 
-The implementation lives in
-[`src/openharness/verification/semantic_gate.py`](./src/openharness/verification/semantic_gate.py),
-with the session state machine in
-[`src/openharness/repl.py`](./src/openharness/repl.py) and
-[`src/openharness/cli.py`](./src/openharness/cli.py).
+### Headless execution and isolation
 
-### Headless repair loop
-
-Use a deterministic command gate when completion has an executable oracle:
+`oh ask -p` remains the single-run primitive for scripts, benchmarks, and CI.
+It runs one prompt and reports the engine's terminal state; it does not own a
+second completion loop.
 
 ```bash
-uv run oh ask -p "fix the failing tests; do not weaken assertions" \
+uv run oh ask -p "inspect the repository and report the highest-risk gap" \
   --output-format json \
-  --verify "uv run pytest -q" \
-  --max-iter 5 \
   --isolate
 ```
 
-Use an independent semantic judge for criteria that cannot be reduced to an
-exit code:
+`--isolate` places that one run in a fresh Git worktree. Sandbox, worktree, and
+structured output remain execution primitives rather than alternative owners
+of task completion.
 
-```bash
-uv run oh ask -p "bring the release documentation up to date" \
-  --output-format json \
-  --goal-condition "CHANGELOG and release notes match shipped behavior" \
-  --max-iter 4
-```
+### Evaluation ladder
 
-Each failed attempt becomes structured feedback for a fresh context.
-`--decompose` first splits a goal into ordered sub-goals. `--isolate` executes
-inside a Git worktree. Append-only run journals support `oh run show` and
-`--resume-run`.
+The project separates mechanism tests from model-behavior evidence:
 
-### Autopilot queue
+1. Unit and integration tests lock protocol, state-machine, and failure-path
+   invariants.
+2. Capability evals cover tool choice, error feedback, skill triggering,
+   memory, compaction, and completion judging with programmatic scorers,
+   cassette/replay, and judge meta-evaluation.
+3. SWE-bench exercises the shipped CLI across 300 real repository tasks and
+   joins execution records with official verdicts for failure attribution.
 
-Autopilot is a persistent, deduplicated, priority-scored intake queue. Every
-card requires at least one deterministic verification command.
+The goal-owned completion judge lives in
+[`src/openharness/services/goal_judge.py`](./src/openharness/services/goal_judge.py).
+Eval datasets and their explicit pass bars live under [`evals/`](./evals).
 
-```bash
-uv run oh autopilot enqueue \
-  --goal "fix the login regression" \
-  --verify "uv run pytest -q" \
-  --max-iter 3 \
-  --source-ref "manual:login-regression" \
-  --label bug
+## Capability substrate and plugin dogfood
 
-uv run oh autopilot list
-uv run oh autopilot run-next
-```
+Extensions are translated into existing runtime primitives before the model
+turn starts. Skills become tool-result evidence, mode bundles compose prompts,
+tool catalogs, hooks, and permission overlays, and plugins fan out into the same
+stores used by first-party capabilities. The engine does not gain a separate
+"plugin execution" path.
 
-`run-next` atomically claims the highest-priority queued card and records the
-repair-loop result as completed or failed.
+The companion
+[`finance-skills`](https://github.com/maisieyang/finance-skills) repository is
+the vertical proof. A Claude Code-format credit-review plugin containing four
+skills was copied into the OpenHarness plugin directory without renaming files
+or rewriting its schema. OpenHarness discovered the plugin, translated it into
+the common manifest, namespaced its skills, and triggered them through the
+existing `LoadSkill` envelope path. The envelope helper itself remained
+unchanged across the plugin integration.
+
+That dogfood also forced two honest boundaries:
+
+- an empty-argument synthetic envelope exposed a thinking-provider protocol
+  failure; the fix made the message shape provider-neutral instead of adding a
+  Qwen-specific branch;
+- Claude Code `.mcp.json` entries were not imported because the fixtures use
+  HTTP/OAuth while OpenHarness MCP is stdio-only. Discovery reports zero MCP
+  servers rather than pretending the transports are compatible.
+
+The design and run evidence are in
+[`decisions/39-phase-19-boundary.md`](./decisions/39-phase-19-boundary.md) and
+[`learnings/phase-19.md`](./learnings/phase-19.md).
 
 ## What the benchmark changed
 
@@ -267,9 +295,7 @@ uv run oh "review this repository and identify the highest-risk gap"
 | `oh plugins` | Inspect installed native and Claude Code-format plugins |
 | `oh snapshot` | List, show, and garbage-collect conversation snapshots |
 | `oh eval` | Run capability-anchored prompt evals |
-| `oh autopilot` | Enqueue, list, and run queued repair-loop goals |
 | `oh bench swebench` | Fetch and run SWE-bench Lite cases |
-| `oh run show` | Reconstruct a journal-backed headless run |
 
 Run `uv run oh --help` or `uv run oh <command> --help` for the authoritative
 option surface. All configuration uses the `OPENHARNESS_*` namespace; see
@@ -278,14 +304,16 @@ option surface. All configuration uses the `OPENHARNESS_*` namespace; see
 ## Quality contract
 
 ```bash
-uv run pytest -q
+uv run pytest -m "not integration" -q
 uv run mypy --strict src/
 uv run ruff check
 uv run ruff format --check
 ```
 
-- The default suite requires no live model or external service.
-- Integration, Docker, gVisor, and live-model tests are explicitly gated.
+- The CI/default gate requires no live model or external service.
+- `uv run pytest -m integration` runs explicitly gated real-process or
+  live-service checks and may require Node, Docker, gVisor, credentials, or
+  network access depending on the selected test.
 - Coverage must remain at or above 95%.
 - CI runs lint, format, strict typing, and tests on Python 3.10 and 3.11.
 - Dogfood failures become regression tests and, when the boundary changes,
@@ -300,10 +328,11 @@ uv run ruff format --check
   imported.
 - MCP transport is stdio only.
 - Docker/gVisor isolation is optional; host execution is the default.
-- Autopilot is a local sequential queue, not a distributed scheduler or GitHub
-  pull-request service.
-- Semantic judges are probabilistic and therefore fail closed behind explicit
-  turn/iteration caps. Prefer `--verify` whenever an executable oracle exists.
+- The `/goal` judge is probabilistic, reads conversation evidence rather than
+  operating-system state, fails closed, and is bounded by an explicit turn cap.
+- Permission, sandbox, worktree isolation, and completion remain orthogonal;
+  `/goal` pauses on confirmation-required permission failures, but unattended
+  permission policy is still an open design boundary.
 
 ## Design record
 

@@ -1,5 +1,8 @@
 # Decision 47 — plan-mode v1（REPL 双态：默认 / plan）
 
+> 2026-08-05 status: `/plan` remains current. References below to the parallel
+> headless goal/autopilot line are historical; D49 retired that product line.
+
 > Date: 2026-07-24 · 上游: [docs/ideas/mode-spectrum-plan-mode-design.md](../docs/ideas/mode-spectrum-plan-mode-design.md)
 > 配套读物:
 > - 四点光谱与 CC v2.1.200+ 调研: 上游文档 §一/§二

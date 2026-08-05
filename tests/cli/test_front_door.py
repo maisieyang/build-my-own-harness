@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from click import unstyle
 from typer.testing import CliRunner
 
 import openharness.cli as cli_module
@@ -146,6 +147,9 @@ class TestRootPrintMode:
 class TestFlagDiet:
     """D43.3 — 配置旗退出 help 展示,解析照常(hidden ≠ 删除)。"""
 
+    def test_retired_subcommands_are_absent(self) -> None:
+        assert {"autopilot", "run"}.isdisjoint(cli_module._known_subcommands())
+
     def test_config_flags_hidden_from_ask_help(self) -> None:
         result = runner.invoke(cli_module.app, ["ask", "--help"])
         assert result.exit_code == 0
@@ -154,8 +158,14 @@ class TestFlagDiet:
 
     def test_contract_flags_still_visible(self) -> None:
         result = runner.invoke(cli_module.app, ["ask", "--help"])
-        for flag in ("--verify", "--max-iter", "--max-turns", "--isolate", "--output-format"):
-            assert flag in result.output, f"{flag} 是合同旗,必须可见"
+        help_text = unstyle(result.output)
+        for flag in ("--max-turns", "--isolate", "--output-format"):
+            assert flag in help_text, f"{flag} 是合同旗,必须可见"
+
+    def test_retired_repair_loop_flags_are_absent(self) -> None:
+        result = runner.invoke(cli_module.app, ["ask", "--help"])
+        for flag in ("--verify", "--goal-condition", "--max-iter", "--decompose", "--resume-run"):
+            assert flag not in result.output
 
     def test_hidden_flag_still_parses(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_min_env(monkeypatch)

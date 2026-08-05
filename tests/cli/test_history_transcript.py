@@ -1,12 +1,4 @@
-"""D48 T1 — ``render_history_transcript`` message 列表版渲染器 (RED).
-
-L3' 判官读 REPL history 的入口。格式对齐 ``collect_transcript``(事件流版,
-_stream_render.py:239):判官必须看见工具行为,不被最终总结带偏;截断复用
-``_TRANSCRIPT_TOOL_OUTPUT_PREVIEW``。新增 turn 边界标记(D48.5:让判官
-能数 turn,支撑 "or stop after N turns" 类条件)。
-
-这些测试现在应当 RED:``render_history_transcript`` 尚不存在.
-"""
+"""Goal-scoped conversation evidence renderer tests."""
 
 from __future__ import annotations
 
@@ -51,15 +43,18 @@ class TestBlockRendering:
         assert "[tool result (ok): 2717 passed]" in out
         assert "[tool result (error): boom]" in out
 
-    def test_tool_result_truncated_to_preview_cap(self) -> None:
-        long_output = "x" * (_TRANSCRIPT_TOOL_OUTPUT_PREVIEW + 500)
+    def test_tool_result_preview_preserves_head_and_tail(self) -> None:
+        middle = "x" * (_TRANSCRIPT_TOOL_OUTPUT_PREVIEW + 500)
+        long_output = f"START-DIAGNOSTIC\n{middle}\nFINAL: 2717 passed"
         msg = ConversationMessage(
             role="user",
             content=[ToolResultBlock(tool_use_id="tu_1", content=long_output, is_error=False)],
         )
         out = render_history_transcript([msg])
-        assert "x" * _TRANSCRIPT_TOOL_OUTPUT_PREVIEW in out
-        assert "x" * (_TRANSCRIPT_TOOL_OUTPUT_PREVIEW + 1) not in out
+        assert "START-DIAGNOSTIC" in out
+        assert "FINAL: 2717 passed" in out
+        assert "chars omitted" in out
+        assert middle not in out
 
 
 class TestTurnBoundaries:

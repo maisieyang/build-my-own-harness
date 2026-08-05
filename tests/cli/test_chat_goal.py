@@ -1,7 +1,7 @@
 """D48 T4 — ``oh chat`` /goal 续跑式条件循环接线集成 (RED).
 
 驱动沿 test_chat_plan_mode 夹具;判官 stub 在 cli 命名空间 monkeypatch
-(``cli_module.run_semantic_verification``),按调用次数出不同判决。
+(``cli_module.judge_goal_completion``),按调用次数出不同判决。
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from openharness.protocols.messages import ConversationMessage
 from openharness.protocols.stream_events import (
     ApiMessageCompleteEvent,
     ConversationCompleteEvent,
+    ToolExecutionCompletedEvent,
 )
 from openharness.protocols.usage import UsageSnapshot
 from openharness.repl import (
@@ -23,7 +24,7 @@ from openharness.repl import (
     GOAL_KICKOFF_PREFIX,
     build_goal_sentinel,
 )
-from openharness.verification.semantic_gate import SemanticGateResult
+from openharness.services.goal_judge import GoalJudgeResult, GoalJudgeVerdict
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -101,13 +102,16 @@ def _install_judge(
         api_client: object,
         model: str,
         timeout_seconds: float = 15.0,
-    ) -> SemanticGateResult:
+    ) -> GoalJudgeResult:
         del api_client, model, timeout_seconds
         calls.append((condition, transcript))
         passed, feedback = verdicts[min(len(calls) - 1, len(verdicts) - 1)]
-        return SemanticGateResult(passed=passed, feedback=feedback)
+        return GoalJudgeResult(
+            verdict=GoalJudgeVerdict.MET if passed else GoalJudgeVerdict.NOT_MET,
+            reason=feedback,
+        )
 
-    monkeypatch.setattr(cli_module, "run_semantic_verification", _fake_judge)
+    monkeypatch.setattr(cli_module, "judge_goal_completion", _fake_judge)
     return calls
 
 
@@ -154,6 +158,25 @@ class TestGoalSetAndJudge:
         assert "Session goal" in contexts[0].system_prompt
         assert "ship it" in contexts[0].system_prompt
 
+    def test_judge_evidence_starts_at_current_goal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
+        _install_capture(monkeypatch)
+        judge_calls = _install_judge(monkeypatch, [(True, "ok")])
+        _stub_input_sequence(
+            monkeypatch,
+            ["OLD_TASK_EVIDENCE", "/goal NEW_GOAL", "/exit"],
+        )
+
+        result = CliRunner().invoke(cli_module.app, ["chat"])
+
+        assert result.exit_code == 0
+        assert len(judge_calls) == 1
+        condition, transcript = judge_calls[0]
+        assert condition == "NEW_GOAL"
+        assert "NEW_GOAL" in transcript
+        assert "OLD_TASK_EVIDENCE" not in transcript
+
 
 class TestAutoContinue:
     def test_not_met_auto_continues_with_checker_framing(
@@ -195,6 +218,71 @@ class TestAutoContinue:
         assert len(contexts) == 4
         assert result.stdout.count("paused") == 2
 
+    def test_judge_error_pauses_without_another_worker_turn(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
+        contexts, _ = _install_capture(monkeypatch)
+
+        async def _broken_judge(*args: object, **kwargs: object) -> GoalJudgeResult:
+            del args, kwargs
+            return GoalJudgeResult(
+                verdict=GoalJudgeVerdict.ERROR,
+                reason="provider timeout",
+            )
+
+        monkeypatch.setattr(cli_module, "judge_goal_completion", _broken_judge)
+        _stub_input_sequence(monkeypatch, ["/goal t", "/exit"])
+
+        result = CliRunner().invoke(cli_module.app, ["chat"])
+
+        assert result.exit_code == 0
+        assert len(contexts) == 1
+        assert "goal checker unavailable" in result.stdout
+        assert "provider timeout" in result.stdout
+        assert "goal not met — continuing" not in result.stdout
+
+    def test_permission_confirmation_pauses_after_not_met_verdict(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
+        contexts: list[QueryContext] = []
+
+        async def _permission_blocked_run(
+            initial_messages: list[ConversationMessage], context: QueryContext
+        ) -> AsyncIterator[ApiStreamEvent]:
+            contexts.append(context)
+            blocker = "permission denied (requires confirmation): Bash runs arbitrary commands"
+            yield ToolExecutionCompletedEvent(
+                tool_use_id="t1",
+                tool_name="Bash",
+                output=blocker,
+                is_error=True,
+            )
+            assistant = ConversationMessage(
+                role="assistant", content=[TextBlock(text="I need permission to continue.")]
+            )
+            yield ApiMessageCompleteEvent(
+                message=assistant,
+                usage=UsageSnapshot(input_tokens=1, output_tokens=1),
+                stop_reason="end_turn",
+            )
+            yield ConversationCompleteEvent(messages=[*initial_messages, assistant])
+
+        monkeypatch.setattr(cli_module, "run_query", _permission_blocked_run)
+        _install_judge(monkeypatch, [(False, "verification command was not run")])
+        _stub_input_sequence(monkeypatch, ["/goal tests pass", "/exit"])
+
+        result = CliRunner().invoke(cli_module.app, ["chat"])
+
+        assert result.exit_code == 0
+        assert len(contexts) == 1
+        assert "goal blocked on permission" in result.stdout
+        assert "Bash runs arbitrary commands" in result.stdout
+        assert "goal not met — continuing" not in result.stdout
+
 
 class TestGoalCommandSurface:
     def test_bare_goal_shows_status(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -229,6 +317,23 @@ class TestGoalCommandSurface:
         assert len(contexts) == 2
         assert len(judge_calls) == 2
         # 清除后不再有判官调用或续 turn(/exit 前无新 turn).
+
+    def test_conversation_clear_also_extinguishes_active_goal(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("OPENHARNESS_GOAL_MAX_AUTO_TURNS", "1")
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
+        contexts, _ = _install_capture(monkeypatch)
+        judge_calls = _install_judge(monkeypatch, [(False, "never")])
+        _stub_input_sequence(monkeypatch, ["/goal t", "/clear", "ordinary turn", "/exit"])
+
+        result = CliRunner().invoke(cli_module.app, ["chat"])
+
+        assert result.exit_code == 0
+        assert "conversation and active goal cleared" in result.stdout
+        assert len(contexts) == 3  # kickoff + auto-continuation + ordinary turn
+        assert len(judge_calls) == 2
 
     def test_plan_mode_turn_skips_judge(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_minimum_env(monkeypatch)

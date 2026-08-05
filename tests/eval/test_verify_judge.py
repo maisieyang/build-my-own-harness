@@ -1,6 +1,6 @@
 """verify_judge eval (B3, D45.2) — 面 #1 secondary-pass:verify 裁判元评估。
 
-被测对象:生产 run_semantic_verification(semantic_gate.py 的独立 LLM 判官)。
+被测对象:生产 judge_goal_completion(services/goal_judge.py 的独立 LLM 判官)。
 **meta-eval**:judge 本身是软的(LLM 打 pass/fail),但"judge 判定 == 人工
 金标 verdict"是硬 `=`——把软裁判架到硬尺子上。oracle = 金标一致(D45.2)。
 

@@ -1,12 +1,8 @@
-"""Tests for ``_run_ask``'s ``cwd_override``/``execution_env_override``
-params -- loop-runtime Track B T3.
+"""Tests for ``_run_ask``'s ``cwd_override``/``execution_env_override``.
 
 These two generic overrides are the mechanism `services/run_session.py`
-(T4) uses to make a whole repair-loop RUN share one worktree cwd and one
-long-lived sandbox container across every attempt, instead of each
-``_run_ask`` call resolving its own cwd/sandbox from scratch. Not yet
-CLI-flag-reachable (T6 wires ``--isolate``) -- these are pure keyword-arg
-tests calling ``_run_ask`` directly.
+uses to run one request in a worktree and optional sandbox without teaching
+the agent engine about task isolation.
 """
 
 from __future__ import annotations

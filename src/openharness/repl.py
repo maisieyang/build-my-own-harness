@@ -144,9 +144,7 @@ def build_plan_approval_sentinel() -> ConversationMessage:
                     "plan and returned to default mode. Do not execute the plan unless "
                     "the user explicitly asks. If the user asks for a /goal, convert "
                     "the approved plan into a concrete /goal condition with verification "
-                    "criteria, runnable verification commands, and stop bounds. In this "
-                    "repo, targeted pytest commands should include --no-cov unless the "
-                    "goal is specifically to validate the full coverage gate."
+                    "criteria, runnable verification commands, and stop bounds."
                 )
             )
         ],
@@ -251,11 +249,13 @@ def goal_prompt_section(condition: str) -> str:
     return (
         "## Session goal\n\n"
         "An independent checker evaluates the conversation after each turn "
-        "against this goal condition; turns auto-continue until it holds:\n\n"
+        "against this goal condition; incomplete work auto-continues while "
+        "the task remains runnable:\n\n"
         f"    {condition}\n\n"
         "Work toward the condition and surface verifiable evidence in the "
         "conversation (e.g. actually run the relevant checks so their output "
-        "is visible) — the checker judges only what appears here."
+        "is visible) — the checker judges only what appears here. Automation "
+        "pauses on permission or checker failures."
     )
 
 
@@ -271,8 +271,7 @@ def build_goal_kickoff(condition: str) -> str:
         "it, then immediately start working toward it; do not pause to ask "
         "what to do. Surface verifiable evidence as you go. If the goal "
         "contains verification commands, run the commands as written when "
-        "allowed; for targeted pytest commands in this repo, prefer --no-cov "
-        "unless the goal is specifically validating the full coverage gate. "
+        "allowed. "
         "If Bash is permission-denied, report the exact blocker and the needed "
         "permission or sandbox setting. Do not create temporary files or scripts "
         "as a substitute for running a denied command."
@@ -327,6 +326,31 @@ def find_active_goal(messages: list[ConversationMessage]) -> str | None:
                 return condition
             return None  # met / cleared — goal extinguished
     return None
+
+
+def goal_evidence_messages(
+    messages: list[ConversationMessage], condition: str
+) -> list[ConversationMessage]:
+    """Return only evidence produced since the current goal was set.
+
+    A completion controller must not let an unrelated earlier task satisfy a
+    newly declared goal. The latest matching ``set`` sentinel is the durable
+    boundary and survives snapshot/resume. Legacy or compacted histories that
+    no longer contain the sentinel fall back to the available history so an
+    already-running goal does not lose all evidence.
+    """
+    from openharness.protocols.content import TextBlock
+
+    expected = f"{_GOAL_SENTINEL_PREFIX}set: {condition}"
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if message.role != "user":
+            continue
+        if any(
+            isinstance(block, TextBlock) and block.text == expected for block in message.content
+        ):
+            return messages[index:]
+    return list(messages)
 
 
 def is_interactive() -> bool:

@@ -26,12 +26,10 @@ without modification.
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import sys
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rich.console import Console
@@ -47,17 +45,15 @@ from openharness.protocols.stream_events import (
     ToolExecutionCompletedEvent,
     ToolExecutionStartedEvent,
 )
-from openharness.verification.gate import VerificationResult, maybe_run_verification
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Sequence
+    from collections.abc import AsyncIterator
     from typing import TextIO
 
     from rich.console import ConsoleOptions, RenderResult
 
     from openharness.protocols.messages import ConversationMessage
     from openharness.protocols.stream_events import ApiStreamEvent
-    from openharness.verification.repair import GateResult
 
 
 # Per D12.6: cap tool output rendered to terminal so a 12k-char Bash dump
@@ -237,54 +233,22 @@ async def collect_print_result(events: AsyncIterator[ApiStreamEvent]) -> PrintRe
 _TRANSCRIPT_TOOL_OUTPUT_PREVIEW = 2000
 
 
-async def collect_transcript(events: AsyncIterator[ApiStreamEvent]) -> tuple[PrintResult, str]:
-    """Like :func:`collect_print_result`, but also builds a readable
-    multi-turn transcript of assistant text AND tool calls/results across
-    every turn.
-
-    The L3' semantic judge needs to see what the agent actually DID -- an
-    earlier version fed it only the final turn's text (``PrintResult.text``),
-    which silently hid all tool activity: an agent that did the work via
-    tools but replied tersely would be judged on no evidence, and an agent
-    that lied confidently in its final summary would be judged on that lie
-    alone. This drains the same event stream once and returns both the
-    normal :class:`PrintResult` (unchanged shape) and a plain-text transcript.
-    """
-    input_tokens = 0
-    output_tokens = 0
-    num_turns = 0
-    final: ApiMessageCompleteEvent | None = None
-    lines: list[str] = []
-    async for event in events:
-        if isinstance(event, ApiTextDeltaEvent):
-            lines.append(event.text)
-        elif isinstance(event, ToolExecutionStartedEvent):
-            lines.append(f"\n[tool call: {event.tool_name}({event.tool_input!r})]\n")
-        elif isinstance(event, ToolExecutionCompletedEvent):
-            status = "error" if event.is_error else "ok"
-            output = event.output[:_TRANSCRIPT_TOOL_OUTPUT_PREVIEW]
-            lines.append(f"[tool result ({status}): {output}]\n")
-        elif isinstance(event, ApiMessageCompleteEvent):
-            final = event
-            num_turns += 1
-            input_tokens += event.usage.input_tokens
-            output_tokens += event.usage.output_tokens
-    result = _print_result(
-        final, input_tokens=input_tokens, output_tokens=output_tokens, num_turns=num_turns
-    )
-    return result, "".join(lines)
+def _preview_goal_tool_output(output: str) -> str:
+    """Bound judge evidence while preserving diagnostics and final verdicts."""
+    if len(output) <= _TRANSCRIPT_TOOL_OUTPUT_PREVIEW:
+        return output
+    head_size = _TRANSCRIPT_TOOL_OUTPUT_PREVIEW // 2
+    tail_size = _TRANSCRIPT_TOOL_OUTPUT_PREVIEW - head_size
+    omitted = len(output) - _TRANSCRIPT_TOOL_OUTPUT_PREVIEW
+    return f"{output[:head_size]}\n... [{omitted} chars omitted] ...\n{output[-tail_size:]}"
 
 
 def render_history_transcript(messages: list[ConversationMessage]) -> str:
-    """Render a REPL ``history`` (message list) into judge-readable text —
-    the message-list twin of :func:`collect_transcript` (D48 T1).
+    """Render goal-scoped conversation evidence for the independent judge.
 
-    Same rationale as collect_transcript's docstring: the L3' judge must see
-    what the agent actually DID ([tool call]/[tool result] lines, results
-    truncated to ``_TRANSCRIPT_TOOL_OUTPUT_PREVIEW``), not just final-turn
-    prose. Adds ``[assistant turn N]`` boundary markers so the judge can
-    count turns — that is what makes "or stop after N turns"-style goal
-    conditions judgeable (D48.5).
+    Tool calls and results matter more than the worker's final prose, so both
+    are included and long outputs are preview-capped. Assistant boundaries
+    make turn-count stop conditions judgeable.
     """
     lines: list[str] = []
     turn = 0
@@ -303,7 +267,7 @@ def render_history_transcript(messages: list[ConversationMessage]) -> str:
                     lines.append(f"\n[user]: {block.text}\n")
                 elif isinstance(block, ToolResultBlock):
                     status = "error" if block.is_error else "ok"
-                    output = block.content[:_TRANSCRIPT_TOOL_OUTPUT_PREVIEW]
+                    output = _preview_goal_tool_output(block.content)
                     lines.append(f"[tool result ({status}): {output}]\n")
     return "".join(lines)
 
@@ -312,18 +276,10 @@ def build_result_obj(
     result: PrintResult,
     *,
     session_id: str,
-    verification: GateResult | None = None,
 ) -> dict[str, object]:
     """Single source of truth for the headless json ``result`` object shape
     (loop-runtime L1 T3 + T4). ``cost_usd`` stays null until a pricing layer
-    lands (T0: v1 has no cost computation).
-
-    ``verification`` accepts either L3's hard ``VerificationResult`` (which
-    has per-step detail) or L3''s soft ``SemanticGateResult`` (feedback only,
-    no ``.steps``) -- checked via ``isinstance(verification, VerificationResult)``
-    rather than ``hasattr``/``getattr(..., default)``, both of which would
-    silently swallow any AttributeError raised during attribute access, not
-    just genuine absence."""
+    lands (T0: v1 has no cost computation)."""
     return {
         "type": "result",
         "result": result.text,
@@ -336,19 +292,6 @@ def build_result_obj(
         "cost_usd": None,
         "num_turns": result.num_turns,
         "session_id": session_id,
-        "verification": (
-            None
-            if verification is None
-            else {
-                "passed": verification.passed,
-                "steps": (
-                    [dataclasses.asdict(s) for s in verification.steps]
-                    if isinstance(verification, VerificationResult)
-                    else []
-                ),
-                "feedback": verification.feedback,
-            }
-        ),
     }
 
 
@@ -357,9 +300,6 @@ async def render_stream_json(
     *,
     session_id: str,
     stdout: TextIO | None = None,
-    verify: Sequence[str] | None = None,
-    verify_timeout: float = 600.0,
-    cwd: Path | None = None,
 ) -> str | None:
     """Stream each engine event as ONE newline-delimited JSON object, then a
     final ``result`` object (loop-runtime L1 T4). Returns the terminal
@@ -431,9 +371,7 @@ async def render_stream_json(
     result = _print_result(
         final, input_tokens=input_tokens, output_tokens=output_tokens, num_turns=num_turns
     )
-    effective_cwd = cwd if cwd is not None else Path.cwd()
-    verification = await maybe_run_verification(verify, cwd=effective_cwd, timeout=verify_timeout)
-    _emit(build_result_obj(result, session_id=session_id, verification=verification))
+    _emit(build_result_obj(result, session_id=session_id))
     return result.stop_reason
 
 

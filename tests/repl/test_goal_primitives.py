@@ -23,6 +23,7 @@ from openharness.repl import (
     build_plan_approval_sentinel,
     find_active_goal,
     format_status_bar,
+    goal_evidence_messages,
     goal_prompt_section,
     parse_goal_command,
 )
@@ -81,8 +82,7 @@ class TestPromptAndContinuation:
         text = "".join(b.text for b in msg.content if isinstance(b, TextBlock))
 
         assert "concrete /goal condition" in text
-        assert "--no-cov" in text
-        assert "targeted pytest" in text
+        assert "runnable verification commands" in text
         assert "stop bounds" in text
 
     def test_goal_kickoff_mentions_permission_blockers_without_temp_files(self) -> None:
@@ -111,6 +111,20 @@ class TestGoalSentinel:
             build_goal_sentinel("met", "tests pass"),
         ]
         assert find_active_goal(history) is None
+
+    def test_evidence_starts_at_latest_matching_set(self) -> None:
+        old = ConversationMessage(role="user", content=[TextBlock(text="old evidence")])
+        current = build_goal_sentinel("set", "new goal")
+        reply = ConversationMessage(role="assistant", content=[TextBlock(text="new evidence")])
+
+        evidence = goal_evidence_messages([old, current, reply], "new goal")
+
+        assert evidence == [current, reply]
+
+    def test_evidence_falls_back_for_legacy_or_compacted_history(self) -> None:
+        history = [ConversationMessage(role="assistant", content=[TextBlock(text="summary")])]
+
+        assert goal_evidence_messages(history, "active goal") == history
 
     def test_cleared_extinguishes(self) -> None:
         history = [

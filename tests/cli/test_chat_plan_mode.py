@@ -230,7 +230,8 @@ class TestApprovalMenu:
         )
         assert "[plan-status] approved:" in all_text
         assert "convert the approved plan into a concrete /goal condition" in all_text
-        assert "--no-cov" in all_text
+        assert "runnable verification commands" in all_text
+        assert "stop bounds" in all_text
         # deny 钳制已撤(交互 DEFAULT 姿态 in-cwd 写恢复 ALLOW).
         assert not _write_denied(contexts[1], tmp_path)
         # follow-up turn 的 system prompt 不再带 plan 姿态.

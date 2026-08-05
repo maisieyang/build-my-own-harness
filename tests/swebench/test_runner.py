@@ -47,7 +47,6 @@ def good_envelope() -> str:
             "cost_usd": None,
             "num_turns": 4,
             "session_id": "run-x",
-            "verification": None,
         }
     )
 
