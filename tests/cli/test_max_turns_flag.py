@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from click import unstyle
 from typer.testing import CliRunner
 
 import openharness.cli as cli_module
@@ -115,4 +116,4 @@ class TestAskCliFlag:
         result = runner.invoke(cli_module.app, ["ask", "--help"])
 
         assert result.exit_code == 0
-        assert "--max-turns" in result.output
+        assert "--max-turns" in unstyle(result.output)

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from click import unstyle
 from typer.testing import CliRunner
 
 import openharness.cli as cli_module
@@ -157,8 +158,9 @@ class TestFlagDiet:
 
     def test_contract_flags_still_visible(self) -> None:
         result = runner.invoke(cli_module.app, ["ask", "--help"])
+        help_text = unstyle(result.output)
         for flag in ("--max-turns", "--isolate", "--output-format"):
-            assert flag in result.output, f"{flag} 是合同旗,必须可见"
+            assert flag in help_text, f"{flag} 是合同旗,必须可见"
 
     def test_retired_repair_loop_flags_are_absent(self) -> None:
         result = runner.invoke(cli_module.app, ["ask", "--help"])
