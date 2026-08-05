@@ -4,7 +4,7 @@
 - file 工具 ``Edit/Write/Read(glob)`` 的 specifier 是 glob.
 - ``Bash(prefix:*)`` 的 specifier 是命令前缀(CC 语法,尾 ``:*`` 表前缀).
 - 裸 ``ToolName``(无括号)规范化为 ``ToolName(*)``(任意调用).
-- 非法串 **明确报错**,不静默吞(对照 autopilot ``_looks_available`` 静默筛教训).
+- 非法串 **明确报错**,不静默吞.
 
 这些测试现在应当 RED:``openharness.permissions.rules`` 模块尚不存在.
 """

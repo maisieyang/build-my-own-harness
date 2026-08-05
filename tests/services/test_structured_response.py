@@ -1,5 +1,4 @@
-"""Tests for the shared ``strip_markdown_fence`` helper — used by both the
-L3' semantic judge and the L5 decomposer.
+"""Tests for the ``/goal`` judge's shared ``strip_markdown_fence`` helper.
 
 Review fix regression: a truncated response (opening fence present, no
 closing fence) must keep its last content line rather than silently

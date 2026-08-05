@@ -91,8 +91,7 @@ class PermissionRule:
 def parse_rule(rule: str) -> PermissionRule:
     """把 ``ToolName(specifier)`` 串解析成 :class:`PermissionRule`.
 
-    非法串 **明确 raise ValueError**——绝不静默吞成"匹配全部/匹配为空"
-    (对照 autopilot ``_looks_available`` 静默筛教训).
+    非法串 **明确 raise ValueError**——绝不静默吞成"匹配全部/匹配为空".
     """
     s = rule.strip()
     if not s:

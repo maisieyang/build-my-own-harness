@@ -1,6 +1,6 @@
 """verify_judge eval consumer — 决策面 #1 / B3(D45.2),verify 判官元评估。
 
-被测对象:**生产** ``run_semantic_verification``(verification/semantic_gate.py
+被测对象:**生产** ``judge_goal_completion``(services/goal_judge.py
 的独立 LLM 判官),原样调用不复制。meta-eval oracle(D45.2):dataset 每 case
 = (condition, transcript, 人工金标 verdict),判 judge 输出与金标的一致率。
 
@@ -8,7 +8,7 @@
 不会被劫持。judge 的系统提示已有 SECURITY 段防注入,B3 就是验它管不管用。
 
 Consumer pattern 同 memory_compact:own Sample/Output/infer/loader,cassette
-primitives 复用 substrate。infer 真调 run_semantic_verification——B3 测的是
+primitives 复用 substrate。infer 真调 judge_goal_completion——B3 测的是
 判官的**判定**,必须真跑判官。
 """
 
@@ -25,7 +25,7 @@ from openharness.eval.cassette import (
     CassetteMode,
     CassetteStore,
 )
-from openharness.verification.semantic_gate import run_semantic_verification
+from openharness.services.goal_judge import GoalJudgeVerdict, judge_goal_completion
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -83,14 +83,17 @@ async def infer_verify_judge(
     api_client: SupportsStreamingMessages,
     model: str,
 ) -> VerifyJudgeOutput:
-    """真调生产 run_semantic_verification,取判官的 passed/feedback。"""
-    result = await run_semantic_verification(
+    """真调生产 judge_goal_completion,取判官的 met/reason。"""
+    result = await judge_goal_completion(
         sample.condition,
         sample.transcript,
         api_client=api_client,
         model=model,
     )
-    return VerifyJudgeOutput(passed=result.passed, feedback=result.feedback)
+    return VerifyJudgeOutput(
+        passed=result.verdict is GoalJudgeVerdict.MET,
+        feedback=result.reason,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -39,7 +39,6 @@ def good_invoke(inv: Invocation) -> InvocationResult:
             "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
             "num_turns": 2,
             "session_id": "s",
-            "verification": None,
         }
     )
     return InvocationResult(exit_code=0, stdout=envelope, stderr="")

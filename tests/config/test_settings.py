@@ -470,23 +470,6 @@ class TestEnablePluginHooks:
         assert settings.enable_plugin_hooks is False
 
 
-class TestAutopilotSettings:
-    """L6 — ``Settings.autopilot`` nested sub-model (intake queue tunables)."""
-
-    def test_default_queue_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
-        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
-        settings = Settings()
-        assert "autopilot" in str(settings.autopilot.queue_path)
-
-    def test_queue_path_overridable_via_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
-        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
-        monkeypatch.setenv("OPENHARNESS_AUTOPILOT__QUEUE_PATH", "/tmp/custom-queue.json")
-        settings = Settings()
-        assert str(settings.autopilot.queue_path) == "/tmp/custom-queue.json"
-
-
 class TestExtraBodySetting:
     """OPENHARNESS_EXTRA_BODY: provider-specific request-body JSON merged
     into every chat.completions call (RUNLOG 节点 8)."""

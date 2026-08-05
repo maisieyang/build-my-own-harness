@@ -1,5 +1,9 @@
 # Decision 48 — REPL session 级 /goal 条件循环（续跑式，完全对齐 CC 行为设计）
 
+> 2026-08-05 status: `/goal` remains current and is now the only completion
+> controller. D49 retired the headless comparison path referenced below; D50
+> replaced the reused binary gate with a goal-owned three-state judge result.
+
 > Date: 2026-07-24 · 上游: [docs/ideas/cc-goal-design-reverse.md](../docs/ideas/cc-goal-design-reverse.md)（双源调研）+ [docs/ideas/mode-spectrum-plan-mode-design.md](../docs/ideas/mode-spectrum-plan-mode-design.md) §5.2
 > 配套读物: D47（plan-mode，地基）、loop-runtime L3′（判官原语）
 
@@ -12,7 +16,7 @@
 **IN（this phase 必做）**:
 
 - `/goal <条件>` 设定 / 裸 `/goal` 状态统计 / `/goal clear`（+5 别名）
-- turn 结束判官（复用 `run_semantic_verification`）+ 未达成自动续跑（判官反馈框架）+ 达成清铃与统计
+- turn 结束判官 + 未达成自动续跑（判官反馈框架）+ 达成清铃与统计
 - settings 兜底上限 + 姿态注入 + 状态栏标识
 - transcript 哨兵 + `--resume` 恢复活跃 goal
 
@@ -50,7 +54,9 @@
 
 ### D48.3 — 判官输入保留渲染文本（作者裁决，与 CC 有意分歧）
 
-**Chosen**: 新渲染器 `render_history_transcript(messages)`（格式对齐 `collect_transcript`：`[tool call]`/`[tool result]` + 截断 + turn 边界标记），喂给现有 `run_semantic_verification`。
+**Chosen**: 新渲染器 `render_history_transcript(messages)` 输出
+`[tool call]`/`[tool result]`、截断与 turn 边界标记，喂给独立判官。初版复用
+headless semantic gate；D50 已将其替换为 `/goal` 专属三态 judge。
 
 **Why**: 行为层与 CC 消息数组等价（判官只见对话内容）；保住防注入定界符 + verify_judge 校准资产——不为形似弃校准。
 
@@ -131,7 +137,7 @@ REPL 在追加 `met`/`cleared` 哨兵时同步调用（`_extinguish_goal`）。`
 
 ### D48.8 — 姿态注入与 fail-closed
 
-**Chosen**: goal 激活期间 turn 级 system prompt 追加 `GOAL_PROMPT_SECTION`（含条件；复用 D47 turn_system_prompt 机制，不持久）。判官 fail-closed 不区分"判负"与"判官坏了"（v1 一律续跑，上限 + 可见 feedback 兜底）。
+**Chosen**: goal 激活期间 turn 级 system prompt 追加 `GOAL_PROMPT_SECTION`（含条件；复用 D47 turn_system_prompt 机制，不持久）。初版判官 fail-closed 不区分"判负"与"判官坏了"；D50 已修正为 `NOT_MET` 续跑、`ERROR` 暂停。
 
 **Why**: 条件文本是行为引力场（§5.3）；错误类型区分等触发。
 
@@ -148,7 +154,7 @@ REPL 在追加 `met`/`cleared` 哨兵时同步调用（`_extinguish_goal`）。`
 
 ### T1 — `render_history_transcript()` 渲染器
 
-**Description**: `_stream_render.py` 新增 message 列表版 transcript 渲染器，格式对齐 `collect_transcript`（`[tool call: name(input)]` / `[tool result (ok|error): 截断 output]`）+ turn 边界标记（供判官数 turn，D48.5）。
+**Description**: `_stream_render.py` 新增 message 列表版 transcript 渲染器（`[tool call: name(input)]` / `[tool result (ok|error): 截断 output]`）+ turn 边界标记（供判官数 turn，D48.5）。
 
 **Acceptance**:
 - [ ] 覆盖 TextBlock/ToolUseBlock/ToolResultBlock 渲染 + 截断 + 空历史 + turn 边界标记
@@ -197,7 +203,7 @@ REPL 在追加 `met`/`cleared` 哨兵时同步调用（`_extinguish_goal`）。`
 | `repl.py` | requires extension | goal 原语层（T2） |
 | `cli.py` | requires extension | 接线 + resume 扫描（T4） |
 | `config/settings.py` | requires extension | 两个字段（T3） |
-| `verification/semantic_gate` | unchanged | 判官原语原样复用（D48.3） |
+| `services/goal_judge` | added by D50 | `/goal` 专属判官；旧 gate 已退役 |
 | `services/snapshot\|session_memory\|compact` | unchanged | 哨兵走普通消息，snapshot 无感知 |
 | `engine/` | unchanged | 续跑是 REPL 层再调 run_query |
 | `prompts/` | unchanged（实测回填） | `goal_prompt_section` 落在 `repl.py`，prompts 层未动 |
@@ -215,4 +221,4 @@ F17 由此而生（改判 `requires extension`，见 D48.10）。教训：把某
 
 - [docs/ideas/cc-goal-design-reverse.md](../docs/ideas/cc-goal-design-reverse.md)
 - [47-plan-mode-boundary.md](./47-plan-mode-boundary.md)（地基）
-- `verification/semantic_gate.py`（L3′ 判官）· https://code.claude.com/docs/en/goal.md
+- `services/goal_judge.py`（当前 `/goal` 判官）· https://code.claude.com/docs/en/goal.md

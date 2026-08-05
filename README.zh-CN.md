@@ -11,23 +11,26 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 ![Type checked: mypy](https://img.shields.io/badge/type%20checked-mypy%20strict-1f5082)
 
-> **一个用 Python 从零重建、local-first 的 LLM agent harness。**
+> **一个用 Python 从零构建、local-first 的 Coding Agent 控制面。**
 >
-> 它把 OpenAI-compatible 模型变成 coding agent，并补上类型化工具执行、明确的
-> 审批边界、可恢复的长上下文状态、独立完成判官，以及有上限的无人值守修复循环。
+> OpenHarness 把 OpenAI-compatible 模型变成 coding agent，并负责它周围的
+> runtime：工具、授权、执行、上下文、扩展、恢复与外部完成判定。
 
-模型提供智能；OpenHarness 拥有模型周围的控制面：允许做什么、动作在哪里执行、
-哪些状态能跨过 context window、工作如何恢复，以及谁有权判断任务真的完成。
+模型提供智能；harness 管理动作的后果：模型允许做什么、动作在哪里执行、哪些
+证据能跨过 context window、领域能力如何加载，以及谁有权判断任务真的完成。
+本项目的核心主张是：可靠的 Coding Agent 不只取决于模型，也同样取决于这些
+控制面决策。
 
-这是一个由一名开发者与 coding agents 共同建造的独立学习实现。它不包装其他
-agent CLI，也不是对上游 OpenHarness 实现的复制。
+## 证据快照
 
-## 证据
+以下数字锚定在 2026-08-02 的 CLI 稳定基线 commit
+[`9b4375e`](https://github.com/maisieyang/build-my-own-harness/commit/9b4375e)，
+而不是把会持续变化的计数写成永久“当前值”。
 
 | 信号 | 当前证据 |
 |---|---|
-| SWE-bench Lite | qwen3.7-max、关闭 thinking，使用自建官方 harness 评测，**170/300 resolved（56.7%）** |
-| 测试套件 | **2,783 项测试**，当前覆盖率 **95.29%**，门禁 **>=95%** |
+| SWE-bench Lite | qwen3.7-max、关闭 thinking，使用部署在自建 ECS 上的 SWE-bench 官方 evaluator，**170/300 resolved（56.7%）** |
+| 测试套件 | **2,783 个 collected test items**；stable-core coverage 门禁 **>=95%** |
 | 静态质量 | 全量 `src/` 通过 Ruff lint/format 与 `mypy --strict` |
 | 兼容性 | CI 覆盖 Python 3.10 和 3.11 |
 | 设计留痕 | Boundary decisions、capability plans、dogfood 复盘、eval artifacts 与 benchmark records 全部和代码一起提交 |
@@ -37,6 +40,26 @@ Benchmark 直接驱动公开的 `oh` CLI，不使用私有的 benchmark-only age
 失败分类见
 [`benchmarks/swebench/TAXONOMY.md`](./benchmarks/swebench/TAXONOMY.md)，原始
 artifact 在 [`benchmarks/swebench/out/`](./benchmarks/swebench/out)。
+
+## 一分钟体验
+
+裸 `oh` 直接进入 conversation-first REPL。规划、审批和执行是三个独立的状态转换：
+
+```text
+>>> /plan 检查当前实现，并给出一份验证计划
+
+plan mode -- approve this plan?
+  [1] yes, approve -- return to default mode
+  [2] no, keep planning
+  [3] no, discard plan mode (back to default)
+plan> 1
+
+>>> /goal 执行刚批准的计划；运行 `uv run pytest -m 'not integration' -q`；最多 10 turns 后停止
+```
+
+`/plan` 在权限层移除写操作工具；批准只返回 default posture，不自动执行。
+`/goal` 会立即开工，并在每个 assistant turn 后交给一个独立、禁用工具的判官，
+依据累积证据判断是否完成。
 
 ## 系统模型
 
@@ -59,74 +82,60 @@ while True:
 
 ```mermaid
 flowchart LR
-    U["用户、脚本或队列"] --> C["REPL 与 headless CLI"]
+    U["用户或脚本"] --> C["REPL 与 headless CLI"]
     C --> E["Agent engine"]
     E <--> M["OpenAI-compatible 模型"]
     E --> P["Permissions 与 hooks"]
     P --> X["Host、Docker 或 gVisor"]
     E <--> S["Compaction、snapshots 与 memory"]
-    C --> V["命令闸或独立 LLM 判官"]
-    V -->|"修复反馈"| E
-    C --> O["Journals、evals 与 SWE-bench"]
+    C --> V["独立 /goal 判官"]
+    V -->|"checker feedback"| E
+    C --> O["Evals 与 SWE-bench"]
 ```
 
-OpenHarness 负责的主要边界是：
+控制面的 ownership model 分为四部分：
 
-1. **Runtime 与 protocol。** OpenAI-compatible streaming、Pydantic v2 wire
-   types、tool-call parsing、retry、事件渲染和结构化日志。
-2. **授权与隔离。** allow/ask/deny 规则、敏感路径与不可逆 Git 红线、生命周期
-   hooks、headless fail-closed，以及可选 Docker/gVisor 执行。
-3. **长任务状态。** Tool-result 截断、反应式 context 恢复、显式 compaction、
-   项目 memory、snapshots 和 session resume。
-4. **能力扩展。** Skills、slash commands、mode bundles、stdio MCP、原生
-   plugins、部分 Claude Code plugin discovery，以及有深度上限的 `SpawnAgent`
-   委派。
-5. **外部完成判定。** 确定性命令闸、防注入语义判官、repair loops、goal
-   decomposition、run journals、worktree isolation 和持久化 autopilot queue。
-6. **Evaluation。** Capability-level eval、programmatic scorer、LLM judge
-   meta-evaluation、replay gates，以及 subprocess 驱动的 SWE-bench adapter。
+1. **动作。** Typed streaming 和 tool call 进入 allow/ask/deny 授权层、生命周期
+   hooks、不可逆操作红线，以及 host 或 Docker/gVisor 执行环境。
+2. **证据与状态。** Tool results、compaction、memory 与 snapshots 保存长任务
+   恢复所需的可信状态。
+3. **能力。** Skills、commands、mode bundles、MCP、plugins 与 subagents 扩展
+   action space，而不为 engine 增加新的 dispatch 路径。
+4. **完成。** 独立语义判官拥有 `/goal` 的停止权；eval 把这项机制的质量与
+   benchmark 任务表现分开测量。
 
-## 三种执行循环
+## Context 与证据生命周期
 
-OpenHarness 暴露三种不同的自治循环。它们共用同一个 agent engine，但刻意采用
-不同的 context 和停止语义。
+长上下文问题不能只靠扩大 prompt 解决。Coding Agent 必须保住未来决策依赖的证据，
+同时丢弃已经不值得继续占用 token 的体量。
 
-| 入口 | Context | 完成闸 | 适用场景 |
-|---|---|---|---|
-| `oh` / `oh chat` + `/goal` | 一段持续对话 | 每次回复后交给禁用工具的 LLM 判官 | 保留上下文的交互式实现 |
-| `oh ask -p` + `--max-iter` | fresh attempt + 结构化 repair feedback | 命令退出码或语义判官 | 脚本、CI 和有界 headless 任务 |
-| `oh autopilot` | 持久化优先级队列 | 必填的命令验证 | 顺序执行的无人值守任务 |
+OpenHarness 在多个边界管理这条生命周期：
 
-这些控制项职责不同：
+- tool output 采用 head-and-tail 截断，同时保住身份上下文和结尾的汇总或错误；
+- prompt-too-long 触发有上限的反应式恢复，而不是丢失当前 turn；
+- 显式 compaction 把结构化摘要与未经压缩的最近消息尾部拼接；
+- project memory 与逐 turn checkpoint 把持久事实从原始 transcript 中分离；
+- snapshots 与 session resume 把恢复做成持久化状态转换，而不是 prompt 约定。
 
-- `--auto` 只改变权限姿态，跳过 confirmation；它不是完成循环。
-- `/goal` 在当前交互式 conversation 中续跑。
-- `--goal-condition` 对 headless attempt 做语义判定。
-- `--verify` 使用确定性的命令退出码。
-- `autopilot` 选取队列 card，再运行 headless repair loop。
+一次 dogfood 直接说明了为什么这是“证据问题”：Bash 原先只保留输出头部，截掉了
+pytest 最后一行结果；模型因此没有真数字可引用，编造了一个数字，并在下一轮继续
+引用自己的编造。生产修复改为保留输出两端并加入回归测试。证据见
+[`learnings/dogfood-day1-tool-skill.md`](./learnings/dogfood-day1-tool-skill.md)
+和 [`src/openharness/tools/bash.py`](./src/openharness/tools/bash.py)。
 
-### Plan、审批、再执行
+## 外部完成判定与 Evaluation
 
-裸 `oh` 直接进入 conversation-first REPL。主要交互路径是：
+工作模型无权宣布自己的工作正确。`/goal` 是唯一的 completion controller：它
+保留同一段 conversation，并由独立判官决定是否需要继续下一 turn。`--auto`
+仍然是正交的权限姿态，不负责判断完成。
 
-```text
->>> /plan 检查当前实现，并给出一份验证计划
+### 交互控制：`/plan` 与 `/goal`
 
-plan mode -- approve this plan?
-  [1] yes, approve -- return to default mode
-  [2] no, keep planning
-  [3] no, discard plan mode (back to default)
-plan> 1
+`/plan` 是权限层钳制，不是 prompt 约定：`Edit`、`Write` 与 `Bash` 都被 deny，
+模型也没有批准自己的工具。审批只让 session 回到 default mode。
 
->>> /goal 执行刚批准的计划；运行 `uv run pytest -q`；最多 10 turns 后停止
-```
-
-`/plan` 是权限层钳制，不是 prompt 约定：`Edit`、`Write` 与 `Bash` 都被
-deny。模型没有退出 plan mode 的工具。批准只让 session 回到 default mode；
-不会自动执行计划，也不会暗中授予新的 permission preset。
-
-`/goal <condition>` 会立即开工。每次 assistant 回复后，harness 会把累计
-transcript 交给一次独立、禁用工具的 LLM 调用：
+`/goal <condition>` 会立即开工。每个 assistant turn 之后，harness 会渲染累积
+transcript，并交给一次独立、禁用工具的 LLM 调用：
 
 ```text
 工作模型的一轮
@@ -138,60 +147,63 @@ transcript 交给一次独立、禁用工具的 LLM 调用：
                                               并在同一 session 继续
 ```
 
-Judge 异常、无法解析的输出和非法 score 一律 fail closed。默认兜底是连续 25 个
-auto-turn；真正的停止条件应该写进 goal。活跃 goal 可通过 `oh chat --resume`
-恢复。
+Judge 异常和无法解析的输出一律 fail closed；hard turn cap 为 false negative 与
+provider failure 提供上界。Goal 状态与 conversation 一起持久化，包含终态哨兵，
+因此 `oh chat --resume` 不会复活已经完成的工作。
 
-实现入口是
-[`src/openharness/verification/semantic_gate.py`](./src/openharness/verification/semantic_gate.py)，
-session 状态机位于
-[`src/openharness/repl.py`](./src/openharness/repl.py) 与
-[`src/openharness/cli.py`](./src/openharness/cli.py)。
+### Headless 执行与隔离
 
-### Headless repair loop
-
-当完成条件有可执行 oracle 时，使用确定性命令闸：
+`oh ask -p` 保留为脚本、benchmark 与 CI 使用的单次运行原语。它执行一个 prompt
+并报告 engine 终态，不拥有第二套 completion loop。
 
 ```bash
-uv run oh ask -p "修复失败测试；不要弱化断言" \
+uv run oh ask -p "检查当前仓库并报告风险最高的缺口" \
   --output-format json \
-  --verify "uv run pytest -q" \
-  --max-iter 5 \
   --isolate
 ```
 
-当条件无法收敛为 exit code 时，使用独立语义判官：
+`--isolate` 把这一次运行放进独立 Git worktree。Sandbox、worktree 与结构化输出
+继续作为执行原语存在，而不是另一套任务完成权的拥有者。
 
-```bash
-uv run oh ask -p "把发布文档更新到当前状态" \
-  --output-format json \
-  --goal-condition "CHANGELOG 和 release notes 与已发布行为一致" \
-  --max-iter 4
-```
+### Evaluation 阶梯
 
-每次失败都会变成结构化反馈，进入一个 fresh context。`--decompose` 先把 goal
-拆成有序 sub-goals；`--isolate` 在 Git worktree 内执行；append-only run
-journal 支持 `oh run show` 与 `--resume-run`。
+项目把机制测试与模型行为证据分开：
 
-### Autopilot 队列
+1. Unit 和 integration tests 锁定 protocol、状态机与失败路径不变量。
+2. Capability evals 覆盖 tool choice、error feedback、skill trigger、memory、
+   compaction 与 completion judge，并使用 programmatic scorer、cassette/replay
+   与 judge meta-evaluation。
+3. SWE-bench 通过公开 CLI 驱动 300 个真实仓库任务，再把 execution records 与
+   官方 verdict join，进行 failure attribution。
 
-Autopilot 是持久化、去重、按优先级评分的 intake queue。每张 card 至少需要一条
-确定性验证命令。
+`/goal` 专属 completion judge 位于
+[`src/openharness/services/goal_judge.py`](./src/openharness/services/goal_judge.py)；
+eval datasets 与明确 pass bar 位于 [`evals/`](./evals)。
 
-```bash
-uv run oh autopilot enqueue \
-  --goal "修复登录回归" \
-  --verify "uv run pytest -q" \
-  --max-iter 3 \
-  --source-ref "manual:login-regression" \
-  --label bug
+## 能力基座与 Plugin Dogfood
 
-uv run oh autopilot list
-uv run oh autopilot run-next
-```
+扩展能力会在 model turn 开始前被翻译成已有 runtime primitives。Skill body 作为
+tool-result 证据进入上下文；mode bundle 组合 prompt、tool catalog、hooks 与
+permission overlay；plugin 则 fan out 到 first-party capability 使用的同一组 store。
+Engine 不存在单独的“plugin execution”路径。
 
-`run-next` 原子领取优先级最高的 queued card，并把 repair-loop 结果记录为
-completed 或 failed。
+配套仓库 [`finance-skills`](https://github.com/maisieyang/finance-skills) 是这条
+垂直化路径的实证。一个包含 4 个 skills 的 Claude Code-format 信审 plugin，未经
+文件改名或 schema 改写，直接复制进 OpenHarness plugin 目录。OpenHarness 完成
+discovery、统一 manifest 翻译、skill namespacing，并通过既有 `LoadSkill`
+envelope 路径触发；envelope helper 在接入 plugin 的过程中保持零修改。
+
+Dogfood 也逼出了两条诚实边界：
+
+- empty-args synthetic envelope 触发 thinking provider 的协议错误；最终修复选择
+  provider-neutral message shape，而不是增加 Qwen-specific branch；
+- finance-skills 的 Claude Code `.mcp.json` 使用 HTTP/OAuth，而 OpenHarness MCP
+  仅支持 stdio，因此不导入这些配置；discovery 明确报告零 MCP server，不假装
+  transport 兼容。
+
+设计与运行证据见
+[`decisions/39-phase-19-boundary.md`](./decisions/39-phase-19-boundary.md) 和
+[`learnings/phase-19.md`](./learnings/phase-19.md)。
 
 ## Benchmark 改变了什么
 
@@ -255,9 +267,7 @@ uv run oh "检查当前仓库，指出风险最高的缺口"
 | `oh plugins` | 查看已安装的原生与 Claude Code-format plugins |
 | `oh snapshot` | 列出、查看和清理 conversation snapshots |
 | `oh eval` | 运行 capability-anchored prompt eval |
-| `oh autopilot` | 入队、列出和执行 repair-loop goals |
 | `oh bench swebench` | 获取并运行 SWE-bench Lite cases |
-| `oh run show` | 重建 journal-backed headless run |
 
 以 `uv run oh --help` 和 `uv run oh <command> --help` 为 option surface 的
 权威来源。所有配置都使用 `OPENHARNESS_*` namespace，见
@@ -266,14 +276,15 @@ uv run oh "检查当前仓库，指出风险最高的缺口"
 ## 质量契约
 
 ```bash
-uv run pytest -q
+uv run pytest -m "not integration" -q
 uv run mypy --strict src/
 uv run ruff check
 uv run ruff format --check
 ```
 
-- 默认测试不需要 live model 或外部服务。
-- Integration、Docker、gVisor 与 live-model tests 都显式把关。
+- CI/default gate 不需要 live model 或外部服务。
+- `uv run pytest -m integration` 运行显式隔离的真实进程或 live-service 检查；
+  根据选中的测试，可能需要 Node、Docker、gVisor、凭据或网络。
 - Coverage 必须保持在 95% 以上。
 - CI 在 Python 3.10 和 3.11 上运行 lint、format、strict typing 与 tests。
 - Dogfood failure 会变成 regression test；边界发生变化时，还会追加
@@ -287,9 +298,11 @@ uv run ruff format --check
   tree，不导入 Claude Code `.mcp.json` 和 declarative agents。
 - MCP transport 仅支持 stdio。
 - Docker/gVisor isolation 是可选项；默认仍是 host execution。
-- Autopilot 是本地顺序队列，不是 distributed scheduler 或 GitHub PR service。
-- Semantic judge 具有概率性，因此必须 fail closed，并受明确的 turn/iteration
-  cap 约束。只要存在可执行 oracle，就应优先使用 `--verify`。
+- `/goal` judge 具有概率性，只读取 conversation evidence 而不直接读取操作系统
+  状态，因此必须 fail closed，并受明确的 turn cap 约束。
+- Permission、sandbox、worktree isolation 与 completion 彼此正交；`/goal` 遇到
+  需要人工确认的 permission failure 会暂停，但无人值守 permission policy 仍是
+  开放设计边界。
 
 ## 设计留痕
 

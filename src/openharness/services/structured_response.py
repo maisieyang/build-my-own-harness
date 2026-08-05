@@ -1,6 +1,5 @@
-"""Shared parsing helper for callers of :func:`summarize` that expect a
-structured (JSON) response — currently ``verification/semantic_gate.py``
-(L3' judge) and ``services/decompose.py`` (L5 decomposer).
+"""Parsing helpers for probabilistic structured responses such as the
+independent ``/goal`` judge.
 """
 
 from __future__ import annotations
