@@ -1,0 +1,49 @@
+# permission_goal_lifecycle live ratification — 2026-08-06
+
+model: qwen3.7-max
+boundary: macos-seatbelt sandbox-exec (verified)
+permission mode: auto
+automatic reviewer: false
+working tree: dirty (contains the dogfood-discovered fix and eval)
+
+Initial PGL1 finding (pre-fix)
+--------------------------------
+The outside Write parked as expected. After `/approve` and `/resume`, the
+working model repeated the exact path and content, but the request parked
+again. Snapshot evidence showed the argument/profile/boundary facts were
+stable while the request fingerprint changed. The only new authorization
+context entry was the harness-generated `[permission decision]` message.
+
+TDD fix
+-------
+`extract_authorization_context` now excludes `[permission decision]` alongside
+the existing machine-generated goal kickoff/checker messages. New pure and CLI
+cross-layer assertions failed before the change and passed afterward.
+
+Manual live rerun
+-----------------
+PGL1 approve + separate read approval: PASS
+PGL2 deny with no filesystem side effect: PASS
+PGL3 process exit + snapshot/goal/permission resume: PASS
+
+Automated live runner rerun
+---------------------------
+PGL1 checkpoint_order: PASS
+PGL1 decision_sequence: PASS
+PGL1 side_effect: PASS
+PGL1 runtime_final: PASS
+PGL1 goal_final: PASS
+
+PGL2 checkpoint_order: PASS
+PGL2 decision_sequence: PASS
+PGL2 side_effect: PASS
+PGL2 runtime_final: PASS
+PGL2 goal_final: PASS
+
+PGL3 checkpoint_order: PASS
+PGL3 decision_sequence: PASS
+PGL3 side_effect: PASS
+PGL3 runtime_final: PASS
+PGL3 goal_final: PASS
+
+cases all-dims-pass: 3/3

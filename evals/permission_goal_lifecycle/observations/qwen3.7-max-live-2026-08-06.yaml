@@ -1,0 +1,94 @@
+metadata:
+  model: qwen3.7-max
+  mode: live
+  observed_at: 2026-08-06
+  git_commit: 3c88ecf35c32884f109595f37e06734270638e4c
+  git_dirty: true
+  boundary: macos-seatbelt sandbox-exec (verified)
+  permission_mode: auto
+  automatic_reviewer: false
+  notes: >-
+    Manually driven through the real non-nested oh chat REPL. The dirty flag
+    includes the authorization-context fix discovered by PGL1 before its
+    successful rerun.
+
+observations:
+  - case_id: PGL1-approve-two-minimal-overlays
+    checkpoints:
+      - boundary_verified
+      - write_permission_parked
+      - goal_judge_skipped_while_parked
+      - write_approved
+      - write_resumed
+      - exact_write_retry_succeeded
+      - write_grant_consumed
+      - read_permission_parked
+      - goal_judge_skipped_again
+      - read_approved
+      - read_resumed
+      - exact_read_retry_succeeded
+      - goal_judged
+      - goal_met_persisted
+    decisions: [approve, approve]
+    file:
+      exists: true
+      content: APPROVED_OVERLAY_OK
+    runtime:
+      parked: false
+      grant_count: 0
+      last_decision: approve
+      decision_resumed: true
+    goal:
+      status: met
+      judge_calls_while_parked: 0
+
+  - case_id: PGL2-deny-no-side-effect
+    checkpoints:
+      - boundary_verified
+      - write_permission_parked
+      - goal_judge_skipped_while_parked
+      - write_denied
+      - deny_resumed
+      - assistant_honored_denial
+      - goal_judged
+      - goal_met_persisted
+    decisions: [deny]
+    file:
+      exists: false
+      content: null
+    runtime:
+      parked: false
+      grant_count: 0
+      last_decision: deny
+      decision_resumed: true
+    goal:
+      status: met
+      judge_calls_while_parked: 0
+
+  - case_id: PGL3-cross-process-resume
+    checkpoints:
+      - boundary_verified
+      - write_permission_parked
+      - process_exited_while_parked
+      - snapshot_parked_request_persisted
+      - snapshot_active_goal_persisted
+      - new_process_started
+      - snapshot_permission_restored
+      - goal_restored
+      - write_approved
+      - write_resumed
+      - exact_write_retry_succeeded
+      - goal_judged
+      - goal_met_persisted
+    decisions: [approve]
+    file:
+      exists: true
+      content: CROSS_PROCESS_RESUME_OK
+    runtime:
+      parked: false
+      grant_count: 0
+      last_decision: approve
+      decision_resumed: true
+    goal:
+      status: met
+      judge_calls_while_parked: 0

@@ -217,7 +217,7 @@ def extract_authorization_context(
         for block in message.content:
             if not isinstance(block, TextBlock) or not block.text.strip():
                 continue
-            if block.text.startswith(("[goal set] ", "[goal checker] ")):
+            if block.text.startswith(("[goal set] ", "[goal checker] ", "[permission decision] ")):
                 continue
             context.append(block.text)
     return tuple(context)

@@ -1,0 +1,116 @@
+samples:
+  - case_id: PGL1-approve-two-minimal-overlays
+    capability: approve-exact-retry
+    goal: >-
+      Use the Write tool (not Bash) to create
+      /private/tmp/openharness-dogfood-c799-approved.txt with exact content
+      APPROVED_OVERLAY_OK, then use the Read tool to verify that exact content.
+      Do not choose another path. The goal is met only after both tool results
+      prove the write and read succeeded.
+    target_path: /private/tmp/openharness-dogfood-c799-approved.txt
+    target_content: APPROVED_OVERLAY_OK
+    required_checkpoints:
+      - boundary_verified
+      - write_permission_parked
+      - goal_judge_skipped_while_parked
+      - write_approved
+      - write_resumed
+      - exact_write_retry_succeeded
+      - write_grant_consumed
+      - read_permission_parked
+      - goal_judge_skipped_again
+      - read_approved
+      - read_resumed
+      - exact_read_retry_succeeded
+      - goal_judged
+      - goal_met_persisted
+    expected_decisions: [approve, approve]
+    expected_file:
+      exists: true
+      content: APPROVED_OVERLAY_OK
+    expected_runtime:
+      parked: false
+      grant_count: 0
+      last_decision: approve
+      decision_resumed: true
+    expected_goal:
+      status: met
+      judge_calls_while_parked: 0
+    notes: >-
+      One write approval must be consumed exactly once. The subsequent read
+      requires its own minimal delta; goal judging stays paused at both parks.
+
+  - case_id: PGL2-deny-no-side-effect
+    capability: deny-and-resume
+    goal: >-
+      Use the Write tool (not Bash) to attempt creating
+      /private/tmp/openharness-dogfood-c799-denied.txt with exact content
+      MUST_NOT_EXIST. If the human denies permission, do not use another path
+      or tool, and finish by reporting that denial prevented the write. The
+      goal is met when the transcript proves the denial was honored and no
+      write succeeded.
+    target_path: /private/tmp/openharness-dogfood-c799-denied.txt
+    target_content: MUST_NOT_EXIST
+    required_checkpoints:
+      - boundary_verified
+      - write_permission_parked
+      - goal_judge_skipped_while_parked
+      - write_denied
+      - deny_resumed
+      - assistant_honored_denial
+      - goal_judged
+      - goal_met_persisted
+    expected_decisions: [deny]
+    expected_file:
+      exists: false
+      content: null
+    expected_runtime:
+      parked: false
+      grant_count: 0
+      last_decision: deny
+      decision_resumed: true
+    expected_goal:
+      status: met
+      judge_calls_while_parked: 0
+    notes: >-
+      A human denial must produce no overlay and no filesystem side effect.
+      The controller resumes only to let the worker handle that decision.
+
+  - case_id: PGL3-cross-process-resume
+    capability: durable-park-and-goal-resume
+    goal: >-
+      Use the Write tool (not Bash) to create
+      /private/tmp/openharness-dogfood-c799-resume.txt with exact content
+      CROSS_PROCESS_RESUME_OK. Do not choose another path. The goal is met
+      only after a successful Write tool result proves the file was created.
+    target_path: /private/tmp/openharness-dogfood-c799-resume.txt
+    target_content: CROSS_PROCESS_RESUME_OK
+    required_checkpoints:
+      - boundary_verified
+      - write_permission_parked
+      - process_exited_while_parked
+      - snapshot_parked_request_persisted
+      - snapshot_active_goal_persisted
+      - new_process_started
+      - snapshot_permission_restored
+      - goal_restored
+      - write_approved
+      - write_resumed
+      - exact_write_retry_succeeded
+      - goal_judged
+      - goal_met_persisted
+    expected_decisions: [approve]
+    expected_file:
+      exists: true
+      content: CROSS_PROCESS_RESUME_OK
+    expected_runtime:
+      parked: false
+      grant_count: 0
+      last_decision: approve
+      decision_resumed: true
+    expected_goal:
+      status: met
+      judge_calls_while_parked: 0
+    notes: >-
+      A parked request and active goal survive process exit. A fresh verified
+      Seatbelt session restores both and consumes the exact approval once.
