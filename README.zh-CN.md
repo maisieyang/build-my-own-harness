@@ -297,7 +297,14 @@ uv run ruff format --check
   Messages adapter。
 - Claude Code plugin compatibility 当前只发现 plugin metadata 与 `SKILL.md`
   tree，不导入 Claude Code `.mcp.json` 和 declarative agents。
-- MCP transport 仅支持 stdio。
+- MCP transport 仅支持 stdio。其子进程始终只获得最小、已过滤凭据的环境变量；
+  未启用独立 sandbox 的 stdio server 必须出现在显式 trusted-server 列表中，否则
+  启动会 fail closed。
+- MCP、Web、Browser 与 Computer Use 是彼此独立的 external-effect policy surface。
+  本地 filesystem sandbox 不能证明这些调用安全；即使 surface 配置为宽泛的
+  `allow`，不可信、未知、可修改或破坏性的外部调用仍需要一次精确审批。
+- Hooks 与 plugins 是 opt-in、进程内运行的 trusted control-plane code。它们可以
+  拒绝或改写调用，但改写后的最终参数会在 dispatch 前重新授权。
 - Isolation 仍是 opt-in。macOS 上由 Seatbelt backend 覆盖统一的本地 data plane；
   Docker 明确保持 command-only backend，未启用 sandbox 的 posture 继续使用 legacy
   host execution。

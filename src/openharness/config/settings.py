@@ -829,6 +829,7 @@ class Settings(BaseSettings):
                     name=item["name"],
                     command=tuple(item["command"]),
                     env=dict(item.get("env", {})),
+                    sandbox=bool(item.get("sandbox", False)),
                 )
                 for item in value
             )

@@ -29,6 +29,7 @@ from openharness.plugins.loader import (
     namespaced,
 )
 from openharness.skills.store import EmptySkillStore
+from openharness.tools import ExecutionDomain, TrustedControlSurface
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -63,6 +64,10 @@ class TestNamespacedHelper:
 
     def test_separator_is_double_underscore(self) -> None:
         assert NAMESPACE_SEPARATOR == "__"
+
+    def test_plugin_catalog_explicitly_declares_trusted_control_plane(self) -> None:
+        assert LoadedPluginCatalogs.execution_domain is ExecutionDomain.TRUSTED_CONTROL
+        assert LoadedPluginCatalogs.trusted_control_surface is TrustedControlSurface.PLUGINS
 
     def test_namespaced_satisfies_name_pattern(self) -> None:
         """The namespaced result must match the regex used by all 5

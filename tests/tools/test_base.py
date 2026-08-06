@@ -26,6 +26,7 @@ from openharness.protocols import ToolSpec
 from openharness.tools.base import (
     BaseTool,
     ExecutionDomain,
+    ExternalEffectKind,
     ExternalEffectSurface,
     ToolExecutionContext,
     ToolRegistry,
@@ -125,6 +126,30 @@ class TestFakeToolRoundTrip:
         assert tool.description == "Fake tool used in tests."
         assert tool.input_model is FakeInput
 
+
+class TestExternalEffectDeclaration:
+    def test_external_tool_without_effect_kind_fails_registration(self) -> None:
+        class _UnclassifiedExternal(_FakeTool):
+            execution_domain = ExecutionDomain.EXTERNAL_EFFECT
+            external_effect_surface = ExternalEffectSurface.MCP
+
+        registry = ToolRegistry()
+
+        with pytest.raises(ValueError, match="external effect kind"):
+            registry.register(_UnclassifiedExternal())
+
+    def test_external_tool_with_complete_descriptor_registers(self) -> None:
+        class _ClassifiedExternal(_FakeTool):
+            execution_domain = ExecutionDomain.EXTERNAL_EFFECT
+            external_effect_surface = ExternalEffectSurface.WEB
+            external_effect_kind = ExternalEffectKind.NETWORK_READ
+            external_effect_trusted = True
+
+        registry = ToolRegistry()
+        registry.register(_ClassifiedExternal())
+
+        assert registry.get("Fake").external_effect_kind is ExternalEffectKind.NETWORK_READ
+
     async def test_execute_returns_tool_result(self) -> None:
         tool = _FakeTool()
         args = FakeInput(value="hello")
@@ -196,6 +221,8 @@ class TestToolRegistry:
             input_model = FakeInput
             execution_domain = ExecutionDomain.EXTERNAL_EFFECT
             external_effect_surface = ExternalEffectSurface.WEB
+            external_effect_kind = ExternalEffectKind.NETWORK_READ
+            external_effect_trusted = True
 
             async def execute(self, args: FakeInput, context: ToolExecutionContext) -> ToolResult:
                 del args, context
@@ -205,7 +232,7 @@ class TestToolRegistry:
         registry.register(_External())
 
         assert registry.external_effect_report() == {
-            ExternalEffectSurface.WEB: ("External",),
+            ExternalEffectSurface.WEB: ("External [effect=network_read, trust=trusted]",),
         }
 
     def test_register_and_get_round_trip(self) -> None:

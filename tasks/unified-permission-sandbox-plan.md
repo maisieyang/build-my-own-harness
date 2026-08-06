@@ -11,7 +11,7 @@ runtime boundary. All model-controlled local effects either execute inside
 that boundary, receive one exact approved overlay, or park. Goal remains a
 consumer of the session runtime and never owns permissions.
 
-## Implementation status — 2026-08-05
+## Implementation status — 2026-08-06
 
 - S0 complete: the premature permission resolver/reviewer/park experiment was
   removed; final-argument reauthorization and context-cwd normalization remain.
@@ -41,21 +41,26 @@ consumer of the session runtime and never owns permissions.
   timeouts, and whole-process-group termination. Only proxy-recorded policy
   denials become typed violations; DNS, upstream, and ordinary command failures
   remain ordinary failures.
-- S6 complete: MCP, Web, Browser, and Computer Use are independent external
-  policy surfaces and never inherit local-sandbox trust. MCP adapters are
-  classified as external effects, optional stdio MCP sandboxing fails closed,
-  and hook-modified final arguments are reauthorized before the external policy
-  path runs. `/permissions` names registered external surfaces as outside the
-  local sandbox.
-- S7 complete: exact final-argument/profile/boundary fingerprints drive
-  permission requests; a tool-disabled reviewer can grant one exact overlay,
-  while hard denies, reviewer failures, unsupported overlays, and repeated
-  violations fail closed or park. Typed park/approve/deny/resume state is
-  durable in snapshots, resume rejects boundary drift, multi-tool parked turns
-  persist well-formed tool-result pairs, and Goal pauses before its judge
-  without consuming an automatic turn.
-- Verification for S3-S7 on 2026-08-05: `2732 passed, 11 deselected`, total
-  coverage `95.04%`, strict mypy clean, Ruff clean, and format check clean.
+- S6 complete: external authorization is active independently of the local
+  sandbox. Every external tool declares a surface, effect kind, and trust fact;
+  registration fails closed when the effect kind is absent. Trusted MCP
+  annotations classify read-only, mutating, destructive, and unknown calls,
+  while untrusted annotations are ignored. A broad surface `allow` applies only
+  to trusted, explicitly read-only calls; untrusted, unknown, mutating, and
+  destructive calls still require an exact approval. WebSearch/WebFetch use the
+  separate Web policy even without a local sandbox. stdio MCP always receives a
+  minimal credential-filtered environment; an untrusted server without its own
+  sandbox is rejected before spawn. Hooks and plugins explicitly declare
+  trusted in-process control-plane authority, and hook-modified arguments are
+  reauthorized before external review. `/permissions` lists MCP, Web, Browser,
+  Computer Use, stdio server postures, and trusted control surfaces, including
+  unregistered and locally uncovered boundaries.
+- S7 has substantial existing implementation but is not accepted by this
+  status update. Its full Goal3 acceptance matrix and lifecycle verification
+  remain separate work; S6 does not claim that local boundary overlays,
+  park/resume, or Goal pause semantics are complete.
+- S6 verification on 2026-08-06: `2743 passed, 11 deselected`, total coverage
+  `95.06%`, strict mypy clean, Ruff clean, and format check clean.
 
 ## S0 — Correctness floor and experiment cleanup
 

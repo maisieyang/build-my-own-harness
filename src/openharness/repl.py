@@ -32,6 +32,7 @@ from openharness.permissions.rules import (
     PermissionRules,
     plan_mode_preset,
 )
+from openharness.tools import ExternalEffectSurface
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -40,9 +41,9 @@ if TYPE_CHECKING:
     from prompt_toolkit.document import Document
 
     from openharness.execution import EnforcedBoundary
-    from openharness.permissions import RuntimePermissionProfile
+    from openharness.permissions import ExternalToolPolicy, RuntimePermissionProfile
     from openharness.protocols.messages import ConversationMessage
-    from openharness.tools import ExecutionDomain, ExternalEffectSurface
+    from openharness.tools import ExecutionDomain
 
 
 @dataclass(frozen=True)
@@ -452,9 +453,12 @@ def format_status_bar(
 def format_permissions_status(
     *,
     profile: RuntimePermissionProfile | None,
+    external_policy: ExternalToolPolicy,
     boundary: EnforcedBoundary | None,
     tool_domains: Mapping[ExecutionDomain, tuple[str, ...]],
     external_surfaces: Mapping[ExternalEffectSurface, tuple[str, ...]],
+    mcp_server_postures: Mapping[str, str],
+    trusted_control_status: Mapping[str, str],
     legacy_mode: str,
 ) -> str:
     """Render configured permission intent separately from enforced facts.
@@ -470,13 +474,12 @@ def format_permissions_status(
         lines.append(f"  canonical profile: {profile.name}")
         lines.append(f"  profile fingerprint: {profile.fingerprint[:12]}")
     lines.append(f"  legacy mode: {legacy_mode}")
-    if profile is not None:
-        policy = profile.external_tools
-        lines.append(
-            "  external policy: "
-            f"mcp={policy.mcp.value}, web={policy.web.value}, "
-            f"browser={policy.browser.value}, computer_use={policy.computer_use.value}"
-        )
+    lines.append(
+        "  external policy (independent of local sandbox): "
+        f"mcp={external_policy.mcp.value}, web={external_policy.web.value}, "
+        f"browser={external_policy.browser.value}, "
+        f"computer_use={external_policy.computer_use.value}"
+    )
 
     lines.append("Installed facts")
     if boundary is None:
@@ -495,12 +498,25 @@ def format_permissions_status(
     else:
         for domain, tools in sorted(tool_domains.items(), key=lambda item: item[0].value):
             lines.append(f"  {domain.value}: {', '.join(tools)}")
-    lines.append("External surfaces (not covered by local sandbox)")
-    if not external_surfaces:
-        lines.append("  none registered")
+    lines.append("External surfaces")
+    for surface in ExternalEffectSurface:
+        tools = external_surfaces.get(surface, ())
+        tool_status = f"tools={', '.join(tools)}" if tools else "not registered"
+        mode = getattr(external_policy, surface.value).value
+        lines.append(f"  {surface.value}: {mode}; {tool_status}; not covered by local sandbox")
+
+    lines.append("stdio MCP process postures")
+    if not mcp_server_postures:
+        lines.append("  none configured")
     else:
-        for surface, tools in sorted(external_surfaces.items(), key=lambda item: item[0].value):
-            lines.append(f"  {surface.value}: {', '.join(tools)}")
+        for name, posture in sorted(mcp_server_postures.items()):
+            lines.append(f"  {name}: {posture}")
+
+    lines.append("Trusted control plane (in-process host authority; not sandboxed)")
+    for control_surface in ("hooks", "plugins"):
+        lines.append(
+            f"  {control_surface}: {trusted_control_status.get(control_surface, 'not declared')}"
+        )
     return "\n".join(lines)
 
 

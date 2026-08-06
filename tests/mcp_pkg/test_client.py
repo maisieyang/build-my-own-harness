@@ -151,6 +151,22 @@ class TestInitFailures:
         with pytest.raises(McpInitError, match="sandbox cwd"):
             _build_stdio_parameters(cfg, sandbox_cwd=None)
 
+    def test_unsandboxed_stdio_server_still_gets_minimal_environment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DATABASE_PASSWORD", "ambient-secret")
+        cfg = McpServerConfig(
+            name="TrustedLocal",
+            command=("node", "server.js"),
+            env={"EXPLICIT_TOKEN": "user-authorized"},
+        )
+
+        params = _build_stdio_parameters(cfg, sandbox_cwd=None)
+
+        assert params.env is not None
+        assert "DATABASE_PASSWORD" not in params.env
+        assert params.env["EXPLICIT_TOKEN"] == "user-authorized"
+
     async def test_nonexistent_command_raises_mcp_init_error(self, log_stream: io.StringIO) -> None:
         _configure(log_stream)
         bad_cfg = McpServerConfig(

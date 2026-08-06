@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 from openharness.execution.host import _HOST_EXECUTION
 from openharness.hooks import HookRegistry
-from openharness.permissions import PermissionMode
+from openharness.permissions import ExternalToolPolicy, PermissionMode
 from openharness.skills.store import EmptySkillStore
 
 if TYPE_CHECKING:
@@ -63,6 +63,9 @@ class QueryContext:
     max_tokens: int = 8192
     max_turns: int = 20
     permission_mode: PermissionMode = field(default=PermissionMode.DEFAULT)
+    # Independent from the local filesystem/process boundary. External calls
+    # remain governed even when the session intentionally has no sandbox.
+    external_tool_policy: ExternalToolPolicy = field(default_factory=ExternalToolPolicy)
     # P6-T1 (D16.5): sub-agent recursion tracking. Top-level ``oh ask``
     # constructs with default ``agent_depth=0``; ``SpawnAgent.execute``
     # builds the sub-context via ``dataclasses.replace(parent,
@@ -160,6 +163,7 @@ class QueryContext:
         runtime_permission_profile: RuntimePermissionProfile | None = None,
         enforced_boundary: EnforcedBoundary | None = None,
         permission_runtime: PermissionRuntime | None = None,
+        external_tool_policy: ExternalToolPolicy | None = None,
         skill_store: SkillStore | None = None,
         memory_store: Any = None,
         session_memory_path: Path | None = None,
@@ -248,6 +252,9 @@ class QueryContext:
             max_tokens=max_tokens,
             max_turns=max_turns,
             permission_mode=permission_mode,
+            external_tool_policy=(
+                external_tool_policy if external_tool_policy is not None else ExternalToolPolicy()
+            ),
             max_agent_depth=max_agent_depth,
             hook_registry=hook_registry if hook_registry is not None else HookRegistry(),
             skill_store=skill_store if skill_store is not None else EmptySkillStore(),

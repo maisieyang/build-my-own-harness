@@ -44,7 +44,13 @@ from typing import TYPE_CHECKING, Any, Protocol
 import httpx
 from pydantic import BaseModel, Field
 
-from openharness.tools.base import BaseTool, ExecutionDomain, ExternalEffectSurface, ToolResult
+from openharness.tools.base import (
+    BaseTool,
+    ExecutionDomain,
+    ExternalEffectKind,
+    ExternalEffectSurface,
+    ToolResult,
+)
 
 if TYPE_CHECKING:
     from openharness.tools.base import ToolExecutionContext
@@ -262,6 +268,8 @@ class WebSearch(BaseTool[WebSearchInput]):
 
     execution_domain = ExecutionDomain.EXTERNAL_EFFECT
     external_effect_surface = ExternalEffectSurface.WEB
+    external_effect_kind = ExternalEffectKind.NETWORK_READ
+    external_effect_trusted = True
     name = "WebSearch"
     description = (
         "Search the web for information. Returns up to num_results "

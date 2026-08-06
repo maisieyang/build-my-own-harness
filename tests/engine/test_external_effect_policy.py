@@ -15,6 +15,7 @@ from openharness.execution import (
     EnforcedBoundary,
     ExecutionEffect,
 )
+from openharness.hooks import HookContext, HookRegistry, HookResult
 from openharness.permissions import (
     ExternalToolMode,
     ExternalToolPolicy,
@@ -36,6 +37,7 @@ from openharness.protocols import (
 from openharness.tools import (
     BaseTool,
     ExecutionDomain,
+    ExternalEffectKind,
     ExternalEffectSurface,
     ToolExecutionContext,
     ToolRegistry,
@@ -57,6 +59,8 @@ class _ExternalTool(BaseTool[_Input]):
     input_model = _Input
     execution_domain = ExecutionDomain.EXTERNAL_EFFECT
     external_effect_surface = ExternalEffectSurface.MCP
+    external_effect_kind = ExternalEffectKind.MUTATING
+    external_effect_trusted = True
 
     def __init__(self) -> None:
         self.executed = False
@@ -71,6 +75,7 @@ class _BoundaryTool(_ExternalTool):
     name = "BoundaryTool"
     execution_domain = ExecutionDomain.LOCAL_DATA
     external_effect_surface = None
+    external_effect_kind = None
 
     async def execute(self, args: _Input, context: ToolExecutionContext) -> ToolResult:
         del args, context
@@ -85,6 +90,12 @@ class _BoundaryTool(_ExternalTool):
                 }
             },
         )
+
+
+class _WebReadTool(_ExternalTool):
+    name = "WebRead"
+    external_effect_surface = ExternalEffectSurface.WEB
+    external_effect_kind = ExternalEffectKind.NETWORK_READ
 
 
 @dataclass
@@ -111,7 +122,7 @@ def _runtime(reviewer: _Reviewer) -> tuple[RuntimePermissionProfile, PermissionR
     return profile, PermissionRuntime(profile=profile, boundary=boundary, reviewer=reviewer)
 
 
-def _tool_turn() -> ApiMessageCompleteEvent:
+def _tool_turn(tool_name: str = "RemoteMutation") -> ApiMessageCompleteEvent:
     return ApiMessageCompleteEvent.model_validate(
         {
             "message": {
@@ -120,7 +131,7 @@ def _tool_turn() -> ApiMessageCompleteEvent:
                     {
                         "type": "tool_use",
                         "id": "tool-1",
-                        "name": "RemoteMutation",
+                        "name": tool_name,
                         "input": {"value": "x"},
                     }
                 ],
@@ -152,10 +163,7 @@ async def _run(mode: ExternalToolMode) -> tuple[_ExternalTool, list[ApiStreamEve
         cwd=Path("/tmp"),
         model="qwen-plus",
         max_tokens=32,
-        runtime_permission_profile=RuntimePermissionProfile(
-            name="external",
-            external_tools=ExternalToolPolicy(mcp=mode),
-        ),
+        external_tool_policy=ExternalToolPolicy(mcp=mode),
     )
     events = [event async for event in run_query([], context)]
     return tool, events
@@ -179,13 +187,94 @@ async def test_external_ask_does_not_inherit_local_auto_or_sandbox_trust() -> No
     assert "external approval required" in completed.output
 
 
-async def test_explicit_external_allow_executes() -> None:
+async def test_explicit_surface_allow_does_not_bypass_mutating_approval() -> None:
     tool, events = await _run(ExternalToolMode.ALLOW)
+
+    completed = next(event for event in events if isinstance(event, ToolExecutionCompletedEvent))
+    assert tool.executed is False
+    assert completed.is_error is True
+    assert "external approval required" in completed.output
+
+
+async def test_trusted_read_only_external_call_can_use_explicit_surface_allow() -> None:
+    class _TrustedRead(_ExternalTool):
+        external_effect_kind = ExternalEffectKind.READ_ONLY
+
+    tool = _TrustedRead()
+    registry = ToolRegistry()
+    registry.register(tool)
+    context = QueryContext(
+        api_client=cast(
+            "OpenAICompatibleApiClient",
+            _StubApiClient(events_per_turn=[[_tool_turn()], [_end_turn()]]),
+        ),
+        tool_registry=registry,
+        permission_checker=_AllowAllChecker(),
+        system_prompt="test",
+        cwd=Path("/tmp"),
+        model="qwen-plus",
+        external_tool_policy=ExternalToolPolicy(mcp="allow"),
+    )
+
+    events = [event async for event in run_query([], context)]
 
     completed = next(event for event in events if isinstance(event, ToolExecutionCompletedEvent))
     assert tool.executed is True
     assert completed.is_error is False
-    assert completed.output == "executed"
+
+
+async def test_untrusted_external_call_cannot_use_broad_surface_allow() -> None:
+    class _UntrustedRead(_ExternalTool):
+        external_effect_kind = ExternalEffectKind.READ_ONLY
+        external_effect_trusted = False
+
+    tool = _UntrustedRead()
+    registry = ToolRegistry()
+    registry.register(tool)
+    context = QueryContext(
+        api_client=cast(
+            "OpenAICompatibleApiClient",
+            _StubApiClient(events_per_turn=[[_tool_turn()], [_end_turn()]]),
+        ),
+        tool_registry=registry,
+        permission_checker=_AllowAllChecker(),
+        system_prompt="test",
+        cwd=Path("/tmp"),
+        model="qwen-plus",
+        external_tool_policy=ExternalToolPolicy(mcp="allow"),
+    )
+
+    events = [event async for event in run_query([], context)]
+
+    completed = next(event for event in events if isinstance(event, ToolExecutionCompletedEvent))
+    assert tool.executed is False
+    assert completed.is_error is True
+    assert "external approval required" in completed.output
+
+
+async def test_web_network_policy_applies_without_a_local_sandbox_profile() -> None:
+    tool = _WebReadTool()
+    registry = ToolRegistry()
+    registry.register(tool)
+    context = QueryContext(
+        api_client=cast(
+            "OpenAICompatibleApiClient",
+            _StubApiClient(events_per_turn=[[_tool_turn("WebRead")], [_end_turn()]]),
+        ),
+        tool_registry=registry,
+        permission_checker=_AllowAllChecker(),
+        system_prompt="test",
+        cwd=Path("/tmp"),
+        model="qwen-plus",
+        external_tool_policy=ExternalToolPolicy(web="deny"),
+    )
+
+    events = [event async for event in run_query([], context)]
+
+    completed = next(event for event in events if isinstance(event, ToolExecutionCompletedEvent))
+    assert tool.executed is False
+    assert completed.is_error is True
+    assert "denied by web policy" in completed.output
 
 
 async def test_ask_uses_reviewer_for_exact_call_and_executes_once() -> None:
@@ -216,6 +305,42 @@ async def test_ask_uses_reviewer_for_exact_call_and_executes_once() -> None:
     assert tool.executed is True
     assert len(reviewer.calls) == 1
     assert reviewer.calls[0].final_arguments == {"value": "x"}
+
+
+async def test_hook_modified_final_arguments_are_what_external_reviewer_authorizes() -> None:
+    async def rewrite(context: HookContext) -> HookResult | None:
+        del context
+        return HookResult.modify_input({"value": "rewritten"})
+
+    hooks = HookRegistry()
+    hooks.register("PreToolUse", rewrite)
+    tool = _ExternalTool()
+    registry = ToolRegistry()
+    registry.register(tool)
+    reviewer = _Reviewer(PermissionReviewVerdict.approve("allow exact rewritten call"))
+    profile, runtime = _runtime(reviewer)
+    context = QueryContext(
+        api_client=cast(
+            "OpenAICompatibleApiClient",
+            _StubApiClient(events_per_turn=[[_tool_turn()], [_end_turn()]]),
+        ),
+        tool_registry=registry,
+        permission_checker=_AllowAllChecker(),
+        hook_registry=hooks,
+        system_prompt="test",
+        cwd=Path("/tmp"),
+        model="qwen-plus",
+        external_tool_policy=profile.external_tools,
+        runtime_permission_profile=profile,
+        enforced_boundary=runtime.boundary,
+        permission_runtime=runtime,
+    )
+
+    events = [event async for event in run_query([], context)]
+
+    completed = next(event for event in events if isinstance(event, ToolExecutionCompletedEvent))
+    assert completed.is_error is False
+    assert reviewer.calls[0].final_arguments == {"value": "rewritten"}
 
 
 async def test_reviewer_defer_emits_typed_park_and_stops_before_next_model_turn() -> None:

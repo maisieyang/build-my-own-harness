@@ -145,6 +145,7 @@ class TestCliBootstrapWithMcp:
                 ]
             ),
         )
+        monkeypatch.setenv("OPENHARNESS_TRUSTED_MCP_SERVERS", "EchoServer")
 
         stub = _RecordingStubClient(_trivial_end_turn())
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
@@ -178,6 +179,7 @@ class TestCliBootstrapWithMcp:
                 ]
             ),
         )
+        monkeypatch.setenv("OPENHARNESS_TRUSTED_MCP_SERVERS", "Good,Bad")
 
         stub = _RecordingStubClient(_trivial_end_turn())
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)

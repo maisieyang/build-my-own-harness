@@ -62,6 +62,7 @@ from openharness.plugins.model import (
     parse_manifest,
 )
 from openharness.skills.model import Skill, parse_skill
+from openharness.tools.base import ExecutionDomain, TrustedControlSurface
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -167,6 +168,12 @@ class LoadedPluginCatalogs:
     or merged into the existing catalog dict (for hooks) or appended
     to the MCP server list (for MCP).
     """
+
+    # Loading a plugin can import Python hooks and add other capabilities.
+    # Opt-in is therefore a trust decision in the harness control plane, not
+    # a promise made by the local model-data sandbox.
+    execution_domain = ExecutionDomain.TRUSTED_CONTROL
+    trusted_control_surface = TrustedControlSurface.PLUGINS
 
     commands: dict[str, Command] = field(default_factory=dict)
     skills: dict[str, Skill] = field(default_factory=dict)
@@ -610,6 +617,8 @@ class PluginLoader:
                     name=ns_name,
                     command=srv.command,
                     env=srv.env,
+                    sandbox=srv.sandbox,
+                    environment_posture=srv.environment_posture,
                 )
             except ValueError as exc:  # pragma: no cover - defensive: namespaced name provably satisfies McpServerConfig regex
                 _logger.warning(

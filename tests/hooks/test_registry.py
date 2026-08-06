@@ -16,7 +16,7 @@ from openharness.hooks import (
     HookResult,
     PreToolUseContext,
 )
-from openharness.tools.base import ToolExecutionContext
+from openharness.tools.base import ExecutionDomain, ToolExecutionContext, TrustedControlSurface
 
 
 async def _noop_hook(ctx: HookContext) -> HookResult | None:
@@ -33,6 +33,10 @@ def _another_noop() -> Hook:
 
 
 class TestEmptyRegistry:
+    def test_hooks_explicitly_declare_trusted_control_plane(self) -> None:
+        assert HookRegistry.execution_domain is ExecutionDomain.TRUSTED_CONTROL
+        assert HookRegistry.trusted_control_surface is TrustedControlSurface.HOOKS
+
     def test_empty_registry_returns_empty_list_for_any_event(self) -> None:
         registry = HookRegistry()
         assert registry.get("PreToolUse") == []

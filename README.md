@@ -327,7 +327,16 @@ uv run ruff format --check
 - Claude Code plugin compatibility currently discovers plugin metadata and
   `SKILL.md` trees. Claude Code `.mcp.json` and declarative agents are not
   imported.
-- MCP transport is stdio only.
+- MCP transport is stdio only. Its subprocess always receives a minimal,
+  credential-filtered environment. An unsandboxed stdio server must be on the
+  explicit trusted-server list; otherwise startup fails closed.
+- MCP, Web, Browser, and Computer Use are independent external-effect policy
+  surfaces. A local filesystem sandbox never implies that these calls are safe;
+  untrusted, unknown, mutating, and destructive external calls still require
+  exact approval even under a broad surface allow.
+- Hooks and plugins are opt-in trusted, in-process control-plane code. They can
+  enforce or rewrite a call, but rewritten final arguments are authorized again
+  before dispatch.
 - Isolation remains opt-in. On macOS the Seatbelt backend covers the unified
   local data plane; Docker remains an explicitly command-only backend, and a
   non-sandbox posture retains legacy host execution.

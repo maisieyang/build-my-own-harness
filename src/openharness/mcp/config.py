@@ -36,12 +36,19 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from enum import Enum
 
 # Server names map directly into tool namespaces (D15.3:
 # ``<Server>.<Tool>``). Restrict to safe identifier characters so the
 # namespace prefix can never collide with tool-name dots or be
 # misinterpreted by downstream parsing.
 _NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
+
+
+class McpEnvironmentPosture(str, Enum):
+    """Environment authority granted to a stdio MCP subprocess."""
+
+    MINIMAL = "minimal"
 
 
 @dataclass(frozen=True)
@@ -52,6 +59,7 @@ class McpServerConfig:
     command: tuple[str, ...]
     env: dict[str, str] = field(default_factory=dict)
     sandbox: bool = False
+    environment_posture: McpEnvironmentPosture = McpEnvironmentPosture.MINIMAL
 
     def __post_init__(self) -> None:
         if not _NAME_PATTERN.match(self.name):

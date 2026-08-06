@@ -1018,6 +1018,7 @@ async def _run_ask(
             # already promised this knob.
             max_turns=max_turns,
             permission_mode=permission_mode,
+            external_tool_policy=sandbox_config.external_tools,
             skill_store=skill_store,
             # P6-T1 (D16.5): propagate the sub-agent recursion cap from
             # Settings into the top-level QueryContext. ``agent_depth=0``
@@ -1090,6 +1091,7 @@ async def _run_ask(
                         sandbox_session.boundary if sandbox_session is not None else None
                     ),
                     permission_runtime=permission_runtime,
+                    external_tool_policy=sandbox_config.external_tools,
                     skill_store=skill_store,
                     memory_store=memory_store,
                     session_memory_path=context.session_memory_path,
@@ -1765,11 +1767,31 @@ async def _run_chat(
                 typer.echo(
                     _repl.format_permissions_status(
                         profile=active_profile,
+                        external_policy=sandbox_config.external_tools,
                         boundary=(
                             sandbox_session.boundary if sandbox_session is not None else None
                         ),
                         tool_domains=effective_registry.execution_domain_report(),
                         external_surfaces=effective_registry.external_effect_report(),
+                        mcp_server_postures={
+                            config.name: (
+                                f"sandbox={'required' if config.sandbox else 'trusted-host-only'}, "
+                                f"environment={config.environment_posture.value}, "
+                                f"trust={'trusted' if config.name in settings.trusted_mcp_servers else 'untrusted'}, "
+                                f"startup={'failed' if config.name in pool.dead_servers else 'active'}"
+                            )
+                            for config in combined_mcp_servers
+                        },
+                        trusted_control_status={
+                            "hooks": (
+                                f"enabled; registered={effective_hook_registry.registration_count()}; "
+                                "may deny/modify calls after explicit registration"
+                            ),
+                            "plugins": (
+                                f"{'enabled' if enable_plugins else 'disabled'}; "
+                                "loading is an explicit trust decision"
+                            ),
+                        },
                         legacy_mode=permission_mode.value,
                     )
                 )
@@ -2093,6 +2115,7 @@ async def _run_chat(
                 model=model,
                 max_tokens=max_tokens,
                 permission_mode=permission_mode,
+                external_tool_policy=sandbox_config.external_tools,
                 skill_store=skill_store,
                 max_agent_depth=settings.max_agent_depth,
                 execution_env=execution_env,

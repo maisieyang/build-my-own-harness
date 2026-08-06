@@ -160,6 +160,18 @@ class McpClientPool:
         via ``stack`` so adapters' captured references stay valid for the
         duration of the pool's context.
         """
+        trusted = cfg.name in self._trusted
+        if not cfg.sandbox and not trusted:
+            logger.warning(
+                "mcp_server_error",
+                server=cfg.name,
+                phase="init",
+                error="UntrustedHostPosture",
+            )
+            raise McpInitError(
+                f"MCP server {cfg.name!r} is untrusted and has no stdio sandbox; "
+                "enable its sandbox or explicitly trust the server"
+            )
         try:
             client = McpClient(
                 cfg,
@@ -181,7 +193,6 @@ class McpClientPool:
             )
             raise
 
-        trusted = cfg.name in self._trusted
         raw_tools = await client.list_tools()
         return [
             McpToolAdapter(

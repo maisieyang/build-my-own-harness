@@ -45,7 +45,9 @@ def _bad_cfg(name: str) -> McpServerConfig:
 
 class TestHappyMultiServer:
     async def test_single_server_yields_adapters(self) -> None:
-        async with McpClientPool([_good_cfg("Echo")], init_timeout=10.0) as pool:
+        async with McpClientPool(
+            [_good_cfg("Echo")], trusted_servers={"Echo"}, init_timeout=10.0
+        ) as pool:
             assert pool.dead_servers == []
             # _test_server.py has 2 tools (echo + raise_error).
             assert len(pool.adapters) == 2
@@ -54,7 +56,11 @@ class TestHappyMultiServer:
             assert "Echo.raise_error" in names
 
     async def test_two_servers_start_in_parallel(self) -> None:
-        async with McpClientPool([_good_cfg("A"), _good_cfg("B")], init_timeout=10.0) as pool:
+        async with McpClientPool(
+            [_good_cfg("A"), _good_cfg("B")],
+            trusted_servers={"A", "B"},
+            init_timeout=10.0,
+        ) as pool:
             assert pool.dead_servers == []
             names = {a.name for a in pool.adapters}
             # 2 servers x 2 tools each
@@ -83,9 +89,10 @@ class TestTrustThreading:
             assert all(a.trust_source == "trusted-server" for a in trusted_adapters)
             assert all(a.trust_source == "strict-default" for a in untrusted_adapters)
 
-    async def test_default_no_trust_means_strict_default(self) -> None:
+    async def test_untrusted_unsandboxed_server_fails_closed_before_spawn(self) -> None:
         async with McpClientPool([_good_cfg("X")], init_timeout=10.0) as pool:
-            assert all(a.trust_source == "strict-default" for a in pool.adapters)
+            assert pool.adapters == []
+            assert pool.dead_servers == ["X"]
 
 
 # --------------------------------------------------------------------------- #
@@ -100,6 +107,7 @@ class TestIsolatedFailure:
         survivors."""
         async with McpClientPool(
             [_good_cfg("Good"), _bad_cfg("Bad")],
+            trusted_servers={"Good", "Bad"},
             init_timeout=2.0,
         ) as pool:
             # Good's tools all present.

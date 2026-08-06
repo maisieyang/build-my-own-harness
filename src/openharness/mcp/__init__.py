@@ -35,13 +35,14 @@ from __future__ import annotations
 
 from openharness.mcp.adapter import McpToolAdapter
 from openharness.mcp.client import McpCallError, McpClient, McpInitError
-from openharness.mcp.config import McpServerConfig
+from openharness.mcp.config import McpEnvironmentPosture, McpServerConfig
 from openharness.mcp.pool import McpClientPool
 
 __all__ = [
     "McpCallError",
     "McpClient",
     "McpClientPool",
+    "McpEnvironmentPosture",
     "McpInitError",
     "McpServerConfig",
     "McpToolAdapter",

@@ -299,6 +299,20 @@ class TestMcpServers:
         assert gh.name == "gh"
         assert gh.env == {"GITHUB_TOKEN": "ghp_xxx"}
 
+    def test_stdio_sandbox_posture_survives_json_parsing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv(
+            "OPENHARNESS_MCP_SERVERS",
+            '[{"name":"fs","command":["server"],"sandbox":true}]',
+        )
+
+        settings = Settings()
+
+        assert settings.mcp_servers[0].sandbox is True
+
     def test_programmatic_construction_passthrough(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from openharness.mcp import McpServerConfig
 

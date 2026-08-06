@@ -83,6 +83,7 @@ from openharness.services.compact import auto_compact_if_needed
 from openharness.tools.base import (
     BaseTool,
     ExecutionDomain,
+    ExternalEffectKind,
     ToolExecutionContext,
     ToolResult,
 )
@@ -808,19 +809,31 @@ async def _external_effect_failure(
 ) -> tuple[str, bool] | None:
     if tool.execution_domain is not ExecutionDomain.EXTERNAL_EFFECT:
         return None
-    profile = context.runtime_permission_profile
-    if profile is None:
-        return None
     surface = tool.external_effect_surface
-    if surface is None:
-        return "external effect denied: tool has no policy surface", True
-    mode = getattr(profile.external_tools, surface.value)
+    kind = tool.external_effect_kind
+    if surface is None or kind is None:
+        return "external effect denied: tool has incomplete external policy metadata", True
+    mode = getattr(context.external_tool_policy, surface.value)
     if mode is ExternalToolMode.DENY:
         return f"external effect denied by {surface.value} policy: {tool.name}", True
-    if mode is ExternalToolMode.ASK:
+    requires_call_approval = (
+        mode is ExternalToolMode.ASK
+        or not tool.external_effect_trusted
+        or kind
+        in {
+            ExternalEffectKind.MUTATING,
+            ExternalEffectKind.DESTRUCTIVE,
+            ExternalEffectKind.UNKNOWN,
+        }
+    )
+    if requires_call_approval:
         runtime = context.permission_runtime
         if runtime is None:
-            return f"external approval required for {surface.value}: {tool.name}", True
+            return (
+                f"external approval required for {surface.value} "
+                f"({kind.value}, trust={tool.trust_source}): {tool.name}",
+                True,
+            )
         request = PermissionDeltaRequest.create(
             tool_use_id=tool_use.id,
             tool_name=tool.name,

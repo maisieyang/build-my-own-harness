@@ -16,7 +16,7 @@ import dataclasses
 
 import pytest
 
-from openharness.mcp import McpServerConfig
+from openharness.mcp import McpEnvironmentPosture, McpServerConfig
 
 
 class TestConstruction:
@@ -26,6 +26,7 @@ class TestConstruction:
         assert cfg.command == ("npx", "server-filesystem")
         assert cfg.env == {}
         assert cfg.sandbox is False
+        assert cfg.environment_posture is McpEnvironmentPosture.MINIMAL
 
     def test_with_env_vars(self) -> None:
         cfg = McpServerConfig(

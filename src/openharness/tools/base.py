@@ -149,11 +149,28 @@ class ExecutionDomain(str, Enum):
     TRUSTED_CONTROL = "trusted_control"
 
 
+class TrustedControlSurface(str, Enum):
+    """In-process extension points that intentionally hold harness authority."""
+
+    HOOKS = "hooks"
+    PLUGINS = "plugins"
+
+
 class ExternalEffectSurface(str, Enum):
     MCP = "mcp"
     WEB = "web"
     BROWSER = "browser"
     COMPUTER_USE = "computer_use"
+
+
+class ExternalEffectKind(str, Enum):
+    """Side-effect class for a call outside the local sandbox."""
+
+    READ_ONLY = "read_only"
+    NETWORK_READ = "network_read"
+    MUTATING = "mutating"
+    DESTRUCTIVE = "destructive"
+    UNKNOWN = "unknown"
 
 
 class BaseTool(ABC, Generic[InputT]):
@@ -205,6 +222,8 @@ class BaseTool(ABC, Generic[InputT]):
     # new model-callable surface cannot silently inherit host authority.
     execution_domain: ExecutionDomain = ExecutionDomain.UNDECLARED
     external_effect_surface: ExternalEffectSurface | None = None
+    external_effect_kind: ExternalEffectKind | None = None
+    external_effect_trusted: bool = False
 
     @abstractmethod
     async def execute(
@@ -251,6 +270,14 @@ class ToolRegistry:
                 f"tool {tool.name!r} has no external effect surface; "
                 "declare which independent policy applies"
             )
+        if (
+            tool.execution_domain is ExecutionDomain.EXTERNAL_EFFECT
+            and tool.external_effect_kind is None
+        ):
+            raise ValueError(
+                f"tool {tool.name!r} has no external effect kind; "
+                "declare its real side-effect class"
+            )
         if tool.name in self._tools:
             raise ValueError(f"tool {tool.name!r} already registered")
         self._tools[tool.name] = tool
@@ -274,7 +301,7 @@ class ToolRegistry:
         return {domain: tuple(names) for domain, names in grouped.items()}
 
     def external_effect_report(self) -> dict[ExternalEffectSurface, tuple[str, ...]]:
-        """Name each external surface not covered by a local boundary."""
+        """Describe each external call surface outside the local boundary."""
         grouped: dict[ExternalEffectSurface, list[str]] = {}
         for tool in self._tools.values():
             if tool.execution_domain is not ExecutionDomain.EXTERNAL_EFFECT:
@@ -282,7 +309,12 @@ class ToolRegistry:
             surface = tool.external_effect_surface
             if surface is None:
                 continue
-            grouped.setdefault(surface, []).append(tool.name)
+            kind = tool.external_effect_kind
+            kind_name = kind.value if kind is not None else "undeclared"
+            grouped.setdefault(surface, []).append(
+                f"{tool.name} [effect={kind_name}, "
+                f"trust={'trusted' if tool.external_effect_trusted else 'untrusted'}]"
+            )
         return {surface: tuple(names) for surface, names in grouped.items()}
 
     def to_api_schema(self) -> list[ToolSpec]:

@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from openharness.execution import BoundaryVerification, EnforcedBoundary, ExecutionEffect
-from openharness.permissions import RuntimePermissionProfile
+from openharness.permissions import ExternalToolPolicy, RuntimePermissionProfile
 from openharness.protocols.content import TextBlock, ToolResultBlock
 from openharness.protocols.messages import ConversationMessage
 from openharness.repl import (
@@ -200,9 +200,15 @@ class TestPermissionStatus:
 
         status = format_permissions_status(
             profile=profile,
+            external_policy=profile.external_tools,
             boundary=boundary,
             tool_domains={ExecutionDomain.LOCAL_DATA: ("Bash", "Read")},
             external_surfaces={ExternalEffectSurface.MCP: ("Github.create_issue",)},
+            mcp_server_postures={"Github": "sandbox=required, environment=minimal, trust=trusted"},
+            trusted_control_status={
+                "hooks": "enabled; trusted in-process authority",
+                "plugins": "disabled",
+            },
             legacy_mode="default",
         )
 
@@ -214,15 +220,25 @@ class TestPermissionStatus:
         assert "command" in status
         assert "Bash, Read" in status
         assert "mcp=ask" in status
-        assert "mcp: Github.create_issue" in status
+        assert "mcp: ask; tools=Github.create_issue" in status
         assert "not covered by local sandbox" in status
+        assert "web: ask; not registered; not covered by local sandbox" in status
+        assert "browser: ask; not registered; not covered by local sandbox" in status
+        assert "computer_use: ask; not registered; not covered by local sandbox" in status
+        assert "sandbox=required, environment=minimal, trust=trusted" in status
+        assert "Trusted control plane" in status
+        assert "hooks: enabled; trusted in-process authority" in status
+        assert "plugins: disabled" in status
 
     def test_legacy_runtime_does_not_claim_an_installed_boundary(self) -> None:
         status = format_permissions_status(
             profile=None,
+            external_policy=ExternalToolPolicy(),
             boundary=None,
             tool_domains={},
             external_surfaces={},
+            mcp_server_postures={},
+            trusted_control_status={"hooks": "disabled", "plugins": "disabled"},
             legacy_mode="auto",
         )
 

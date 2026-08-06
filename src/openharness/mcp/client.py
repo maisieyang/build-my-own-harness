@@ -75,11 +75,17 @@ def _build_stdio_parameters(
     *,
     sandbox_cwd: Path | None,
 ) -> StdioServerParameters:
+    # A stdio server never receives the harness process's ambient environment.
+    # Explicit ``config.env`` values are user-provided grants layered over the
+    # same minimal baseline used by sandboxed local processes.
+    profile = workspace_runtime_profile()
+    environment = build_sandbox_environment(profile)
+    environment.update(config.env)
     if not config.sandbox:
         return StdioServerParameters(
             command=config.command[0],
             args=list(config.command[1:]),
-            env=dict(config.env) if config.env else None,
+            env=environment,
         )
     if sandbox_cwd is None:
         raise McpInitError(f"MCP server {config.name!r} requested sandboxing without a sandbox cwd")
@@ -88,9 +94,6 @@ def _build_stdio_parameters(
         raise McpInitError(
             f"MCP server {config.name!r} requested sandboxing but sandbox-exec is unavailable"
         )
-    profile = workspace_runtime_profile()
-    environment = build_sandbox_environment(profile)
-    environment.update(config.env)
     return StdioServerParameters(
         command=executable,
         args=[

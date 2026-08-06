@@ -42,7 +42,13 @@ from bs4 import BeautifulSoup
 from markdownify import markdownify  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field, HttpUrl
 
-from openharness.tools.base import BaseTool, ExecutionDomain, ExternalEffectSurface, ToolResult
+from openharness.tools.base import (
+    BaseTool,
+    ExecutionDomain,
+    ExternalEffectKind,
+    ExternalEffectSurface,
+    ToolResult,
+)
 
 if TYPE_CHECKING:
     from openharness.tools.base import ToolExecutionContext
@@ -100,6 +106,8 @@ class WebFetch(BaseTool[WebFetchInput]):
 
     execution_domain = ExecutionDomain.EXTERNAL_EFFECT
     external_effect_surface = ExternalEffectSurface.WEB
+    external_effect_kind = ExternalEffectKind.NETWORK_READ
+    external_effect_trusted = True
     name = "WebFetch"
     description = (
         "Fetch a URL and return its content as markdown. Use to read "
