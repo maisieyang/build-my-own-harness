@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from openharness.tools.base import (
     BaseTool,
+    ExecutionDomain,
+    ExternalEffectSurface,
     ToolExecutionContext,
     ToolRegistry,
     ToolResult,
@@ -61,6 +63,8 @@ __all__ = [
     "BaseTool",
     "Bash",
     "Edit",
+    "ExecutionDomain",
+    "ExternalEffectSurface",
     "Grep",
     "LoadSkillInput",
     "LoadSkillTool",

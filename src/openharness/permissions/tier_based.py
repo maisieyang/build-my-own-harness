@@ -123,6 +123,12 @@ def _inside_project_root(path: Path | str, cwd: Path) -> bool:
     target may not exist yet (e.g., Write creating a new file).
     """
     p = Path(path) if isinstance(path, str) else path
+    # Tool paths are relative to ToolExecutionContext.cwd. Resolving a bare
+    # relative Path directly would instead use the Python process cwd, which
+    # differs for isolated worktrees (`oh ask --isolate`). Policy and the tool
+    # executor must interpret the same bytes against the same base directory.
+    if not p.is_absolute():
+        p = cwd / p
     try:
         p.resolve(strict=False).relative_to(cwd.resolve(strict=False))
     except ValueError:
@@ -215,7 +221,13 @@ def _matches_tier2(path: str, patterns: tuple[str, ...], cwd: Path) -> str | Non
     First-match-wins: the returned pattern (original form) feeds the
     deny reason so the LLM can see why it was denied.
     """
-    abs_path = os.path.abspath(os.path.expanduser(path))
+    expanded = Path(os.path.expanduser(path))
+    # Keep the existing lexical (non-realpath) behavior, but anchor relative
+    # paths at the execution context cwd rather than the launcher process cwd.
+    # `normpath` collapses `..` without following symlinks, preserving the
+    # deliberate fail-closed symlink semantics documented below.
+    candidate = expanded if expanded.is_absolute() else cwd / expanded
+    abs_path = os.path.normpath(str(candidate))
 
     # Compute cwd-relative form if path is under cwd; else None.
     # Known limitation (review round 4): this uses the *lexical* abspath, NOT

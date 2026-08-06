@@ -449,3 +449,32 @@ class TestMatchesIrreversibleGitAction:
         assert _matches_irreversible_git_action("git push --dry-run") is None
         # -n on commit is --no-verify, not dry-run -- must still be denied.
         assert _matches_irreversible_git_action("git commit -n -m x") is not None
+
+
+class TestContextCwdPathResolution:
+    """Permission paths are relative to ToolExecutionContext.cwd, not the
+    Python process cwd. This matters for isolated worktrees."""
+
+    def test_inside_project_root_resolves_relative_path_from_context_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from openharness.permissions.tier_based import _inside_project_root
+
+        project = tmp_path / "worktree"
+        process_cwd = tmp_path / "launcher"
+        project.mkdir()
+        process_cwd.mkdir()
+        monkeypatch.chdir(process_cwd)
+
+        assert _inside_project_root("src/main.py", project) is True
+
+    def test_tier2_relative_rule_uses_context_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        project = tmp_path / "worktree"
+        process_cwd = tmp_path / "launcher"
+        project.mkdir()
+        process_cwd.mkdir()
+        monkeypatch.chdir(process_cwd)
+
+        assert _matches_tier2("secrets/token.txt", ("secrets/**",), project) == "secrets/**"

@@ -42,12 +42,54 @@ the singleton).
 from __future__ import annotations
 
 from openharness.execution.base import ExecutionEnvironment, ProcessResult
+from openharness.execution.boundary import (
+    BackendSupport,
+    BoundaryVerification,
+    BoundaryViolation,
+    CommandOperation,
+    EnforcedBoundary,
+    ExecutionEffect,
+    ExecutionFailed,
+    FileEditOperation,
+    FileReadOperation,
+    FileSearchOperation,
+    FileWriteOperation,
+    OperationCompleted,
+    ProcessCompleted,
+    SandboxBackend,
+    SandboxSession,
+    SandboxUnavailableError,
+    TimedOut,
+)
+from openharness.execution.docker_backend import DockerCommandBackend
 from openharness.execution.host import HostExecution
+from openharness.execution.overlay import OneShotOverlaySession
 from openharness.execution.sandbox import SandboxExecution
+from openharness.execution.seatbelt import SeatbeltBackend
 
 __all__ = [
+    "BackendSupport",
+    "BoundaryVerification",
+    "BoundaryViolation",
+    "CommandOperation",
+    "DockerCommandBackend",
+    "EnforcedBoundary",
+    "ExecutionEffect",
     "ExecutionEnvironment",
+    "ExecutionFailed",
+    "FileEditOperation",
+    "FileReadOperation",
+    "FileSearchOperation",
+    "FileWriteOperation",
     "HostExecution",
+    "OneShotOverlaySession",
+    "OperationCompleted",
+    "ProcessCompleted",
     "ProcessResult",
+    "SandboxBackend",
     "SandboxExecution",
+    "SandboxSession",
+    "SandboxUnavailableError",
+    "SeatbeltBackend",
+    "TimedOut",
 ]

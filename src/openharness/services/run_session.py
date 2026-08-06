@@ -1,4 +1,4 @@
-"""Run-scoped worktree and sandbox lifecycle.
+"""Run-scoped worktree lifecycle.
 
 The primitive is intentionally independent of completion policy. A caller may
 use it to isolate one headless request today or a task-owned execution run in a
@@ -12,20 +12,14 @@ import contextlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from openharness.execution.sandbox import SandboxExecution
-from openharness.observability import get_logger, new_run_id
+from openharness.observability import new_run_id
 from openharness.services.worktree import create_worktree, remove_worktree, verify_existing_worktree
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
 
-    from openharness.cli import SandboxConfig
-    from openharness.execution.base import ExecutionEnvironment
     from openharness.services.worktree import WorktreeHandle
-
-
-logger = get_logger("run_session")
 
 
 async def _untracked_files(cwd: Path) -> set[str] | None:
@@ -54,7 +48,6 @@ class RunSession:
 
     run_id: str
     cwd_override: Path | None
-    execution_env_override: ExecutionEnvironment | None
     worktree: WorktreeHandle | None
     status: str = "running"
 
@@ -64,24 +57,25 @@ async def open_run_session(
     *,
     cwd: Path,
     isolate: bool,
-    sandbox_config: SandboxConfig,
     run_id: str | None = None,
     existing_worktree: WorktreeHandle | None = None,
 ) -> AsyncIterator[RunSession | None]:
-    """Own one run's optional worktree and sandbox, including cleanup."""
-    if not isolate and not sandbox_config.enabled:
+    """Own one run's optional worktree, including cleanup.
+
+    Sandbox sessions belong to the CLI/query session that consumes their
+    verified boundary.  This worktree lifecycle must never inject the legacy
+    ``ExecutionEnvironment`` and bypass that contract.
+    """
+    if not isolate:
         yield None
         return
 
     resolved_run_id = run_id or new_run_id()
-    untracked_before = None if isolate else await _untracked_files(cwd)
     session = RunSession(
         run_id=resolved_run_id,
         cwd_override=None,
-        execution_env_override=None,
         worktree=None,
     )
-    sandbox: SandboxExecution | None = None
 
     try:
         if isolate:
@@ -93,19 +87,6 @@ async def open_run_session(
             session.worktree = handle
             session.cwd_override = handle.path
 
-        if sandbox_config.enabled:
-            sandbox = SandboxExecution(
-                cwd=session.cwd_override or cwd,
-                image=sandbox_config.image,
-                network=sandbox_config.network,
-                memory=sandbox_config.memory,
-                cpus=sandbox_config.cpus,
-                pids=256,
-                runtime=sandbox_config.runtime,
-            )
-            await sandbox.__aenter__()
-            session.execution_env_override = sandbox
-
         yield session
     except BaseException:
         if session.status == "running":
@@ -115,20 +96,6 @@ async def open_run_session(
         if session.status == "running":
             session.status = "completed"
     finally:
-        if sandbox is not None:
-            with contextlib.suppress(Exception):
-                await sandbox.__aexit__(None, None, None)
-        if not isolate and untracked_before is not None:
-            with contextlib.suppress(Exception):
-                after = await _untracked_files(cwd)
-                new_files = sorted(after - untracked_before) if after is not None else []
-                if new_files:
-                    logger.warning(
-                        "run_left_untracked_files",
-                        files=new_files[:20],
-                        count=len(new_files),
-                        hint="run without --isolate mutated the live cwd; review or remove these",
-                    )
         if isolate and session.worktree is not None:
             with contextlib.suppress(Exception):
                 proc = await asyncio.create_subprocess_exec(

@@ -20,7 +20,13 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from openharness.tools.base import BaseTool, ToolResult
+from openharness.execution import FileWriteOperation
+from openharness.tools.base import (
+    BaseTool,
+    ExecutionDomain,
+    ToolResult,
+    tool_result_from_operation,
+)
 
 if TYPE_CHECKING:
     from openharness.tools.base import ToolExecutionContext
@@ -36,6 +42,7 @@ class WriteInput(BaseModel):
 class Write(BaseTool[WriteInput]):
     """Create or overwrite a text file."""
 
+    execution_domain = ExecutionDomain.LOCAL_DATA
     name = "Write"
     description = (
         "Write text content to a file (UTF-8). Creates the file if absent, "
@@ -50,6 +57,12 @@ class Write(BaseTool[WriteInput]):
         context: ToolExecutionContext,
     ) -> ToolResult:
         path = _resolve(args.path, context.cwd)
+
+        if context.sandbox_session is not None:
+            sandbox_result = await context.sandbox_session.execute(
+                FileWriteOperation(path=path, content=args.content)
+            )
+            return tool_result_from_operation(sandbox_result)
 
         # P3-T3.3f:project-root scope check moved to AuthZ Tier 3
         # (TierBasedPermissionChecker) — Write no longer double-checks here.

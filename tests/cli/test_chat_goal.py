@@ -272,7 +272,7 @@ class TestAutoContinue:
             yield ConversationCompleteEvent(messages=[*initial_messages, assistant])
 
         monkeypatch.setattr(cli_module, "run_query", _permission_blocked_run)
-        _install_judge(monkeypatch, [(False, "verification command was not run")])
+        judge_calls = _install_judge(monkeypatch, [(False, "verification command was not run")])
         _stub_input_sequence(monkeypatch, ["/goal tests pass", "/exit"])
 
         result = CliRunner().invoke(cli_module.app, ["chat"])
@@ -282,6 +282,7 @@ class TestAutoContinue:
         assert "goal blocked on permission" in result.stdout
         assert "Bash runs arbitrary commands" in result.stdout
         assert "goal not met — continuing" not in result.stdout
+        assert judge_calls == []
 
 
 class TestGoalCommandSurface:

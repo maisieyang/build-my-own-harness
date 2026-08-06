@@ -51,6 +51,7 @@ class McpServerConfig:
     name: str
     command: tuple[str, ...]
     env: dict[str, str] = field(default_factory=dict)
+    sandbox: bool = False
 
     def __post_init__(self) -> None:
         if not _NAME_PATTERN.match(self.name):

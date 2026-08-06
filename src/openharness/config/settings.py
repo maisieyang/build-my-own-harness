@@ -19,21 +19,26 @@ relies on:
   protocol-layer validation — every "bad input" path raises the same
   exception family. See D5.2.
 
-* **Sensible default for ``model``**: ``qwen3.7-max`` — the strongest
-  Qwen flagship available on the default endpoint. CLI ``--model`` and
-  ``OPENHARNESS_MODEL`` both override it. See D5.3.
+* **Cost-aware default for ``model``**: ``qwen-plus`` for the permission
+  and sandbox implementation phase. CLI ``--model`` and
+  ``OPENHARNESS_MODEL`` both override it.
 """
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from openharness.mcp import McpServerConfig
 from openharness.observability.logging import LogFormat, LogLevel
-from openharness.permissions import PermissionMode, PermissionRules
+from openharness.permissions import (
+    ExternalToolPolicy,
+    NetworkPolicy,
+    PermissionMode,
+    PermissionRules,
+)
 
 # ---------------------------------------------------------------------------
 # Nested sub-models — P10-T4.4e (D28.10)
@@ -380,7 +385,7 @@ class Settings(BaseSettings):
         description="OpenAI-compatible base URL (required).",
     )
     model: str = Field(
-        default="qwen3.7-max",
+        default="qwen-plus",
         description="Default model name; overridden by CLI --model.",
     )
     goal_judge_model: str | None = Field(
@@ -404,6 +409,19 @@ class Settings(BaseSettings):
             "bound lives in the condition itself (e.g. 'or stop after 20 "
             "turns'); this is the fail-closed ceiling behind it. Env: "
             "OPENHARNESS_GOAL_MAX_AUTO_TURNS."
+        ),
+    )
+    permission_auto_review: bool = Field(
+        default=True,
+        description=(
+            "Enable the independent exact-request reviewer while permission mode is AUTO. "
+            "Reviewer failure always parks; it never broadens the sandbox."
+        ),
+    )
+    permission_reviewer_model: str | None = Field(
+        default=None,
+        description=(
+            "Optional model for exact permission review. None uses the active main model."
         ),
     )
     extra_body: dict[str, Any] | None = Field(
@@ -543,10 +561,9 @@ class Settings(BaseSettings):
         ),
     )
 
-    # P7b-T2 (D18.x): Docker sandbox substrate for BashTool. All default
-    # OFF — existing behavior unchanged. Enable via ``--sandbox`` CLI
-    # flag or ``OPENHARNESS_SANDBOX=true`` env var. The 5 ``sandbox_*``
-    # configuration fields tune the container shape.
+    # Permission + sandbox runtime.  ``sandbox_enabled`` remains opt-in,
+    # while the selected backend determines which effects are actually
+    # covered by the verified boundary.
     sandbox_enabled: bool = Field(
         default=False,
         description=(
@@ -556,6 +573,15 @@ class Settings(BaseSettings):
             "false (default), Bash runs on the host via HostExecution. "
             "Env var: OPENHARNESS_SANDBOX_ENABLED. Overridden by the "
             "``--sandbox`` / ``--no-sandbox`` CLI flag."
+        ),
+    )
+    sandbox_backend: Literal["seatbelt", "docker-command"] = Field(
+        default="seatbelt",
+        description=(
+            "Verified sandbox backend. ``seatbelt`` covers the local command "
+            "and file-tool data plane on macOS. ``docker-command`` is an "
+            "explicit compatibility backend whose boundary covers commands "
+            "only. Env var: OPENHARNESS_SANDBOX_BACKEND."
         ),
     )
     sandbox_image: str = Field(
@@ -577,6 +603,23 @@ class Settings(BaseSettings):
             "exfiltration. ``bridge`` enables NAT'd internet (needed for "
             "npm install / git clone etc.). Other modes (``host`` /"
             " custom networks) intentionally not supported."
+        ),
+    )
+    sandbox_network_policy: NetworkPolicy = Field(
+        default_factory=NetworkPolicy,
+        description=(
+            "Canonical proxy policy for a sandboxed session. When enabled, "
+            "it supersedes the legacy none/bridge mode unless an explicit "
+            "--sandbox-network flag is supplied. Nested env prefix: "
+            "OPENHARNESS_SANDBOX_NETWORK_POLICY__."
+        ),
+    )
+    sandbox_external_tool_policy: ExternalToolPolicy = Field(
+        default_factory=ExternalToolPolicy,
+        description=(
+            "Canonical policy for execution surfaces outside the local "
+            "filesystem/process sandbox, such as web and MCP tools. Nested "
+            "env prefix: OPENHARNESS_SANDBOX_EXTERNAL_TOOL_POLICY__."
         ),
     )
     sandbox_memory: str = Field(

@@ -7,23 +7,11 @@ from typing import TYPE_CHECKING
 import pytest
 
 import openharness.services.run_session as run_session_module
-from openharness.cli import SandboxConfig
 from openharness.services.run_session import RunSession, open_run_session
 from openharness.services.worktree import WorktreeHandle
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-
-def _config(*, enabled: bool = False) -> SandboxConfig:
-    return SandboxConfig(
-        enabled=enabled,
-        image="python:3.12-slim",
-        network="none",
-        memory="1g",
-        cpus=1.0,
-        runtime="runc",
-    )
 
 
 class _StatusProcess:
@@ -72,7 +60,7 @@ async def test_untracked_files_fails_closed_on_git_error(
 
 @pytest.mark.asyncio
 async def test_noop_without_isolation_or_sandbox(tmp_path: Path) -> None:
-    async with open_run_session(cwd=tmp_path, isolate=False, sandbox_config=_config()) as session:
+    async with open_run_session(cwd=tmp_path, isolate=False) as session:
         assert session is None
 
 
@@ -97,9 +85,7 @@ async def test_clean_isolated_run_is_removed(
     monkeypatch.setattr(run_session_module, "remove_worktree", _remove)
     monkeypatch.setattr(run_session_module.asyncio, "create_subprocess_exec", _subprocess)
 
-    async with open_run_session(
-        cwd=tmp_path, isolate=True, sandbox_config=_config(), run_id="run-1"
-    ) as session:
+    async with open_run_session(cwd=tmp_path, isolate=True, run_id="run-1") as session:
         assert isinstance(session, RunSession)
         assert session.cwd_override == handle.path
         assert session.status == "running"
@@ -126,7 +112,7 @@ async def test_dirty_isolated_run_is_kept(monkeypatch: pytest.MonkeyPatch, tmp_p
     monkeypatch.setattr(run_session_module, "remove_worktree", _remove)
     monkeypatch.setattr(run_session_module.asyncio, "create_subprocess_exec", _subprocess)
 
-    async with open_run_session(cwd=tmp_path, isolate=True, sandbox_config=_config()):
+    async with open_run_session(cwd=tmp_path, isolate=True):
         pass
 
     assert removed == []
@@ -155,7 +141,6 @@ async def test_existing_worktree_is_verified_not_recreated(
     async with open_run_session(
         cwd=tmp_path,
         isolate=True,
-        sandbox_config=_config(),
         existing_worktree=handle,
     ) as session:
         assert session is not None
@@ -165,22 +150,11 @@ async def test_existing_worktree_is_verified_not_recreated(
 
 
 @pytest.mark.asyncio
-async def test_exception_marks_session_crashed_and_closes_sandbox(
+async def test_run_session_never_owns_a_legacy_execution_environment(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     handle = _handle(tmp_path)
-    closed: list[bool] = []
     captured: RunSession | None = None
-
-    class _FakeSandbox:
-        def __init__(self, **kwargs: object) -> None:
-            pass
-
-        async def __aenter__(self) -> _FakeSandbox:
-            return self
-
-        async def __aexit__(self, *args: object) -> None:
-            closed.append(True)
 
     async def _create(cwd: Path, *, run_id: str) -> WorktreeHandle:
         return handle
@@ -188,19 +162,16 @@ async def test_exception_marks_session_crashed_and_closes_sandbox(
     async def _subprocess(*args: object, **kwargs: object) -> _StatusProcess:
         return _StatusProcess(b" M kept.txt\n")
 
-    monkeypatch.setattr(run_session_module, "SandboxExecution", _FakeSandbox)
+    assert not hasattr(run_session_module, "SandboxExecution")
     monkeypatch.setattr(run_session_module, "create_worktree", _create)
     monkeypatch.setattr(run_session_module.asyncio, "create_subprocess_exec", _subprocess)
 
     with pytest.raises(RuntimeError, match="boom"):
-        async with open_run_session(
-            cwd=tmp_path, isolate=True, sandbox_config=_config(enabled=True)
-        ) as session:
+        async with open_run_session(cwd=tmp_path, isolate=True) as session:
             assert session is not None
             captured = session
-            assert session.execution_env_override is not None
+            assert not hasattr(session, "execution_env_override")
             raise RuntimeError("boom")
 
     assert captured is not None
     assert captured.status == "crashed"
-    assert closed == [True]

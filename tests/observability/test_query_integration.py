@@ -42,7 +42,7 @@ from openharness.protocols import (
     ConversationMessage,
     TextBlock,
 )
-from openharness.tools import ToolRegistry
+from openharness.tools import ExecutionDomain, ToolRegistry
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -334,6 +334,7 @@ class TestToolInputSanitization:
             path: str
 
         class _PathTool(BaseTool[PathInput]):
+            execution_domain = ExecutionDomain.LOCAL_DATA
             name = "PathTool"
             description = "Stub"
             input_model = PathInput
@@ -405,6 +406,7 @@ class TestToolInputSanitization:
             command: str
 
         class _CmdTool(BaseTool[CmdInput]):
+            execution_domain = ExecutionDomain.LOCAL_DATA
             name = "CmdTool"
             description = "Stub"
             input_model = CmdInput

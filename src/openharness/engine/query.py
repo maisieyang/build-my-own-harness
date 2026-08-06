@@ -27,9 +27,10 @@ serially within a turn.
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from openharness.api.errors import OpenHarnessApiError, PromptTooLongFailure
 from openharness.engine.errors import LoopLimitExceeded
@@ -41,6 +42,7 @@ from openharness.engine.messages import (
     extract_tool_uses,
 )
 from openharness.errors import LoopError, ToolError
+from openharness.execution import BoundaryViolation, OneShotOverlaySession, SandboxUnavailableError
 from openharness.hooks import (
     OnErrorContext,
     PostApiCallContext,
@@ -57,17 +59,33 @@ from openharness.observability import (
     sanitize_command,
     sanitize_path,
 )
-from openharness.permissions import Decision, PermissionMode
+from openharness.permissions import (
+    Decision,
+    DecisionResult,
+    ExternalToolMode,
+    PermissionDelta,
+    PermissionDeltaKind,
+    PermissionDeltaRequest,
+    PermissionMode,
+    PermissionResolutionStatus,
+)
 from openharness.protocols import (
     ApiMessageCompleteEvent,
     ApiMessageRequest,
+    BoundaryViolationEvent,
     ConversationCompleteEvent,
+    PermissionParkedEvent,
     ToolExecutionCompletedEvent,
     ToolExecutionStartedEvent,
     ToolResultBlock,
 )
 from openharness.services.compact import auto_compact_if_needed
-from openharness.tools.base import ToolExecutionContext, ToolResult
+from openharness.tools.base import (
+    BaseTool,
+    ExecutionDomain,
+    ToolExecutionContext,
+    ToolResult,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -89,6 +107,17 @@ logger = get_logger("engine")
 # underlying ``PromptTooLongFailure`` to the caller — at that point the
 # prompt is structurally too large for any one-shot recovery.
 _REACTIVE_TRUNCATE_MAX = 3
+
+
+@dataclass(frozen=True)
+class _DispatchOutcome:
+    output: str
+    is_error: bool
+    metadata: dict[str, Any]
+
+
+def _outcome(value: tuple[str, bool]) -> _DispatchOutcome:
+    return _DispatchOutcome(output=value[0], is_error=value[1], metadata={})
 
 
 async def _maybe_write_turn_end_metadata(
@@ -413,10 +442,11 @@ async def run_query(
                     cwd=context.cwd,
                     parent_query=context,
                     execution_env=context.execution_env,
+                    sandbox_session=context.sandbox_session,
                 )
                 tool_results: list[ToolResultBlock] = []
 
-                for tool_use in tool_uses:
+                for tool_index, tool_use in enumerate(tool_uses):
                     yield ToolExecutionStartedEvent(
                         tool_use_id=tool_use.id,
                         tool_name=tool_use.name,
@@ -451,7 +481,8 @@ async def run_query(
                         output = f"would call {tool_use.name} with {tool_use.input}"
                         is_error = False
                     else:
-                        output, is_error = await _dispatch_one(tool_use, context, exec_context)
+                        outcome = await _dispatch_one(tool_use, context, exec_context)
+                        output, is_error = outcome.output, outcome.is_error
 
                     # 5c: log dispatch-complete. Per D13.6, output content
                     # itself is NOT logged (size + PII risk); only its length.
@@ -471,6 +502,27 @@ async def run_query(
                         output=output,
                         is_error=is_error,
                     )
+                    violation = (
+                        outcome.metadata.get("boundary_violation")
+                        if context.permission_mode is not PermissionMode.DRY_RUN
+                        else None
+                    )
+                    if isinstance(violation, dict):
+                        dimension = violation.get("dimension")
+                        requested = violation.get("requested")
+                        evidence = violation.get("evidence")
+                        if (
+                            isinstance(dimension, str)
+                            and isinstance(requested, str)
+                            and isinstance(evidence, str)
+                        ):
+                            yield BoundaryViolationEvent(
+                                tool_use_id=tool_use.id,
+                                tool_name=tool_use.name,
+                                dimension=dimension,
+                                requested=requested,
+                                evidence=evidence,
+                            )
                     tool_results.append(
                         ToolResultBlock(
                             tool_use_id=tool_use.id,
@@ -478,12 +530,43 @@ async def run_query(
                             is_error=is_error,
                         ),
                     )
+                    if (
+                        context.permission_runtime is not None
+                        and context.permission_runtime.parked_request is not None
+                    ):
+                        tool_results.extend(
+                            ToolResultBlock(
+                                tool_use_id=skipped.id,
+                                content="not executed: permission request parked",
+                                is_error=True,
+                            )
+                            for skipped in tool_uses[tool_index + 1 :]
+                        )
+                        break
 
                 # Append the assistant turn (with the tool_use block) and the
                 # bundled tool_results -- mirrors the loop pseudocode in
                 # messages.py docstring.
                 messages = append_assistant_message(messages, list(complete_event.message.content))
                 messages = append_tool_results(messages, tool_results)
+                if (
+                    context.permission_runtime is not None
+                    and context.permission_runtime.parked_request is not None
+                ):
+                    parked = context.permission_runtime.parked_request
+                    await _maybe_write_turn_end_metadata(context, messages)
+                    yield PermissionParkedEvent(
+                        request_id=parked.request_id,
+                        tool_use_id=parked.tool_use_id,
+                        tool_name=parked.tool_name,
+                        delta_kind=parked.delta.kind.value,
+                        delta_value=parked.delta.value,
+                        profile_fingerprint=parked.profile_fingerprint,
+                        boundary_fingerprint=parked.boundary_fingerprint,
+                        reason=context.permission_runtime.parked_reason or "human review required",
+                        messages=messages,
+                    )
+                    return
 
         # Fell through max_turns without an end_turn:loop budget exhausted.
         logger.warning("loop_limit_exceeded", max_turns=context.max_turns)
@@ -494,7 +577,7 @@ async def _dispatch_one(
     tool_use: ToolUseBlock,
     context: QueryContext,
     exec_context: ToolExecutionContext,
-) -> tuple[str, bool]:
+) -> _DispatchOutcome:
     """Run a single tool dispatch. Returns ``(output, is_error)``.
 
     Recovery paths (all return ``is_error=True``, output names the failure):
@@ -511,30 +594,17 @@ async def _dispatch_one(
     try:
         tool = context.tool_registry.get(tool_use.name)
     except KeyError:
-        return f"tool not found: {tool_use.name}", True
+        return _outcome((f"tool not found: {tool_use.name}", True))
 
     try:
         args = tool.input_model.model_validate(tool_use.input)
     except ValidationError as exc:
-        return f"invalid input for {tool_use.name}: {exc}", True
+        return _outcome((f"invalid input for {tool_use.name}: {exc}", True))
 
     permission = context.permission_checker.evaluate(tool_use.name, args, exec_context)
-    if permission.decision is Decision.DENY:
-        reason = permission.reason or tool_use.name
-        return f"permission denied: {reason}", True
-    if permission.decision is Decision.ASK:
-        # Three-Axis G:ASK + mode 解释决定终局。
-        # - AUTO: 用户已经预先信任,treat as ALLOW
-        # - DEFAULT (and any future modes): fail-safe to DENY with hint;
-        #   Phase 4+ replaces this with an interactive prompt.
-        if context.permission_mode is PermissionMode.AUTO:
-            pass  # fall through to execute
-        else:
-            reason = permission.reason or tool_use.name
-            return (
-                f"permission denied (requires confirmation): {reason}; rerun with --auto to allow",
-                True,
-            )
+    permission_failure = _permission_failure(permission, tool_use.name, context.permission_mode)
+    if permission_failure is not None:
+        return _outcome(permission_failure)
 
     # PreToolUse hook chain — can deny / modify input / observe.
     # Hooks run AFTER AuthZ so they can't bypass framework safety baseline.
@@ -548,14 +618,28 @@ async def _dispatch_one(
     current_input = tool_use.input
     if pre_result is not None:
         if pre_result.decision == "deny":
-            return f"hook denied: {pre_result.message or tool_use.name}", True
+            return _outcome((f"hook denied: {pre_result.message or tool_use.name}", True))
         if pre_result.decision == "modify" and pre_result.new_input is not None:
             current_input = pre_result.new_input
             # Re-validate the modified input against the tool's schema.
             try:
                 args = tool.input_model.model_validate(current_input)
             except ValidationError as exc:
-                return f"hook-modified input invalid for {tool_use.name}: {exc}", True
+                return _outcome((f"hook-modified input invalid for {tool_use.name}: {exc}", True))
+            # Hooks are input middleware, not an authorization authority. The
+            # first check above protects hooks from seeing calls already denied
+            # by the framework; this second check makes the final arguments the
+            # ones that are actually authorized immediately before execution.
+            permission = context.permission_checker.evaluate(tool_use.name, args, exec_context)
+            permission_failure = _permission_failure(
+                permission, tool_use.name, context.permission_mode
+            )
+            if permission_failure is not None:
+                return _outcome(permission_failure)
+
+    external_failure = await _external_effect_failure(tool, tool_use, args, context)
+    if external_failure is not None:
+        return _outcome(external_failure)
 
     # Execute the tool. Programming errors fire OnError + wrap as ToolError.
     try:
@@ -567,6 +651,15 @@ async def _dispatch_one(
             OnErrorContext(exception=exc, where="tool", tool_name=tool_use.name),
         )
         raise ToolError(f"tool {tool_use.name} crashed: {exc}") from exc
+
+    result = await _resolve_local_boundary_violation(
+        tool=tool,
+        tool_use=tool_use,
+        args=args,
+        context=context,
+        exec_context=exec_context,
+        result=result,
+    )
 
     # PostToolUse hook chain — can modify output / metadata / is_error.
     post_ctx = PostToolUseContext(
@@ -588,4 +681,186 @@ async def _dispatch_one(
             else result.metadata,
         )
 
-    return result.output, result.is_error
+    return _DispatchOutcome(
+        output=result.output,
+        is_error=result.is_error,
+        metadata=dict(result.metadata),
+    )
+
+
+def _boundary_violation_metadata(result: ToolResult) -> BoundaryViolation | None:
+    raw = result.metadata.get("boundary_violation")
+    if not isinstance(raw, dict):
+        return None
+    dimension = raw.get("dimension")
+    requested = raw.get("requested")
+    evidence = raw.get("evidence")
+    if not (
+        isinstance(dimension, str) and isinstance(requested, str) and isinstance(evidence, str)
+    ):
+        return None
+    return BoundaryViolation(dimension=dimension, requested=requested, evidence=evidence)
+
+
+def _delta_for_violation(violation: BoundaryViolation) -> PermissionDelta:
+    if violation.dimension.startswith("network."):
+        host = violation.requested.rsplit(":", 1)[0].strip("[]")
+        return PermissionDelta(
+            kind=PermissionDeltaKind.NETWORK_DOMAIN,
+            value=host,
+            hard_deny="explicitly denied" in violation.evidence,
+        )
+    return PermissionDelta.filesystem_path(violation.requested)
+
+
+async def _resolve_local_boundary_violation(
+    *,
+    tool: BaseTool[Any],
+    tool_use: ToolUseBlock,
+    args: BaseModel,
+    context: QueryContext,
+    exec_context: ToolExecutionContext,
+    result: ToolResult,
+) -> ToolResult:
+    violation = _boundary_violation_metadata(result)
+    runtime = context.permission_runtime
+    if violation is None or runtime is None:
+        return result
+    request = PermissionDeltaRequest.create(
+        tool_use_id=tool_use.id,
+        tool_name=tool.name,
+        final_arguments=args.model_dump(mode="json"),
+        profile=runtime.profile,
+        boundary=runtime.boundary,
+        delta=_delta_for_violation(violation),
+    )
+    approved = runtime.consume_grant(request)
+    resolution_reason = "human approved exact request"
+    if not approved:
+        resolution = await runtime.resolve_boundary_result(
+            violation,
+            request_factory=lambda: request,
+        )
+        resolution_reason = resolution.reason
+        if resolution.status is PermissionResolutionStatus.RETRY_ONCE:
+            approved = runtime.consume_grant(request)
+        elif resolution.status is PermissionResolutionStatus.PARKED:
+            return ToolResult(
+                output=f"permission parked: {resolution.reason}",
+                is_error=True,
+                metadata=result.metadata,
+            )
+        else:
+            return ToolResult(
+                output=f"permission denied: {resolution.reason}",
+                is_error=True,
+                metadata=result.metadata,
+            )
+    session = context.sandbox_session
+    if not approved or not isinstance(session, OneShotOverlaySession):
+        runtime.park(request, reason="approved delta has no verified overlay executor")
+        return ToolResult(
+            output="permission parked: approved delta has no verified overlay executor",
+            is_error=True,
+            metadata=result.metadata,
+        )
+    try:
+        session.arm(request.delta)
+        retried = await tool.execute(args, exec_context)
+    except (SandboxUnavailableError, RuntimeError, ValueError) as exc:
+        runtime.park(request, reason=f"approved overlay could not be installed: {exc}")
+        return ToolResult(
+            output=f"permission parked: approved overlay could not be installed: {exc}",
+            is_error=True,
+            metadata=result.metadata,
+        )
+    if _boundary_violation_metadata(retried) is not None:
+        runtime.park(
+            request,
+            reason="one-shot overlay did not satisfy the exact boundary request",
+        )
+        return ToolResult(
+            output="permission parked: one-shot overlay did not satisfy the exact boundary request",
+            is_error=True,
+            metadata=retried.metadata,
+        )
+    logger.info(
+        "permission_overlay_consumed",
+        request_id=request.request_id,
+        reason=resolution_reason,
+    )
+    return ToolResult(
+        output=retried.output,
+        is_error=retried.is_error,
+        metadata={
+            **retried.metadata,
+            "boundary_violation": result.metadata["boundary_violation"],
+            "permission_overlay": "consumed",
+        },
+    )
+
+
+async def _external_effect_failure(
+    tool: BaseTool[Any],
+    tool_use: ToolUseBlock,
+    args: BaseModel,
+    context: QueryContext,
+) -> tuple[str, bool] | None:
+    if tool.execution_domain is not ExecutionDomain.EXTERNAL_EFFECT:
+        return None
+    profile = context.runtime_permission_profile
+    if profile is None:
+        return None
+    surface = tool.external_effect_surface
+    if surface is None:
+        return "external effect denied: tool has no policy surface", True
+    mode = getattr(profile.external_tools, surface.value)
+    if mode is ExternalToolMode.DENY:
+        return f"external effect denied by {surface.value} policy: {tool.name}", True
+    if mode is ExternalToolMode.ASK:
+        runtime = context.permission_runtime
+        if runtime is None:
+            return f"external approval required for {surface.value}: {tool.name}", True
+        request = PermissionDeltaRequest.create(
+            tool_use_id=tool_use.id,
+            tool_name=tool.name,
+            final_arguments=args.model_dump(mode="json"),
+            profile=runtime.profile,
+            boundary=runtime.boundary,
+            delta=PermissionDelta.external_tool(surface.value),
+        )
+        if runtime.consume_grant(request):
+            return None
+        resolution = await runtime.resolve_external(request)
+        if resolution.status is PermissionResolutionStatus.RETRY_ONCE:
+            if not runtime.consume_grant(request):
+                return "external approval was not bound to the exact request", True
+            return None
+        if resolution.status is PermissionResolutionStatus.PARKED:
+            return f"permission parked: {resolution.reason}", True
+        return f"external effect denied: {resolution.reason}", True
+    return None
+
+
+def _permission_failure(
+    permission: DecisionResult,
+    tool_name: str,
+    mode: PermissionMode,
+) -> tuple[str, bool] | None:
+    """Translate a checker result into the dispatch recovery payload.
+
+    Kept in one helper so both the model-authored input and any hook-modified
+    final input receive byte-identical DENY/ASK semantics.
+    """
+    if permission.decision is Decision.DENY:
+        reason = permission.reason or tool_name
+        return f"permission denied: {reason}", True
+    if permission.decision is Decision.ASK:
+        if mode is PermissionMode.AUTO:
+            return None
+        reason = permission.reason or tool_name
+        return (
+            f"permission denied (requires confirmation): {reason}; rerun with --auto to allow",
+            True,
+        )
+    return None

@@ -39,7 +39,12 @@ from typing import TYPE_CHECKING, Any, Literal
 from pydantic import BaseModel, Field, create_model
 
 from openharness.mcp.client import McpCallError
-from openharness.tools.base import BaseTool, ToolResult
+from openharness.tools.base import (
+    BaseTool,
+    ExecutionDomain,
+    ExternalEffectSurface,
+    ToolResult,
+)
 
 if TYPE_CHECKING:
     from openharness.mcp.client import McpClient
@@ -143,6 +148,9 @@ class McpToolAdapter(BaseTool[BaseModel]):
             trust=True,              # from Settings.trusted_mcp_servers
         )
     """
+
+    execution_domain = ExecutionDomain.EXTERNAL_EFFECT
+    external_effect_surface = ExternalEffectSurface.MCP
 
     def __init__(
         self,

@@ -21,7 +21,13 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from openharness.tools.base import BaseTool, ToolResult
+from openharness.execution import FileSearchOperation
+from openharness.tools.base import (
+    BaseTool,
+    ExecutionDomain,
+    ToolResult,
+    tool_result_from_operation,
+)
 
 if TYPE_CHECKING:
     from openharness.tools.base import ToolExecutionContext
@@ -60,6 +66,7 @@ class GrepInput(BaseModel):
 class Grep(BaseTool[GrepInput]):
     """Search file contents using ripgrep."""
 
+    execution_domain = ExecutionDomain.LOCAL_DATA
     name = "Grep"
     description = (
         "Search file contents (regex). Returns matching lines with file:line "
@@ -74,6 +81,20 @@ class Grep(BaseTool[GrepInput]):
         args: GrepInput,
         context: ToolExecutionContext,
     ) -> ToolResult:
+        target = _resolve(args.path, context.cwd) if args.path else context.cwd
+        if context.sandbox_session is not None:
+            sandbox_result = await context.sandbox_session.execute(
+                FileSearchOperation(
+                    pattern=args.pattern,
+                    path=target,
+                    glob=args.glob,
+                    ignore_case=args.ignore_case,
+                    hidden=args.hidden,
+                    line_cap=args.line_cap,
+                )
+            )
+            return tool_result_from_operation(sandbox_result)
+
         rg = shutil.which("rg")
         if rg is None:
             return ToolResult(
@@ -90,7 +111,6 @@ class Grep(BaseTool[GrepInput]):
             cmd.extend(["--glob", args.glob])
         cmd.append(args.pattern)
 
-        target = _resolve(args.path, context.cwd) if args.path else context.cwd
         cmd.append(str(target))
 
         process = await asyncio.create_subprocess_exec(

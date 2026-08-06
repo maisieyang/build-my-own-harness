@@ -34,8 +34,12 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from openharness.api import SupportsStreamingMessages
-    from openharness.execution import ExecutionEnvironment
-    from openharness.permissions import PermissionChecker
+    from openharness.execution import EnforcedBoundary, ExecutionEnvironment, SandboxSession
+    from openharness.permissions import (
+        PermissionChecker,
+        PermissionRuntime,
+        RuntimePermissionProfile,
+    )
     from openharness.protocols.messages import ConversationMessage
     from openharness.skills.store import SkillStore
     from openharness.tools import ToolRegistry
@@ -88,6 +92,10 @@ class QueryContext:
     # ``--sandbox`` CLI flag. Sub-agent inherits this field via
     # ``dataclasses.replace`` automatically.
     execution_env: ExecutionEnvironment = field(default_factory=lambda: _HOST_EXECUTION)
+    sandbox_session: SandboxSession | None = None
+    runtime_permission_profile: RuntimePermissionProfile | None = None
+    enforced_boundary: EnforcedBoundary | None = None
+    permission_runtime: PermissionRuntime | None = None
     # P11-T3.3f (decisions/26 D29.3): proactive auto-compact knobs.
     # Engine calls ``auto_compact_if_needed`` BEFORE each LLM request
     # (in front of PreApiCall hooks) when ``compact_enabled=True``.
@@ -148,6 +156,10 @@ class QueryContext:
         cwd: Path,
         hook_registry: HookRegistry | None = None,
         execution_env: ExecutionEnvironment | None = None,
+        sandbox_session: SandboxSession | None = None,
+        runtime_permission_profile: RuntimePermissionProfile | None = None,
+        enforced_boundary: EnforcedBoundary | None = None,
+        permission_runtime: PermissionRuntime | None = None,
         skill_store: SkillStore | None = None,
         memory_store: Any = None,
         session_memory_path: Path | None = None,
@@ -208,6 +220,24 @@ class QueryContext:
         system_prompt = snapshot["system_prompt"]
         messages = [_CM.model_validate(m) for m in snapshot["messages"]]
 
+        restored_permission_runtime = permission_runtime
+        extra = snapshot.get("extra", {})
+        runtime_state = extra.get("permission_runtime") if isinstance(extra, dict) else None
+        if runtime_state is not None:
+            if permission_runtime is None:
+                raise ValueError(
+                    "snapshot contains permission runtime state but no verified runtime was provided"
+                )
+            from openharness.permissions import PermissionRuntime as _PermissionRuntime
+
+            restored_permission_runtime = _PermissionRuntime.from_state(
+                profile=permission_runtime.profile,
+                boundary=permission_runtime.boundary,
+                state=runtime_state,
+                reviewer=permission_runtime.reviewer,
+                denial_limit=permission_runtime.denial_limit,
+            )
+
         context = cls(
             api_client=api_client,
             tool_registry=tool_registry,
@@ -222,6 +252,10 @@ class QueryContext:
             hook_registry=hook_registry if hook_registry is not None else HookRegistry(),
             skill_store=skill_store if skill_store is not None else EmptySkillStore(),
             execution_env=execution_env if execution_env is not None else _HOST_EXECUTION,
+            sandbox_session=sandbox_session,
+            runtime_permission_profile=runtime_permission_profile,
+            enforced_boundary=enforced_boundary,
+            permission_runtime=restored_permission_runtime,
             compact_enabled=compact_enabled,
             compact_threshold_ratio=compact_threshold_ratio,
             compact_full_max_tokens=compact_full_max_tokens,

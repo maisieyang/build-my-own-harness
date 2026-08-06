@@ -90,8 +90,8 @@ flowchart LR
     U["User or script"] --> C["REPL and headless CLI"]
     C --> E["Agent engine"]
     E <--> M["OpenAI-compatible model"]
-    E --> P["Permissions and hooks"]
-    P --> X["Host, Docker, or gVisor"]
+    E --> P["Permission profile, verified boundary, and hooks"]
+    P --> X["Seatbelt, Docker command backend, or legacy host"]
     E <--> S["Compaction, snapshots, and memory"]
     C --> V["Independent /goal judge"]
     V -->|"checker feedback"| E
@@ -101,8 +101,9 @@ flowchart LR
 The ownership model has four parts:
 
 1. **Actions.** Typed streaming and tool calls feed an allow/ask/deny
-   authorization layer, lifecycle hooks, irreversible-operation red lines, and
-   host or Docker/gVisor execution.
+   authorization layer, lifecycle hooks, external-effect policy, and—when the
+   sandbox posture is selected—one verified session boundary shared by the
+   local data-plane tools.
 2. **Evidence and state.** Tool results, compaction, memory, and snapshots
    preserve enough trustworthy state for long tasks to recover.
 3. **Capabilities.** Skills, commands, mode bundles, MCP servers, plugins, and
@@ -327,12 +328,15 @@ uv run ruff format --check
   `SKILL.md` trees. Claude Code `.mcp.json` and declarative agents are not
   imported.
 - MCP transport is stdio only.
-- Docker/gVisor isolation is optional; host execution is the default.
+- Isolation remains opt-in. On macOS the Seatbelt backend covers the unified
+  local data plane; Docker remains an explicitly command-only backend, and a
+  non-sandbox posture retains legacy host execution.
 - The `/goal` judge is probabilistic, reads conversation evidence rather than
   operating-system state, fails closed, and is bounded by an explicit turn cap.
-- Permission, sandbox, worktree isolation, and completion remain orthogonal;
-  `/goal` pauses on confirmation-required permission failures, but unattended
-  permission policy is still an open design boundary.
+- Permission intent and sandbox enforcement are separate contracts: reviewers
+  act only on a verified boundary and can grant one exact overlay. Requests
+  they cannot resolve are durably parked; `/goal` pauses before its judge and
+  resumes only after an explicit approve/deny plus `/resume` transition.
 
 ## Design record
 

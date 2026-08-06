@@ -17,7 +17,13 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from openharness.tools.base import BaseTool, ToolResult
+from openharness.execution import FileReadOperation
+from openharness.tools.base import (
+    BaseTool,
+    ExecutionDomain,
+    ToolResult,
+    tool_result_from_operation,
+)
 
 if TYPE_CHECKING:
     from openharness.tools.base import ToolExecutionContext
@@ -47,6 +53,7 @@ class ReadInput(BaseModel):
 class Read(BaseTool[ReadInput]):
     """Read a text file's contents."""
 
+    execution_domain = ExecutionDomain.LOCAL_DATA
     name = "Read"
     description = (
         "Read a text file. Returns the contents (UTF-8, with replacement "
@@ -62,6 +69,12 @@ class Read(BaseTool[ReadInput]):
         context: ToolExecutionContext,
     ) -> ToolResult:
         path = _resolve(args.path, context.cwd)
+
+        if context.sandbox_session is not None:
+            sandbox_result = await context.sandbox_session.execute(
+                FileReadOperation(path=path, offset=args.offset, limit=args.limit)
+            )
+            return tool_result_from_operation(sandbox_result)
 
         if not path.exists():
             return ToolResult(is_error=True, output=f"file not found: {path}")

@@ -21,17 +21,26 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from pydantic import BaseModel
 
+from openharness.execution.boundary import (
+    BoundaryViolation,
+    ExecutionFailed,
+    ExecutionResult,
+    OperationCompleted,
+    ProcessCompleted,
+    TimedOut,
+)
 from openharness.protocols import ToolSpec
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from openharness.engine.context import QueryContext
-    from openharness.execution import ExecutionEnvironment
+    from openharness.execution import ExecutionEnvironment, SandboxSession
 
 
 @dataclass(frozen=True)
@@ -50,6 +59,42 @@ class ToolResult:
     # Per-instance dict — ``field(default_factory=dict)`` avoids the classic
     # mutable-default-argument trap (every instance shares one dict).
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+def tool_result_from_operation(
+    result: ExecutionResult,
+) -> ToolResult:
+    """Translate structured local-data-plane outcomes for file tools."""
+    if isinstance(result, OperationCompleted):
+        return ToolResult(
+            output=result.output,
+            is_error=result.is_error,
+            metadata=dict(result.metadata),
+        )
+    if isinstance(result, BoundaryViolation):
+        return ToolResult(
+            output=(
+                f"sandbox boundary violation ({result.dimension}): "
+                f"{result.requested}; {result.evidence}"
+            ),
+            is_error=True,
+            metadata={
+                "boundary_violation": {
+                    "dimension": result.dimension,
+                    "requested": result.requested,
+                    "evidence": result.evidence,
+                }
+            },
+        )
+    if isinstance(result, TimedOut):
+        return ToolResult(output="sandbox operation timed out", is_error=True)
+    if isinstance(result, ExecutionFailed):
+        return ToolResult(output=f"sandbox operation failed: {result.reason}", is_error=True)
+    if isinstance(result, ProcessCompleted):
+        return ToolResult(
+            output="sandbox returned an invalid result for a filesystem operation",
+            is_error=True,
+        )
 
 
 @dataclass(frozen=True)
@@ -83,11 +128,32 @@ class ToolExecutionContext:
     # the ``_HOST_EXECUTION`` fallback if ``None``, preserving direct
     # construction of ``ToolExecutionContext(cwd=p)`` in tests).
     execution_env: ExecutionEnvironment | None = None
+    # S4: when present, all LOCAL_DATA tools route through this verified
+    # session. Legacy execution_env/host paths remain only for postures that
+    # have not selected a unified sandbox runtime.
+    sandbox_session: SandboxSession | None = None
 
 
 # Bound to BaseModel so every tool's input is parseable from the LLM's
 # JSON dict via ``model.model_validate(...)``.
 InputT = TypeVar("InputT", bound=BaseModel)
+
+
+class ExecutionDomain(str, Enum):
+    """Where a model-callable tool's effects are enforced."""
+
+    UNDECLARED = "undeclared"
+    LOCAL_DATA = "local_data"
+    EXTERNAL_EFFECT = "external_effect"
+    DELEGATED_RUNTIME = "delegated_runtime"
+    TRUSTED_CONTROL = "trusted_control"
+
+
+class ExternalEffectSurface(str, Enum):
+    MCP = "mcp"
+    WEB = "web"
+    BROWSER = "browser"
+    COMPUTER_USE = "computer_use"
 
 
 class BaseTool(ABC, Generic[InputT]):
@@ -135,6 +201,11 @@ class BaseTool(ABC, Generic[InputT]):
     # engine change Phase 5 needs (boundary cross-cutting invariant).
     trust_source: str = "local"
 
+    # S1 boundary coverage contract. Registration rejects the sentinel so a
+    # new model-callable surface cannot silently inherit host authority.
+    execution_domain: ExecutionDomain = ExecutionDomain.UNDECLARED
+    external_effect_surface: ExternalEffectSurface | None = None
+
     @abstractmethod
     async def execute(
         self,
@@ -167,6 +238,19 @@ class ToolRegistry:
 
     def register(self, tool: BaseTool[Any]) -> None:
         """Register a tool under its ``name``. Raises on duplicate."""
+        if tool.execution_domain is ExecutionDomain.UNDECLARED:
+            raise ValueError(
+                f"tool {tool.name!r} has no execution domain; "
+                "declare where its effects are enforced"
+            )
+        if (
+            tool.execution_domain is ExecutionDomain.EXTERNAL_EFFECT
+            and tool.external_effect_surface is None
+        ):
+            raise ValueError(
+                f"tool {tool.name!r} has no external effect surface; "
+                "declare which independent policy applies"
+            )
         if tool.name in self._tools:
             raise ValueError(f"tool {tool.name!r} already registered")
         self._tools[tool.name] = tool
@@ -181,6 +265,25 @@ class ToolRegistry:
         """Return the registered tools in insertion order. Caller-owned list
         copy -- mutating it does not affect the registry."""
         return list(self._tools.values())
+
+    def execution_domain_report(self) -> dict[ExecutionDomain, tuple[str, ...]]:
+        """Return deterministic configured tool coverage by execution domain."""
+        grouped: dict[ExecutionDomain, list[str]] = {}
+        for tool in self._tools.values():
+            grouped.setdefault(tool.execution_domain, []).append(tool.name)
+        return {domain: tuple(names) for domain, names in grouped.items()}
+
+    def external_effect_report(self) -> dict[ExternalEffectSurface, tuple[str, ...]]:
+        """Name each external surface not covered by a local boundary."""
+        grouped: dict[ExternalEffectSurface, list[str]] = {}
+        for tool in self._tools.values():
+            if tool.execution_domain is not ExecutionDomain.EXTERNAL_EFFECT:
+                continue
+            surface = tool.external_effect_surface
+            if surface is None:
+                continue
+            grouped.setdefault(surface, []).append(tool.name)
+        return {surface: tuple(names) for surface, names in grouped.items()}
 
     def to_api_schema(self) -> list[ToolSpec]:
         """Project the registry to ``list[ToolSpec]`` for the API request.

@@ -5,7 +5,7 @@ environment variables. It defines four user-facing contracts:
 
 1. **Required**: the user must provide an API key + base URL, or get a clear
    ``ValidationError`` naming the missing field.
-2. **Optional default**: ``model`` defaults to ``qwen3.7-max`` (per
+2. **Optional default**: ``model`` defaults to ``qwen-plus`` (per
    ``decisions/05-cli.md`` D5.3) but can be overridden via env var.
 3. **Provider-neutral prefix**: env vars are namespaced under
    ``OPENHARNESS_`` regardless of which Provider the base URL points to
@@ -57,14 +57,14 @@ class TestRequiredFieldsLoading:
 class TestDefaults:
     """``model`` has a sensible default; the user only needs to set the key + URL."""
 
-    def test_default_model_is_qwen37_max(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_default_model_is_qwen_plus(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")
         monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://example.com/v1")
         # OPENHARNESS_MODEL deliberately not set.
 
         settings = Settings()
 
-        assert settings.model == "qwen3.7-max"
+        assert settings.model == "qwen-plus"
 
     def test_default_permission_mode_is_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from openharness.permissions import PermissionMode
@@ -369,13 +369,14 @@ class TestMaxAgentDepth:
 
 
 class TestSandboxFields:
-    """P7b-T2 (D18.x) — Docker sandbox configuration."""
+    """Verified sandbox selection plus Docker compatibility settings."""
 
     def test_default_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
         monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
         settings = Settings()
         assert settings.sandbox_enabled is False  # default: host execution
+        assert settings.sandbox_backend == "seatbelt"
         assert settings.sandbox_image == "python:3.12-slim"
         assert settings.sandbox_network == "none"
         assert settings.sandbox_memory == "1g"
@@ -390,6 +391,32 @@ class TestSandboxFields:
         monkeypatch.setenv("OPENHARNESS_SANDBOX_RUNTIME", "runsc")
         settings = Settings()
         assert settings.sandbox_runtime == "runsc"
+
+    def test_backend_via_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_SANDBOX_BACKEND", "docker-command")
+        assert Settings().sandbox_backend == "docker-command"
+
+    def test_canonical_network_policy_can_be_configured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        settings = Settings(
+            sandbox_network_policy={
+                "enabled": True,
+                "allow_domains": ("pypi.org",),
+            }
+        )
+        assert settings.sandbox_network_policy.allow_domains == ("pypi.org",)
+
+    def test_unknown_backend_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
+        monkeypatch.setenv("OPENHARNESS_SANDBOX_BACKEND", "wishful-thinking")
+        with pytest.raises(ValidationError):
+            Settings()
 
     def test_arbitrary_runtime_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # P7c-T2 (D23.2): no client-side allowlist; Docker daemon

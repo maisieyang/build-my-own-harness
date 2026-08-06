@@ -20,7 +20,13 @@ from openharness.permissions.rules import (
     accept_edits_preset,
     plan_mode_preset,
 )
-from openharness.tools import BaseTool, ToolExecutionContext, ToolRegistry, ToolResult
+from openharness.tools import (
+    BaseTool,
+    ExecutionDomain,
+    ToolExecutionContext,
+    ToolRegistry,
+    ToolResult,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -35,6 +41,7 @@ class _CmdInput(BaseModel):
 
 
 class _WriteTool(BaseTool[_PathInput]):
+    execution_domain = ExecutionDomain.LOCAL_DATA
     name = "Write"
     description = "mutating path tool"
     input_model = _PathInput
@@ -50,6 +57,7 @@ class _EditTool(_WriteTool):
 
 
 class _ReadTool(BaseTool[_PathInput]):
+    execution_domain = ExecutionDomain.LOCAL_DATA
     name = "Read"
     description = "read-only path tool"
     input_model = _PathInput
@@ -61,6 +69,7 @@ class _ReadTool(BaseTool[_PathInput]):
 
 
 class _BashTool(BaseTool[_CmdInput]):
+    execution_domain = ExecutionDomain.LOCAL_DATA
     name = "Bash"
     description = "command tool"
     input_model = _CmdInput

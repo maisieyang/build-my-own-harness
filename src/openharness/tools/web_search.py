@@ -44,7 +44,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 import httpx
 from pydantic import BaseModel, Field
 
-from openharness.tools.base import BaseTool, ToolResult
+from openharness.tools.base import BaseTool, ExecutionDomain, ExternalEffectSurface, ToolResult
 
 if TYPE_CHECKING:
     from openharness.tools.base import ToolExecutionContext
@@ -260,6 +260,8 @@ class WebSearch(BaseTool[WebSearchInput]):
     the LLM does, and decides whether to retry / rephrase / give up.
     """
 
+    execution_domain = ExecutionDomain.EXTERNAL_EFFECT
+    external_effect_surface = ExternalEffectSurface.WEB
     name = "WebSearch"
     description = (
         "Search the web for information. Returns up to num_results "

@@ -13,7 +13,8 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from openharness.engine.context import QueryContext
-from openharness.permissions import PermissionMode
+from openharness.execution import BoundaryVerification, EnforcedBoundary, ExecutionEffect
+from openharness.permissions import PermissionMode, PermissionRuntime, workspace_runtime_profile
 from openharness.protocols import (
     ConversationMessage,
     TextBlock,
@@ -221,6 +222,52 @@ class TestFromSnapshotPermissionModeRoundTrip:
     def test_invalid_permission_mode_raises(self, tmp_path: Path) -> None:
         snap = _synthesize_snapshot(cwd=tmp_path, permission_mode="not_a_mode")
         with pytest.raises(ValueError):
+            QueryContext.from_snapshot(
+                snap,
+                **_runtime_kwargs(tmp_path),  # type: ignore[arg-type]
+            )
+
+
+class TestFromSnapshotPermissionRuntime:
+    def test_restores_verified_runtime_state(self, tmp_path: Path) -> None:
+        profile = workspace_runtime_profile()
+        boundary = EnforcedBoundary(
+            profile_fingerprint=profile.fingerprint,
+            backend="test",
+            backend_version="1",
+            covered_effects=(ExecutionEffect.COMMAND,),
+            verification=BoundaryVerification.VERIFIED,
+        )
+        runtime = PermissionRuntime(profile=profile, boundary=boundary)
+        snap = _synthesize_snapshot(cwd=tmp_path)
+        snap["extra"] = {"permission_runtime": runtime.export_state().model_dump(mode="json")}
+
+        context, _ = QueryContext.from_snapshot(
+            snap,
+            permission_runtime=runtime,
+            runtime_permission_profile=profile,
+            enforced_boundary=boundary,
+            **_runtime_kwargs(tmp_path),  # type: ignore[arg-type]
+        )
+
+        assert context.permission_runtime is not runtime
+        assert context.permission_runtime is not None
+        assert context.permission_runtime.boundary.fingerprint == boundary.fingerprint
+
+    def test_refuses_permission_state_without_verified_runtime(self, tmp_path: Path) -> None:
+        profile = workspace_runtime_profile()
+        boundary = EnforcedBoundary(
+            profile_fingerprint=profile.fingerprint,
+            backend="test",
+            backend_version="1",
+            covered_effects=(ExecutionEffect.COMMAND,),
+            verification=BoundaryVerification.VERIFIED,
+        )
+        runtime = PermissionRuntime(profile=profile, boundary=boundary)
+        snap = _synthesize_snapshot(cwd=tmp_path)
+        snap["extra"] = {"permission_runtime": runtime.export_state().model_dump(mode="json")}
+
+        with pytest.raises(ValueError, match="no verified runtime"):
             QueryContext.from_snapshot(
                 snap,
                 **_runtime_kwargs(tmp_path),  # type: ignore[arg-type]

@@ -25,6 +25,8 @@ import pytest
 from openharness.protocols import ToolSpec
 from openharness.tools.base import (
     BaseTool,
+    ExecutionDomain,
+    ExternalEffectSurface,
     ToolExecutionContext,
     ToolRegistry,
     ToolResult,
@@ -138,6 +140,7 @@ class _AltFakeTool(BaseTool[FakeInput]):
     name = "Alt"
     description = "Second fake."
     input_model = FakeInput
+    execution_domain = ExecutionDomain.LOCAL_DATA
 
     async def execute(
         self,
@@ -149,6 +152,62 @@ class _AltFakeTool(BaseTool[FakeInput]):
 
 
 class TestToolRegistry:
+    def test_register_tool_without_execution_domain_fails_closed(self) -> None:
+        class _Undeclared(BaseTool[FakeInput]):
+            name = "Undeclared"
+            description = "No runtime effect declaration."
+            input_model = FakeInput
+
+            async def execute(self, args: FakeInput, context: ToolExecutionContext) -> ToolResult:
+                del args, context
+                return ToolResult(output="must not run")
+
+        registry = ToolRegistry()
+
+        with pytest.raises(ValueError, match="execution domain"):
+            registry.register(_Undeclared())
+
+    def test_external_effect_without_surface_fails_closed(self) -> None:
+        class _UnclassifiedExternal(BaseTool[FakeInput]):
+            name = "External"
+            description = "External effect with no policy surface."
+            input_model = FakeInput
+            execution_domain = ExecutionDomain.EXTERNAL_EFFECT
+
+            async def execute(self, args: FakeInput, context: ToolExecutionContext) -> ToolResult:
+                del args, context
+                return ToolResult(output="must not run")
+
+        with pytest.raises(ValueError, match="external effect surface"):
+            ToolRegistry().register(_UnclassifiedExternal())
+
+    def test_coverage_report_groups_declared_domains(self) -> None:
+        registry = ToolRegistry()
+        registry.register(_FakeTool())
+
+        assert registry.execution_domain_report() == {
+            ExecutionDomain.LOCAL_DATA: ("Fake",),
+        }
+
+    def test_external_surface_report_names_independent_policy_scope(self) -> None:
+        class _External(BaseTool[FakeInput]):
+            name = "External"
+            description = "A web effect."
+            input_model = FakeInput
+            execution_domain = ExecutionDomain.EXTERNAL_EFFECT
+            external_effect_surface = ExternalEffectSurface.WEB
+
+            async def execute(self, args: FakeInput, context: ToolExecutionContext) -> ToolResult:
+                del args, context
+                return ToolResult(output="ok")
+
+        registry = ToolRegistry()
+        registry.register(_External())
+
+        assert registry.external_effect_report() == {
+            ExternalEffectSurface.WEB: ("External",),
+        }
+
     def test_register_and_get_round_trip(self) -> None:
         registry = ToolRegistry()
         tool = _FakeTool()

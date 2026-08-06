@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import pytest
 
+from openharness.execution import BoundaryVerification, EnforcedBoundary, ExecutionEffect
+from openharness.permissions import RuntimePermissionProfile
 from openharness.protocols.content import TextBlock, ToolResultBlock
 from openharness.protocols.messages import ConversationMessage
 from openharness.repl import (
@@ -22,11 +24,13 @@ from openharness.repl import (
     build_goal_sentinel,
     build_plan_approval_sentinel,
     find_active_goal,
+    format_permissions_status,
     format_status_bar,
     goal_evidence_messages,
     goal_prompt_section,
     parse_goal_command,
 )
+from openharness.tools import ExecutionDomain, ExternalEffectSurface
 
 
 class TestParseGoalCommand:
@@ -178,3 +182,50 @@ class TestStatusBarGoal:
 class TestSlashMenu:
     def test_goal_is_a_builtin_command(self) -> None:
         assert "/goal" in [c.name for c in BUILTIN_SLASH_COMMANDS]
+
+    def test_permissions_is_a_builtin_command(self) -> None:
+        assert "/permissions" in [c.name for c in BUILTIN_SLASH_COMMANDS]
+
+
+class TestPermissionStatus:
+    def test_configured_intent_and_installed_facts_are_separate(self) -> None:
+        profile = RuntimePermissionProfile(name="workspace")
+        boundary = EnforcedBoundary(
+            profile_fingerprint=profile.fingerprint,
+            backend="seatbelt",
+            backend_version="1",
+            covered_effects=(ExecutionEffect.COMMAND,),
+            verification=BoundaryVerification.VERIFIED,
+        )
+
+        status = format_permissions_status(
+            profile=profile,
+            boundary=boundary,
+            tool_domains={ExecutionDomain.LOCAL_DATA: ("Bash", "Read")},
+            external_surfaces={ExternalEffectSurface.MCP: ("Github.create_issue",)},
+            legacy_mode="default",
+        )
+
+        assert "Configured intent" in status
+        assert "workspace" in status
+        assert profile.fingerprint[:12] in status
+        assert "Installed facts" in status
+        assert "seatbelt" in status
+        assert "command" in status
+        assert "Bash, Read" in status
+        assert "mcp=ask" in status
+        assert "mcp: Github.create_issue" in status
+        assert "not covered by local sandbox" in status
+
+    def test_legacy_runtime_does_not_claim_an_installed_boundary(self) -> None:
+        status = format_permissions_status(
+            profile=None,
+            boundary=None,
+            tool_domains={},
+            external_surfaces={},
+            legacy_mode="auto",
+        )
+
+        assert "canonical profile: not configured" in status
+        assert "legacy mode: auto" in status
+        assert "verified boundary: none" in status

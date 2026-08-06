@@ -159,7 +159,7 @@ class TestHappyPath:
 
         assert result.exit_code == 0
         assert stub.last_request is not None
-        assert stub.last_request.model == "qwen3.7-max"
+        assert stub.last_request.model == "qwen-plus"
 
     def test_env_model_overrides_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_minimum_env(monkeypatch)
@@ -1116,10 +1116,57 @@ class TestSubAgentBootstrap:
 
 
 class TestSandboxFlags:
-    """``--sandbox`` / ``--sandbox-*`` flags thread into QueryContext via
-    SandboxExecution (mocked, so tests are cross-platform). Default off
-    keeps HostExecution path unchanged.
-    """
+    """Sandbox flags compile intent into a verified session boundary."""
+
+    @staticmethod
+    def _patch_backend(
+        monkeypatch: pytest.MonkeyPatch,
+        name: str,
+        captured_init: dict[str, object],
+        captured_profile: list[object],
+    ) -> object:
+        from openharness.execution import (
+            BoundaryVerification,
+            EnforcedBoundary,
+            ExecutionEffect,
+        )
+
+        class _Session:
+            def __init__(self) -> None:
+                self.boundary: EnforcedBoundary | None = None
+
+            async def close(self) -> None:
+                pass
+
+        session = _Session()
+
+        class _Backend:
+            def __init__(self, **kwargs: object) -> None:
+                captured_init.update(kwargs)
+
+            async def open(self, profile: object) -> _Session:
+                captured_profile.append(profile)
+                effects = (
+                    (ExecutionEffect.COMMAND,)
+                    if name == "DockerCommandBackend"
+                    else (
+                        ExecutionEffect.COMMAND,
+                        ExecutionEffect.FILE_READ,
+                        ExecutionEffect.FILE_WRITE,
+                        ExecutionEffect.FILE_SEARCH,
+                    )
+                )
+                session.boundary = EnforcedBoundary(
+                    profile_fingerprint=profile.fingerprint,  # type: ignore[attr-defined]
+                    backend=name,
+                    backend_version="test",
+                    covered_effects=effects,
+                    verification=BoundaryVerification.VERIFIED,
+                )
+                return session
+
+        monkeypatch.setattr(cli_module, name, _Backend)
+        return session
 
     def test_default_no_sandbox(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from openharness.execution.host import HostExecution
@@ -1133,9 +1180,9 @@ class TestSandboxFlags:
         runner = CliRunner()
         result = runner.invoke(cli_module.app, ["ask", "hi"])
         assert result.exit_code == 0
-        # Default: HostExecution singleton — no Docker involvement.
         ctx = captured.context
         assert isinstance(ctx.execution_env, HostExecution)  # type: ignore[attr-defined]
+        assert ctx.sandbox_session is None  # type: ignore[attr-defined]
 
     def test_sandbox_flag_enters_sandbox_context(self, monkeypatch: pytest.MonkeyPatch) -> None:
 
@@ -1145,48 +1192,23 @@ class TestSandboxFlags:
         captured = _CapturedContext()
         _patch_run_query_capture(monkeypatch, captured)
 
-        # Patch SandboxExecution to a stub so we don't touch real Docker.
-        # The stub records constructor args; __aenter__/__aexit__ are
-        # async no-ops returning self.
         captured_init: dict[str, object] = {}
-
-        class _FakeSandbox:
-            def __init__(self, *, cwd, image, network, memory, cpus, pids, runtime) -> None:  # type: ignore[no-untyped-def]
-                captured_init.update(
-                    cwd=cwd,
-                    image=image,
-                    network=network,
-                    memory=memory,
-                    cpus=cpus,
-                    pids=pids,
-                    runtime=runtime,
-                )
-
-            async def __aenter__(self) -> _FakeSandbox:
-                return self
-
-            async def __aexit__(self, *a: object) -> None:
-                pass
-
-            async def run_command(self, command, cwd, timeout=None):  # type: ignore[no-untyped-def]
-                from openharness.execution import ProcessResult
-
-                return ProcessResult(output="", exit_code=0)
-
-        monkeypatch.setattr(cli_module, "SandboxExecution", _FakeSandbox)
+        captured_profile: list[object] = []
+        session = self._patch_backend(
+            monkeypatch, "SeatbeltBackend", captured_init, captured_profile
+        )
 
         runner = CliRunner()
         result = runner.invoke(cli_module.app, ["ask", "hi", "--sandbox"])
         assert result.exit_code == 0
 
-        # SandboxExecution was constructed; defaults plumbed through.
-        assert captured_init["image"] == "python:3.12-slim"
-        assert captured_init["network"] == "none"
-        assert captured_init["memory"] == "1g"
-        assert captured_init["cpus"] == 1.0
-        # QueryContext.execution_env is the fake (substrate-swap worked).
+        assert "cwd" in captured_init
+        assert captured_profile[0].network.enabled is False  # type: ignore[attr-defined]
         ctx = captured.context
-        assert isinstance(ctx.execution_env, _FakeSandbox)  # type: ignore[attr-defined]
+        from openharness.execution import OneShotOverlaySession
+
+        assert isinstance(ctx.sandbox_session, OneShotOverlaySession)  # type: ignore[attr-defined]
+        assert ctx.sandbox_session.boundary is session.boundary  # type: ignore[attr-defined]
 
     def test_sandbox_network_flag_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_minimum_env(monkeypatch)
@@ -1196,23 +1218,8 @@ class TestSandboxFlags:
         _patch_run_query_capture(monkeypatch, captured)
 
         captured_init: dict[str, object] = {}
-
-        class _FakeSandbox:
-            def __init__(self, **kwargs: object) -> None:
-                captured_init.update(kwargs)
-
-            async def __aenter__(self) -> _FakeSandbox:
-                return self
-
-            async def __aexit__(self, *a: object) -> None:
-                pass
-
-            async def run_command(self, command, cwd, timeout=None):  # type: ignore[no-untyped-def]
-                from openharness.execution import ProcessResult
-
-                return ProcessResult(output="", exit_code=0)
-
-        monkeypatch.setattr(cli_module, "SandboxExecution", _FakeSandbox)
+        captured_profile: list[object] = []
+        self._patch_backend(monkeypatch, "DockerCommandBackend", captured_init, captured_profile)
 
         runner = CliRunner()
         result = runner.invoke(
@@ -1221,6 +1228,8 @@ class TestSandboxFlags:
                 "ask",
                 "hi",
                 "--sandbox",
+                "--sandbox-backend",
+                "docker-command",
                 "--sandbox-network",
                 "bridge",
                 "--sandbox-memory",
@@ -1232,10 +1241,10 @@ class TestSandboxFlags:
             ],
         )
         assert result.exit_code == 0
-        assert captured_init["network"] == "bridge"
         assert captured_init["memory"] == "512m"
         assert captured_init["cpus"] == 0.5
         assert captured_init["image"] == "ubuntu:latest"
+        assert captured_profile[0].network.enabled is True  # type: ignore[attr-defined]
 
     def test_env_var_enables_sandbox(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_minimum_env(monkeypatch)
@@ -1245,29 +1254,16 @@ class TestSandboxFlags:
         captured = _CapturedContext()
         _patch_run_query_capture(monkeypatch, captured)
 
-        # Same fake sandbox pattern.
-        class _FakeSandbox:
-            def __init__(self, **kwargs: object) -> None:
-                pass
-
-            async def __aenter__(self) -> _FakeSandbox:
-                return self
-
-            async def __aexit__(self, *a: object) -> None:
-                pass
-
-            async def run_command(self, command, cwd, timeout=None):  # type: ignore[no-untyped-def]
-                from openharness.execution import ProcessResult
-
-                return ProcessResult(output="", exit_code=0)
-
-        monkeypatch.setattr(cli_module, "SandboxExecution", _FakeSandbox)
+        session = self._patch_backend(monkeypatch, "SeatbeltBackend", {}, [])
 
         runner = CliRunner()
         result = runner.invoke(cli_module.app, ["ask", "hi"])
         assert result.exit_code == 0
         ctx = captured.context
-        assert isinstance(ctx.execution_env, _FakeSandbox)  # type: ignore[attr-defined]
+        from openharness.execution import OneShotOverlaySession
+
+        assert isinstance(ctx.sandbox_session, OneShotOverlaySession)  # type: ignore[attr-defined]
+        assert ctx.sandbox_session.boundary is session.boundary  # type: ignore[attr-defined]
 
     def test_default_runtime_is_runc(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # P7c-T2: default sandbox_runtime is "runc" (Phase 7b
@@ -1277,26 +1273,13 @@ class TestSandboxFlags:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         captured_init: dict[str, object] = {}
-
-        class _FakeSandbox:
-            def __init__(self, **kwargs: object) -> None:
-                captured_init.update(kwargs)
-
-            async def __aenter__(self) -> _FakeSandbox:
-                return self
-
-            async def __aexit__(self, *a: object) -> None:
-                pass
-
-            async def run_command(self, command, cwd, timeout=None):  # type: ignore[no-untyped-def]
-                from openharness.execution import ProcessResult
-
-                return ProcessResult(output="", exit_code=0)
-
-        monkeypatch.setattr(cli_module, "SandboxExecution", _FakeSandbox)
+        self._patch_backend(monkeypatch, "DockerCommandBackend", captured_init, [])
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi", "--sandbox"])
+        result = runner.invoke(
+            cli_module.app,
+            ["ask", "hi", "--sandbox", "--sandbox-backend", "docker-command"],
+        )
         assert result.exit_code == 0
         assert captured_init["runtime"] == "runc"
 
@@ -1309,28 +1292,20 @@ class TestSandboxFlags:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         captured_init: dict[str, object] = {}
-
-        class _FakeSandbox:
-            def __init__(self, **kwargs: object) -> None:
-                captured_init.update(kwargs)
-
-            async def __aenter__(self) -> _FakeSandbox:
-                return self
-
-            async def __aexit__(self, *a: object) -> None:
-                pass
-
-            async def run_command(self, command, cwd, timeout=None):  # type: ignore[no-untyped-def]
-                from openharness.execution import ProcessResult
-
-                return ProcessResult(output="", exit_code=0)
-
-        monkeypatch.setattr(cli_module, "SandboxExecution", _FakeSandbox)
+        self._patch_backend(monkeypatch, "DockerCommandBackend", captured_init, [])
 
         runner = CliRunner()
         result = runner.invoke(
             cli_module.app,
-            ["ask", "hi", "--sandbox", "--sandbox-runtime", "runsc"],
+            [
+                "ask",
+                "hi",
+                "--sandbox",
+                "--sandbox-backend",
+                "docker-command",
+                "--sandbox-runtime",
+                "runsc",
+            ],
         )
         assert result.exit_code == 0
         assert captured_init["runtime"] == "runsc"

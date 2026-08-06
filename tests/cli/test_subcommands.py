@@ -115,7 +115,7 @@ class TestConfigShow:
         data = json.loads(result.stdout)
         assert data["api_key"] == "***1234"
         assert data["base_url"] == "https://fake.example.com/v1"
-        assert data["model"] == "qwen3.7-max"  # default
+        assert data["model"] == "qwen-plus"  # default
 
     def test_show_missing_required_field_prints_friendly_hint(
         self, monkeypatch: pytest.MonkeyPatch

@@ -50,6 +50,7 @@ from openharness.observability import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
+    from pathlib import Path
     from types import TracebackType
 
     from openharness.mcp.config import McpServerConfig
@@ -83,10 +84,12 @@ class McpClientPool:
         trusted_servers: Iterable[str] = (),
         *,
         init_timeout: float = 5.0,
+        sandbox_cwd: Path | None = None,
     ) -> None:
         self._configs = tuple(configs)
         self._trusted: set[str] = set(trusted_servers)
         self._init_timeout = init_timeout
+        self._sandbox_cwd = sandbox_cwd
         # Populated by __aenter__.
         self._stack: AsyncExitStack | None = None
         self._adapters: list[McpToolAdapter] = []
@@ -158,7 +161,11 @@ class McpClientPool:
         duration of the pool's context.
         """
         try:
-            client = McpClient(cfg, init_timeout=self._init_timeout)
+            client = McpClient(
+                cfg,
+                init_timeout=self._init_timeout,
+                sandbox_cwd=self._sandbox_cwd,
+            )
             # Enter the McpClient context on the SHARED stack — McpClient
             # itself handles its own teardown order;we just attach it.
             await stack.enter_async_context(client)

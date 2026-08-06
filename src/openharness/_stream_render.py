@@ -42,6 +42,7 @@ from openharness.protocols.stream_events import (
     ApiMessageCompleteEvent,
     ApiRetryEvent,
     ApiTextDeltaEvent,
+    PermissionParkedEvent,
     ToolExecutionCompletedEvent,
     ToolExecutionStartedEvent,
 )
@@ -160,6 +161,9 @@ async def render_stream(
                     current_live = None
                 out.write(_render_tool_completed(event))
                 out.flush()
+            elif isinstance(event, PermissionParkedEvent):
+                err.write(f"[permission parked {event.request_id[:12]}: {event.reason}]\n")
+                err.flush()
     finally:
         # If the stream raised mid-tool-execution, keep the terminal sane
         # by stopping Live (idempotent if already stopped).

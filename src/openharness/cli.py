@@ -97,7 +97,17 @@ from openharness.config import Settings
 from openharness.engine import QueryContext, run_query
 from openharness.engine.slash_skill import synthesize_skill_envelope
 from openharness.errors import LoopError, OpenHarnessError
-from openharness.execution import ExecutionEnvironment, SandboxExecution
+from openharness.execution import (
+    BoundaryVerification,
+    DockerCommandBackend,
+    ExecutionEffect,
+    ExecutionEnvironment,
+    OneShotOverlaySession,
+    SandboxBackend,
+    SandboxSession,
+    SandboxUnavailableError,
+    SeatbeltBackend,
+)
 from openharness.execution.host import _HOST_EXECUTION
 from openharness.hooks import HookRegistry
 from openharness.mcp import McpClientPool
@@ -116,7 +126,15 @@ from openharness.observability.logging import (
     LogLevel,
     get_logger,
 )
-from openharness.permissions import PermissionMode, TierBasedPermissionChecker
+from openharness.permissions import (
+    ExternalToolPolicy,
+    NetworkPolicy,
+    PermissionMode,
+    PermissionRuntime,
+    RuntimePermissionProfile,
+    TierBasedPermissionChecker,
+    workspace_runtime_profile,
+)
 from openharness.plugins import (
     LayeredStore,
     LoadedPluginCatalogs,
@@ -133,6 +151,7 @@ from openharness.protocols import (
     TextBlock,
 )
 from openharness.services.goal_judge import GoalJudgeVerdict, judge_goal_completion
+from openharness.services.permission_reviewer import LlmPermissionReviewer
 from openharness.services.run_session import RunSession, open_run_session
 from openharness.services.session_memory import get_session_memory_dir
 from openharness.skills.store import EmptySkillStore, FilesystemSkillStore, SkillStore
@@ -153,6 +172,7 @@ DEFAULT_MAX_TOKENS = 8192
 # mechanism as ``LogLevel`` / ``LogFormat`` above). ``text`` is wired in T1;
 # ``json`` / ``stream-json`` land in T3 / T4.
 OutputFormat = Literal["text", "json", "stream-json"]
+SandboxBackendName = Literal["seatbelt", "docker-command"]
 
 
 app = typer.Typer(
@@ -434,8 +454,11 @@ class SandboxConfig:
     per run instead of once per attempt."""
 
     enabled: bool
+    backend: SandboxBackendName
     image: str
     network: str
+    network_policy: NetworkPolicy
+    external_tools: ExternalToolPolicy
     memory: str
     cpus: float
     runtime: str
@@ -445,6 +468,7 @@ def _resolve_sandbox_config(
     settings: Settings,
     *,
     sandbox_override: bool | None,
+    sandbox_backend_override: SandboxBackendName | None,
     sandbox_image_override: str | None,
     sandbox_network_override: str | None,
     sandbox_memory_override: str | None,
@@ -452,14 +476,95 @@ def _resolve_sandbox_config(
     sandbox_runtime_override: str | None,
 ) -> SandboxConfig:
     """CLI flag overrides Settings, per field (P7b-T2 precedent)."""
+    network = sandbox_network_override or settings.sandbox_network
+    if sandbox_network_override is None and settings.sandbox_network_policy.enabled:
+        network_policy = settings.sandbox_network_policy
+    elif network == "bridge":
+        network_policy = NetworkPolicy(
+            enabled=True,
+            allow_loopback=True,
+            allow_private=True,
+            allow_link_local=True,
+        )
+    else:
+        network_policy = NetworkPolicy()
     return SandboxConfig(
         enabled=sandbox_override if sandbox_override is not None else settings.sandbox_enabled,
+        backend=sandbox_backend_override or settings.sandbox_backend,
         image=sandbox_image_override or settings.sandbox_image,
-        network=sandbox_network_override or settings.sandbox_network,
+        network=network,
+        network_policy=network_policy,
+        external_tools=settings.sandbox_external_tool_policy,
         memory=sandbox_memory_override or settings.sandbox_memory,
         cpus=sandbox_cpus_override if sandbox_cpus_override is not None else settings.sandbox_cpus,
         runtime=sandbox_runtime_override or settings.sandbox_runtime,
     )
+
+
+def _sandbox_profile(config: SandboxConfig) -> RuntimePermissionProfile:
+    """Translate user configuration intent into the canonical profile.
+
+    Docker's historical ``bridge`` spelling means unrestricted IP network
+    access.  Keep that compatibility meaning explicit in the profile instead
+    of letting a backend silently widen a default-deny policy.
+    """
+    return workspace_runtime_profile().model_copy(
+        update={
+            "network": config.network_policy,
+            "external_tools": config.external_tools,
+        }
+    )
+
+
+async def _open_sandbox_session(
+    *,
+    stack: contextlib.AsyncExitStack,
+    config: SandboxConfig,
+    cwd: Path,
+    pids: int,
+) -> tuple[RuntimePermissionProfile, SandboxSession]:
+    """Compile intent, open a backend, and verify its reported facts."""
+    profile = _sandbox_profile(config)
+    backend: SandboxBackend
+    if config.backend == "seatbelt":
+        backend = SeatbeltBackend(cwd=cwd)
+    else:
+        backend = DockerCommandBackend(
+            cwd=cwd,
+            image=config.image,
+            memory=config.memory,
+            cpus=config.cpus,
+            pids=pids,
+            runtime=config.runtime,
+        )
+
+    session = await backend.open(profile)
+    boundary = session.boundary
+    if (
+        boundary.verification is not BoundaryVerification.VERIFIED
+        or boundary.profile_fingerprint != profile.fingerprint
+    ):
+        await session.close()
+        raise SandboxUnavailableError(
+            f"{boundary.backend} did not return a verified boundary for the active profile"
+        )
+    if config.backend == "seatbelt":
+        required = (
+            ExecutionEffect.COMMAND,
+            ExecutionEffect.FILE_READ,
+            ExecutionEffect.FILE_WRITE,
+            ExecutionEffect.FILE_SEARCH,
+        )
+        missing = tuple(effect.value for effect in required if not boundary.covers(effect))
+        if missing:
+            await session.close()
+            raise SandboxUnavailableError(
+                "seatbelt boundary is missing required local data-plane effects: "
+                + ", ".join(missing)
+            )
+    overlay_session = OneShotOverlaySession(backend=backend, profile=profile, base=session)
+    stack.push_async_callback(overlay_session.close)
+    return profile, overlay_session
 
 
 async def _run_ask(
@@ -475,6 +580,7 @@ async def _run_ask(
     no_skills: bool = False,
     no_commands: bool = False,
     sandbox_override: bool | None = None,
+    sandbox_backend_override: SandboxBackendName | None = None,
     sandbox_image_override: str | None = None,
     sandbox_network_override: str | None = None,
     sandbox_memory_override: str | None = None,
@@ -492,7 +598,6 @@ async def _run_ask(
     output_format: OutputFormat = "text",
     print_mode: bool = False,
     cwd_override: Path | None = None,
-    execution_env_override: ExecutionEnvironment | None = None,
     suppress_echo: bool = False,
     max_turns: int = 20,
 ) -> AskOutcome:
@@ -530,6 +635,7 @@ async def _run_ask(
     sandbox_config = _resolve_sandbox_config(
         settings,
         sandbox_override=sandbox_override,
+        sandbox_backend_override=sandbox_backend_override,
         sandbox_image_override=sandbox_image_override,
         sandbox_network_override=sandbox_network_override,
         sandbox_memory_override=sandbox_memory_override,
@@ -537,11 +643,6 @@ async def _run_ask(
         sandbox_runtime_override=sandbox_runtime_override,
     )
     sandbox_enabled = sandbox_config.enabled
-    sandbox_image = sandbox_config.image
-    sandbox_network = sandbox_config.network
-    sandbox_memory = sandbox_config.memory
-    sandbox_cpus = sandbox_config.cpus
-    sandbox_runtime = sandbox_config.runtime
     # P5e-T3: plugin hook discovery is opt-in. CLI flag overrides
     # Settings. When OFF, ``discover_plugin_hooks()`` is never called
     # and bundle ``hooks:`` resolves only against BUILTIN_HOOKS — even
@@ -725,6 +826,7 @@ async def _run_ask(
     pool = McpClientPool(
         combined_mcp_servers,
         trusted_servers=settings.trusted_mcp_servers,
+        sandbox_cwd=cwd_override or Path.cwd(),
     )
     # P7b-T2: AsyncExitStack lets us conditionally enter SandboxExecution
     # without duplicating the body. ``--sandbox`` enters; otherwise the
@@ -859,31 +961,36 @@ async def _run_ask(
                 web_enabled=effective_web,
             )
 
-        # P7b-T2 (D18.2): conditionally enter SandboxExecution.
-        # ``--no-sandbox``(default)→ HostExecution singleton.
-        # ``--sandbox`` → enter the substrate context here; BashTool
-        # routes through it via ``QueryContext.execution_env``.
-        # Track B T3: ``execution_env_override`` takes priority over both
-        # -- when given, SandboxExecution is never constructed even if
-        # ``sandbox_enabled`` is also True (services/run_session.py owns
-        # one long-lived sandbox per RUN and passes it in here per attempt).
-        execution_env: ExecutionEnvironment
-        if execution_env_override is not None:
-            execution_env = execution_env_override
-        elif sandbox_enabled:
-            execution_env = await stack.enter_async_context(
-                SandboxExecution(
-                    cwd=env.cwd,
-                    image=sandbox_image,
-                    network=sandbox_network,
-                    memory=sandbox_memory,
-                    cpus=sandbox_cpus,
-                    pids=settings.sandbox_pids,
-                    runtime=sandbox_runtime,
-                )
+        # A sandboxed query consumes the verified session contract.  All
+        # local core tools prefer ``sandbox_session``; the legacy execution
+        # environment remains host only as an inactive compatibility field.
+        execution_env: ExecutionEnvironment = _HOST_EXECUTION
+        active_profile: RuntimePermissionProfile | None = None
+        sandbox_session: SandboxSession | None = None
+        if sandbox_enabled:
+            active_profile, sandbox_session = await _open_sandbox_session(
+                stack=stack,
+                config=sandbox_config,
+                cwd=env.cwd,
+                pids=settings.sandbox_pids,
             )
-        else:
-            execution_env = _HOST_EXECUTION
+        permission_reviewer = (
+            LlmPermissionReviewer(
+                api_client=client,
+                model=settings.permission_reviewer_model or model,
+            )
+            if permission_mode is PermissionMode.AUTO and settings.permission_auto_review
+            else None
+        )
+        permission_runtime = (
+            PermissionRuntime(
+                profile=active_profile,
+                boundary=sandbox_session.boundary,
+                reviewer=permission_reviewer,
+            )
+            if active_profile is not None and sandbox_session is not None
+            else None
+        )
 
         context = QueryContext(
             api_client=client,
@@ -921,6 +1028,10 @@ async def _run_ask(
             # P7b-T2: substrate the BashTool delegates to. Default
             # HostExecution singleton when ``--sandbox`` is off.
             execution_env=execution_env,
+            sandbox_session=sandbox_session,
+            runtime_permission_profile=active_profile,
+            enforced_boundary=(sandbox_session.boundary if sandbox_session is not None else None),
+            permission_runtime=permission_runtime,
             # P11-T5: compact + extraction wiring. memory_store is the
             # write-path entry for Phase 11 extraction (uses Phase 10's
             # FilesystemMemoryStore). session_memory_path points at the
@@ -973,6 +1084,12 @@ async def _run_ask(
                     cwd=env.cwd,
                     hook_registry=effective_hook_registry,
                     execution_env=execution_env,
+                    sandbox_session=sandbox_session,
+                    runtime_permission_profile=active_profile,
+                    enforced_boundary=(
+                        sandbox_session.boundary if sandbox_session is not None else None
+                    ),
+                    permission_runtime=permission_runtime,
                     skill_store=skill_store,
                     memory_store=memory_store,
                     session_memory_path=context.session_memory_path,
@@ -1066,26 +1183,13 @@ async def _dispatch_ask(
         )
         return outcome, None
 
-    settings = _load_settings()
-    sandbox_config = _resolve_sandbox_config(
-        settings,
-        sandbox_override=common_run_ask_kwargs["sandbox_override"],
-        sandbox_image_override=common_run_ask_kwargs["sandbox_image_override"],
-        sandbox_network_override=common_run_ask_kwargs["sandbox_network_override"],
-        sandbox_memory_override=common_run_ask_kwargs["sandbox_memory_override"],
-        sandbox_cpus_override=common_run_ask_kwargs["sandbox_cpus_override"],
-        sandbox_runtime_override=common_run_ask_kwargs["sandbox_runtime_override"],
-    )
-
     async with open_run_session(
         cwd=Path.cwd(),
         isolate=True,
-        sandbox_config=sandbox_config,
     ) as session:
         assert session is not None
         session_kwargs = dict(common_run_ask_kwargs)
         session_kwargs["cwd_override"] = session.cwd_override
-        session_kwargs["execution_env_override"] = session.execution_env_override
         outcome = await _run_ask(
             prompt,
             output_format=output_format,
@@ -1189,6 +1293,11 @@ oh chat — multi-turn REPL commands:
                      evaluates the conversation after each reply and
                      auto-continues turns until the condition holds;
                      bare /goal shows status, /goal clear stops early
+  /permissions       show configured permission intent, verified runtime
+                     boundary facts, and registered tool execution domains
+  /approve [id]      approve one exact parked permission request
+  /deny [id]         deny one exact parked permission request
+  /resume            continue after the recorded permission decision
   /skills            list available skills (Phase 18 D38.4)
   /memory            list memories in this project's memory store
   /help              show this message
@@ -1216,6 +1325,7 @@ async def _run_chat(
     no_skills: bool = False,
     no_commands: bool = False,
     sandbox_override: bool | None = None,
+    sandbox_backend_override: SandboxBackendName | None = None,
     sandbox_image_override: str | None = None,
     sandbox_network_override: str | None = None,
     sandbox_memory_override: str | None = None,
@@ -1244,6 +1354,7 @@ async def _run_chat(
     # and tested through both commands' integration tests.
     from openharness.protocols.stream_events import (
         ConversationCompleteEvent,
+        PermissionParkedEvent,
         ToolExecutionCompletedEvent,
     )
 
@@ -1264,14 +1375,16 @@ async def _run_chat(
     auto_truncate = (
         auto_truncate_override if auto_truncate_override is not None else settings.auto_truncate
     )
-    sandbox_enabled = sandbox_override if sandbox_override is not None else settings.sandbox_enabled
-    sandbox_image = sandbox_image_override or settings.sandbox_image
-    sandbox_network = sandbox_network_override or settings.sandbox_network
-    sandbox_memory = sandbox_memory_override or settings.sandbox_memory
-    sandbox_cpus = (
-        sandbox_cpus_override if sandbox_cpus_override is not None else settings.sandbox_cpus
+    sandbox_config = _resolve_sandbox_config(
+        settings,
+        sandbox_override=sandbox_override,
+        sandbox_backend_override=sandbox_backend_override,
+        sandbox_image_override=sandbox_image_override,
+        sandbox_network_override=sandbox_network_override,
+        sandbox_memory_override=sandbox_memory_override,
+        sandbox_cpus_override=sandbox_cpus_override,
+        sandbox_runtime_override=sandbox_runtime_override,
     )
-    sandbox_runtime = sandbox_runtime_override or settings.sandbox_runtime
     enable_plugin_hooks = (
         enable_plugin_hooks_override
         if enable_plugin_hooks_override is not None
@@ -1334,6 +1447,7 @@ async def _run_chat(
     pool = McpClientPool(
         combined_mcp_servers,
         trusted_servers=settings.trusted_mcp_servers,
+        sandbox_cwd=Path.cwd(),
     )
 
     async with pool, contextlib.AsyncExitStack() as stack:
@@ -1371,21 +1485,33 @@ async def _run_chat(
                 TruncateToolResultHook(cap_tokens=tool_result_cap, model=model),
             )
 
-        execution_env: ExecutionEnvironment
-        if sandbox_enabled:
-            execution_env = await stack.enter_async_context(
-                SandboxExecution(
-                    cwd=env.cwd,
-                    image=sandbox_image,
-                    network=sandbox_network,
-                    memory=sandbox_memory,
-                    cpus=sandbox_cpus,
-                    pids=settings.sandbox_pids,
-                    runtime=sandbox_runtime,
-                )
+        execution_env: ExecutionEnvironment = _HOST_EXECUTION
+        active_profile: RuntimePermissionProfile | None = None
+        sandbox_session: SandboxSession | None = None
+        if sandbox_config.enabled:
+            active_profile, sandbox_session = await _open_sandbox_session(
+                stack=stack,
+                config=sandbox_config,
+                cwd=env.cwd,
+                pids=settings.sandbox_pids,
             )
-        else:
-            execution_env = _HOST_EXECUTION
+        permission_reviewer = (
+            LlmPermissionReviewer(
+                api_client=client,
+                model=settings.permission_reviewer_model or model,
+            )
+            if permission_mode is PermissionMode.AUTO and settings.permission_auto_review
+            else None
+        )
+        permission_runtime = (
+            PermissionRuntime(
+                profile=active_profile,
+                boundary=sandbox_session.boundary,
+                reviewer=permission_reviewer,
+            )
+            if active_profile is not None and sandbox_session is not None
+            else None
+        )
 
         # ``command_store`` is reused per-turn for user-authored
         # slash commands (Phase 5b). P9-T3: LayeredStore wrap so
@@ -1454,6 +1580,27 @@ async def _run_chat(
         if resume:
             snapshot = _load_resume_snapshot(env.cwd, resume_id=resume_id)
             if snapshot is not None:
+                extra = snapshot.get("extra", {})
+                runtime_state = extra.get("permission_runtime") if isinstance(extra, dict) else None
+                if runtime_state is not None:
+                    if permission_runtime is None:
+                        typer.echo(
+                            "Cannot resume: snapshot has permission state but no verified "
+                            "sandbox boundary is active.",
+                            err=True,
+                        )
+                        raise typer.Exit(code=1)
+                    try:
+                        permission_runtime = PermissionRuntime.from_state(
+                            profile=permission_runtime.profile,
+                            boundary=permission_runtime.boundary,
+                            state=runtime_state,
+                            reviewer=permission_runtime.reviewer,
+                            denial_limit=permission_runtime.denial_limit,
+                        )
+                    except ValueError as exc:
+                        typer.echo(f"Cannot resume permission state: {exc}", err=True)
+                        raise typer.Exit(code=1) from exc
                 from openharness.protocols.messages import ConversationMessage as _CM
 
                 history = [_CM.model_validate(m) for m in snapshot["messages"]]
@@ -1487,7 +1634,10 @@ async def _run_chat(
         from openharness.services.compact import (
             estimate_message_tokens as _goal_estimate_tokens,
         )
-        from openharness.services.snapshot import append_messages_to_snapshot
+        from openharness.services.snapshot import (
+            append_messages_to_snapshot,
+            update_permission_runtime_snapshot,
+        )
 
         def _extinguish_goal(event: str, condition: str) -> None:
             """Append a terminal goal sentinel (``met``/``cleared``) and
@@ -1610,6 +1760,63 @@ async def _run_chat(
                 continue
             if user_input == "/help":
                 typer.echo(_CHAT_HELP_TEXT)
+                continue
+            if user_input == "/permissions":
+                typer.echo(
+                    _repl.format_permissions_status(
+                        profile=active_profile,
+                        boundary=(
+                            sandbox_session.boundary if sandbox_session is not None else None
+                        ),
+                        tool_domains=effective_registry.execution_domain_report(),
+                        external_surfaces=effective_registry.external_effect_report(),
+                        legacy_mode=permission_mode.value,
+                    )
+                )
+                continue
+            if user_input == "/approve" or user_input.startswith("/approve "):
+                if permission_runtime is None or permission_runtime.parked_request is None:
+                    typer.echo("(no parked permission request)")
+                    continue
+                supplied_id = user_input.removeprefix("/approve").strip()
+                request_id = supplied_id or permission_runtime.parked_request.request_id
+                try:
+                    permission_runtime.approve_parked(request_id)
+                except ValueError as exc:
+                    typer.echo(f"(permission approval failed: {exc})", err=True)
+                    continue
+                if settings.snapshot.enabled:
+                    update_permission_runtime_snapshot(cwd=env.cwd, runtime=permission_runtime)
+                typer.echo(f"(approved exact request {request_id[:12]}; use /resume)")
+                continue
+            if user_input == "/deny" or user_input.startswith("/deny "):
+                if permission_runtime is None or permission_runtime.parked_request is None:
+                    typer.echo("(no parked permission request)")
+                    continue
+                supplied_id = user_input.removeprefix("/deny").strip()
+                request_id = supplied_id or permission_runtime.parked_request.request_id
+                try:
+                    permission_runtime.deny_parked(request_id, reason="user denied")
+                except ValueError as exc:
+                    typer.echo(f"(permission denial failed: {exc})", err=True)
+                    continue
+                if settings.snapshot.enabled:
+                    update_permission_runtime_snapshot(cwd=env.cwd, runtime=permission_runtime)
+                typer.echo(f"(denied exact request {request_id[:12]}; use /resume)")
+                continue
+            if user_input == "/resume":
+                if permission_runtime is None or permission_runtime.last_decided_request is None:
+                    typer.echo("(no permission decision to resume)")
+                    continue
+                decision = permission_runtime.last_human_decision
+                request = permission_runtime.last_decided_request
+                pending_input = (
+                    "[permission decision] The exact request "
+                    f"{request.request_id} was {decision.value if decision is not None else 'decided'}. "
+                    "If approved, retry the identical tool arguments once. If denied, find a "
+                    "solution inside the current verified boundary."
+                )
+                pending_is_goal_feedback = goal is not None
                 continue
             # D47 — enter plan mode. The clamp itself is the permissions deny
             # preset overlaid at context build; this just flips the state.
@@ -1889,6 +2096,12 @@ async def _run_chat(
                 skill_store=skill_store,
                 max_agent_depth=settings.max_agent_depth,
                 execution_env=execution_env,
+                sandbox_session=sandbox_session,
+                runtime_permission_profile=active_profile,
+                enforced_boundary=(
+                    sandbox_session.boundary if sandbox_session is not None else None
+                ),
+                permission_runtime=permission_runtime,
                 # P11-T5: compact + extraction. Mirrors ``_run_ask``.
                 # Rebuilt per turn so /compact-toggled flags (future)
                 # take effect on the next turn.
@@ -1931,6 +2144,9 @@ async def _run_chat(
                 async for ev in events_iter:
                     if isinstance(ev, ConversationCompleteEvent):
                         captured = ev.messages
+                    elif isinstance(ev, PermissionParkedEvent):
+                        captured = ev.messages
+                        permission_confirmation_required = ev.reason
                     elif (
                         isinstance(ev, ToolExecutionCompletedEvent)
                         and ev.is_error
@@ -2006,6 +2222,15 @@ async def _run_chat(
             # distinguishes incomplete work from a broken judge: only NOT_MET
             # drives another worker turn; ERROR pauses automation.
             if goal is not None and chat_mode is _repl.ChatMode.DEFAULT and pending_input is None:
+                if permission_confirmation_required is not None:
+                    typer.echo(
+                        "\a(goal blocked on permission — automation paused before the "
+                        "goal checker; use /approve or /deny, then /resume, or "
+                        "/goal clear. "
+                        f"blocker: {permission_confirmation_required})"
+                    )
+                    goal_auto_turns = 0
+                    continue
                 evidence = _repl.goal_evidence_messages(history, goal.condition)
                 transcript = render_history_transcript(evidence)
                 result = await judge_goal_completion(
@@ -2036,14 +2261,6 @@ async def _run_chat(
                         f"~{tokens_delta} tokens, {elapsed:.0f}s — {result.reason})"
                     )
                     goal = None
-                    goal_auto_turns = 0
-                elif permission_confirmation_required is not None:
-                    typer.echo(
-                        "\a(goal blocked on permission — automation paused; "
-                        "approve the required capability, adjust the permission policy, "
-                        "or /goal clear. "
-                        f"blocker: {permission_confirmation_required})"
-                    )
                     goal_auto_turns = 0
                 elif goal_auto_turns >= settings.goal_max_auto_turns:
                     typer.echo(
@@ -2138,7 +2355,7 @@ def ask(
         None,
         "--model",
         "-m",
-        help="Model name; overrides OPENHARNESS_MODEL and the qwen3.7-max default.",
+        help="Model name; overrides OPENHARNESS_MODEL and the qwen-plus default.",
     ),
     max_tokens: int = typer.Option(
         DEFAULT_MAX_TOKENS,
@@ -2263,6 +2480,14 @@ def ask(
             "on, Bash commands execute inside a per-query container with "
             "cwd bind-mounted read-write and network=none by default. "
             "Default OFF (host execution); overrides OPENHARNESS_SANDBOX."
+        ),
+    ),
+    sandbox_backend: SandboxBackendName | None = typer.Option(
+        None,
+        "--sandbox-backend",
+        help=(
+            "Verified backend [seatbelt|docker-command]. Seatbelt covers "
+            "commands and core file tools; docker-command covers commands only."
         ),
     ),
     sandbox_image: str | None = typer.Option(
@@ -2482,6 +2707,7 @@ def ask(
         "no_skills": no_skills,
         "no_commands": no_commands,
         "sandbox_override": sandbox,
+        "sandbox_backend_override": sandbox_backend,
         "sandbox_image_override": sandbox_image,
         "sandbox_network_override": sandbox_network,
         "sandbox_memory_override": sandbox_memory,
@@ -2628,6 +2854,11 @@ def chat(
     no_skills: bool = typer.Option(False, "--no-skills"),
     no_commands: bool = typer.Option(False, "--no-commands"),
     sandbox: bool | None = typer.Option(None, "--sandbox/--no-sandbox"),
+    sandbox_backend: SandboxBackendName | None = typer.Option(
+        None,
+        "--sandbox-backend",
+        help="Verified backend [seatbelt|docker-command].",
+    ),
     sandbox_image: str | None = typer.Option(None, "--sandbox-image"),
     sandbox_network: str | None = typer.Option(None, "--sandbox-network"),
     sandbox_memory: str | None = typer.Option(None, "--sandbox-memory"),
@@ -2731,6 +2962,7 @@ def chat(
                 no_skills=no_skills,
                 no_commands=no_commands,
                 sandbox_override=sandbox,
+                sandbox_backend_override=sandbox_backend,
                 sandbox_image_override=sandbox_image,
                 sandbox_network_override=sandbox_network,
                 sandbox_memory_override=sandbox_memory,
@@ -2776,7 +3008,7 @@ _CONFIG_TEMPLATE = """\
 
 # OPENHARNESS_API_KEY="sk-..."
 # OPENHARNESS_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
-# OPENHARNESS_MODEL="qwen3.7-max"
+# OPENHARNESS_MODEL="qwen-plus"
 
 # Permissions
 # OPENHARNESS_DENY_PATHS="secrets/**,*.env"

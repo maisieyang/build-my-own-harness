@@ -1,4 +1,4 @@
-"""Tests for ``_run_ask``'s ``cwd_override``/``execution_env_override``.
+"""Tests for ``_run_ask``'s cwd and verified sandbox-session overrides.
 
 These two generic overrides are the mechanism `services/run_session.py`
 uses to run one request in a worktree and optional sandbox without teaching
@@ -11,6 +11,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import openharness.cli as cli_module
+from openharness.execution import (
+    BoundaryVerification,
+    EnforcedBoundary,
+    ExecutionEffect,
+    OneShotOverlaySession,
+)
 from openharness.protocols.content import TextBlock
 from openharness.protocols.messages import ConversationMessage
 from openharness.protocols.stream_events import ApiMessageCompleteEvent, ApiTextDeltaEvent
@@ -157,44 +163,13 @@ class TestCwdOverride:
         assert "last 3 commits" in user_text
 
 
-class TestExecutionEnvOverride:
-    async def test_execution_env_override_skips_sandbox_construction(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _set_minimum_env(monkeypatch)
-        stub = _RecordingStubClient(_hello_world_events())
-        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
-        captured = _CapturedContext()
-        _patch_run_query_capture(monkeypatch, captured)
+class TestExecutionEnvironmentCompatibility:
+    def test_run_ask_has_no_unverified_execution_environment_override(self) -> None:
+        import inspect
 
-        sandbox_construct_calls: list[dict[str, object]] = []
+        assert "execution_env_override" not in inspect.signature(cli_module._run_ask).parameters
 
-        class _FakeSandbox:
-            def __init__(self, **kwargs: object) -> None:
-                sandbox_construct_calls.append(kwargs)
-
-            async def __aenter__(self) -> _FakeSandbox:
-                return self
-
-            async def __aexit__(self, *args: object) -> None:
-                pass
-
-        monkeypatch.setattr(cli_module, "SandboxExecution", _FakeSandbox)
-
-        sentinel_execution_env = object()
-
-        await cli_module._run_ask(
-            "hi",
-            sandbox_override=True,  # would normally construct a sandbox
-            execution_env_override=sentinel_execution_env,
-            **_COMMON_RUN_ASK_KWARGS,
-        )
-
-        assert sandbox_construct_calls == []
-        ctx = captured.context
-        assert ctx.execution_env is sentinel_execution_env  # type: ignore[attr-defined]
-
-    async def test_no_execution_env_override_falls_back_to_host_execution(
+    async def test_no_sandbox_falls_back_to_host_execution(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from openharness.execution.host import HostExecution
@@ -209,3 +184,75 @@ class TestExecutionEnvOverride:
 
         ctx = captured.context
         assert isinstance(ctx.execution_env, HostExecution)  # type: ignore[attr-defined]
+
+
+class TestVerifiedSandboxSession:
+    async def test_seatbelt_backend_is_opened_and_injected_into_query_context(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events())
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+        captured = _CapturedContext()
+        _patch_run_query_capture(monkeypatch, captured)
+
+        class _Session:
+            boundary = EnforcedBoundary(
+                profile_fingerprint="a" * 64,
+                backend="macos-seatbelt",
+                backend_version="1",
+                covered_effects=(
+                    ExecutionEffect.COMMAND,
+                    ExecutionEffect.FILE_READ,
+                    ExecutionEffect.FILE_WRITE,
+                    ExecutionEffect.FILE_SEARCH,
+                ),
+                verification=BoundaryVerification.VERIFIED,
+            )
+
+            def __init__(self) -> None:
+                self.closed = False
+
+            async def close(self) -> None:
+                self.closed = True
+
+        session = _Session()
+        opened_profiles: list[object] = []
+
+        class _Backend:
+            def __init__(self, *, cwd: Path) -> None:
+                assert cwd == tmp_path
+
+            async def open(self, profile: object) -> _Session:
+                opened_profiles.append(profile)
+                session.boundary = EnforcedBoundary(  # type: ignore[misc]
+                    profile_fingerprint=profile.fingerprint,  # type: ignore[attr-defined]
+                    backend="macos-seatbelt",
+                    backend_version="1",
+                    covered_effects=(
+                        ExecutionEffect.COMMAND,
+                        ExecutionEffect.FILE_READ,
+                        ExecutionEffect.FILE_WRITE,
+                        ExecutionEffect.FILE_SEARCH,
+                    ),
+                    verification=BoundaryVerification.VERIFIED,
+                )
+                return session
+
+        monkeypatch.setattr(cli_module, "SeatbeltBackend", _Backend)
+
+        await cli_module._run_ask(
+            "hi",
+            cwd_override=tmp_path,
+            sandbox_override=True,
+            sandbox_backend_override="seatbelt",
+            **_COMMON_RUN_ASK_KWARGS,
+        )
+
+        assert len(opened_profiles) == 1
+        assert isinstance(
+            captured.context.sandbox_session,
+            OneShotOverlaySession,  # type: ignore[attr-defined]
+        )
+        assert captured.context.sandbox_session.boundary is session.boundary  # type: ignore[attr-defined]
+        assert session.closed is True

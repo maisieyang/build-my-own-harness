@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from openharness.mcp import McpCallError, McpClient, McpInitError, McpServerConfig
+from openharness.mcp.client import _build_stdio_parameters
 from openharness.observability import configure_logging
 
 if TYPE_CHECKING:
@@ -122,6 +123,34 @@ class TestHappyLifecycle:
 
 
 class TestInitFailures:
+    def test_sandboxed_stdio_server_is_wrapped_and_gets_filtered_environment(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DATABASE_PASSWORD", "ambient-secret")
+        cfg = McpServerConfig(
+            name="Local",
+            command=("node", "server.js"),
+            env={"EXPLICIT_TOKEN": "user-authorized"},
+            sandbox=True,
+        )
+
+        params = _build_stdio_parameters(cfg, sandbox_cwd=tmp_path)
+
+        assert params.command == "/usr/bin/sandbox-exec"
+        assert params.args[0] == "-p"
+        assert "(deny network*)" in params.args[1]
+        assert params.args[2:] == ["node", "server.js"]
+        assert params.cwd == tmp_path
+        assert params.env is not None
+        assert "DATABASE_PASSWORD" not in params.env
+        assert params.env["EXPLICIT_TOKEN"] == "user-authorized"
+
+    def test_sandboxed_stdio_server_without_cwd_fails_closed(self) -> None:
+        cfg = McpServerConfig(name="Local", command=("node",), sandbox=True)
+
+        with pytest.raises(McpInitError, match="sandbox cwd"):
+            _build_stdio_parameters(cfg, sandbox_cwd=None)
+
     async def test_nonexistent_command_raises_mcp_init_error(self, log_stream: io.StringIO) -> None:
         _configure(log_stream)
         bad_cfg = McpServerConfig(

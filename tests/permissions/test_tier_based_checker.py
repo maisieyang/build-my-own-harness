@@ -27,7 +27,13 @@ from openharness.permissions import (
     PermissionRules,
     TierBasedPermissionChecker,
 )
-from openharness.tools import BaseTool, ToolExecutionContext, ToolRegistry, ToolResult
+from openharness.tools import (
+    BaseTool,
+    ExecutionDomain,
+    ToolExecutionContext,
+    ToolRegistry,
+    ToolResult,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -45,6 +51,7 @@ class _PathInput(BaseModel):
 
 
 class _ReadyOnlyTool(BaseTool[_PathInput]):
+    execution_domain = ExecutionDomain.LOCAL_DATA
     name = "FakeRead"
     description = "Fake read-only tool for tests."
     input_model = _PathInput
@@ -56,6 +63,7 @@ class _ReadyOnlyTool(BaseTool[_PathInput]):
 
 
 class _WriteTool(BaseTool[_PathInput]):
+    execution_domain = ExecutionDomain.LOCAL_DATA
     name = "FakeWrite"
     description = "Fake write tool for tests."
     input_model = _PathInput
@@ -71,6 +79,7 @@ class _BashLikeInput(BaseModel):
 
 
 class _FakeBashTool(BaseTool[_BashLikeInput]):
+    execution_domain = ExecutionDomain.LOCAL_DATA
     name = "Bash"
     description = "Fake bash for tests."
     input_model = _BashLikeInput
