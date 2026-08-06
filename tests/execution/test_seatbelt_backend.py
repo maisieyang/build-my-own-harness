@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING
 
 import pytest
@@ -26,6 +27,12 @@ from openharness.permissions import (
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+requires_macos_seatbelt = pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="requires the real macOS /usr/bin/sandbox-exec runtime",
+)
 
 
 def _workspace_profile() -> RuntimePermissionProfile:
@@ -66,12 +73,17 @@ def test_compiler_escapes_paths_as_seatbelt_strings(tmp_path: Path) -> None:
     assert "\\\\" in text
 
 
-def test_preflight_accepts_domain_policy_via_managed_proxy(tmp_path: Path) -> None:
+def test_preflight_accepts_domain_policy_via_managed_proxy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     profile = RuntimePermissionProfile(
         name="networked",
         network=NetworkPolicy(enabled=True, allow_domains=("pypi.org",)),
     )
     backend = SeatbeltBackend(cwd=tmp_path, executable="/usr/bin/sandbox-exec")
+    monkeypatch.setattr("openharness.execution.seatbelt.sys.platform", "darwin")
+    monkeypatch.setattr("openharness.execution.seatbelt.os.path.isfile", lambda _: True)
+    monkeypatch.setattr("openharness.execution.seatbelt.os.access", lambda *_: True)
 
     support = backend.preflight(profile)
 
@@ -79,6 +91,7 @@ def test_preflight_accepts_domain_policy_via_managed_proxy(tmp_path: Path) -> No
     assert "network.domain_allowlist" not in support.unsupported_features
 
 
+@requires_macos_seatbelt
 async def test_session_executes_through_sandbox_exec_and_reports_command_coverage(
     tmp_path: Path,
 ) -> None:
@@ -102,6 +115,7 @@ async def test_open_fails_closed_when_executable_is_missing(tmp_path: Path) -> N
         await backend.open(_workspace_profile())
 
 
+@requires_macos_seatbelt
 async def test_file_worker_obeys_same_workspace_boundary(tmp_path: Path) -> None:
     backend = SeatbeltBackend(cwd=tmp_path, executable="/usr/bin/sandbox-exec")
     session = await backend.open(_workspace_profile())
@@ -123,6 +137,7 @@ async def test_file_worker_obeys_same_workspace_boundary(tmp_path: Path) -> None
     await session.close()
 
 
+@requires_macos_seatbelt
 async def test_file_worker_cannot_write_outside_workspace(tmp_path: Path) -> None:
     backend = SeatbeltBackend(cwd=tmp_path, executable="/usr/bin/sandbox-exec")
     session = await backend.open(_workspace_profile())
@@ -138,6 +153,7 @@ async def test_file_worker_cannot_write_outside_workspace(tmp_path: Path) -> Non
     await session.close()
 
 
+@requires_macos_seatbelt
 async def test_command_and_file_worker_cannot_read_outside_declared_roots(tmp_path: Path) -> None:
     backend = SeatbeltBackend(cwd=tmp_path, executable="/usr/bin/sandbox-exec")
     session = await backend.open(_workspace_profile())

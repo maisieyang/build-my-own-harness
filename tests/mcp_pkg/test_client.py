@@ -21,6 +21,7 @@ import logging
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 
@@ -134,7 +135,11 @@ class TestInitFailures:
             sandbox=True,
         )
 
-        params = _build_stdio_parameters(cfg, sandbox_cwd=tmp_path)
+        with (
+            patch("openharness.mcp.client.os.path.isfile", return_value=True),
+            patch("openharness.mcp.client.os.access", return_value=True),
+        ):
+            params = _build_stdio_parameters(cfg, sandbox_cwd=tmp_path)
 
         assert params.command == "/usr/bin/sandbox-exec"
         assert params.args[0] == "-p"

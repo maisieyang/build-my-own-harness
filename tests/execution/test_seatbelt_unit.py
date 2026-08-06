@@ -411,6 +411,9 @@ async def test_backend_rejects_failed_profile_probe(tmp_path: Path) -> None:
     process.communicate.return_value = (b"bad profile", None)
     backend = SeatbeltBackend(cwd=tmp_path)
     with (
+        patch("openharness.execution.seatbelt.sys.platform", "darwin"),
+        patch("openharness.execution.seatbelt.os.path.isfile", return_value=True),
+        patch("openharness.execution.seatbelt.os.access", return_value=True),
         patch(
             "openharness.execution.seatbelt.asyncio.create_subprocess_exec",
             AsyncMock(return_value=process),
@@ -435,6 +438,9 @@ async def test_backend_installs_managed_proxy_and_reports_network_coverage(
     proxy.close = AsyncMock()
     backend = SeatbeltBackend(cwd=tmp_path)
     with (
+        patch("openharness.execution.seatbelt.sys.platform", "darwin"),
+        patch("openharness.execution.seatbelt.os.path.isfile", return_value=True),
+        patch("openharness.execution.seatbelt.os.access", return_value=True),
         patch(
             "openharness.execution.seatbelt.asyncio.create_subprocess_exec",
             AsyncMock(return_value=probe),
