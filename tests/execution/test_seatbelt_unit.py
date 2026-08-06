@@ -101,7 +101,9 @@ def test_compiler_covers_no_write_deny_read_deny_write_and_proxy_only_network(
 
     text = compile_seatbelt_profile(profile, cwd=tmp_path, network_proxy_port=43123)
 
-    assert "(deny file-write*)" in text
+    assert '(deny file-write* (require-all (require-not (literal "/dev/null"))))' in text
+    assert '(allow file-write* (literal "/dev/null"))' in text
+    assert '(allow file-write* (subpath "/dev"))' not in text
     assert "(deny file-read*" in text
     assert f'(allow file-read* (subpath "{tmp_path / "docs"}"))' in text
     assert "deny file-read*" in text

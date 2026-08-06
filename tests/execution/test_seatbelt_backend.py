@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 import sys
 from typing import TYPE_CHECKING
 
@@ -13,6 +14,7 @@ from openharness.execution import (
     CommandOperation,
     ExecutionEffect,
     FileReadOperation,
+    FileSearchOperation,
     FileWriteOperation,
     OperationCompleted,
     ProcessCompleted,
@@ -53,10 +55,50 @@ def test_compiler_allows_workspace_write_but_denies_nested_protected_path(
 ) -> None:
     profile_text = compile_seatbelt_profile(_workspace_profile(), cwd=tmp_path)
 
-    assert "(deny file-write*" in profile_text
+    assert (
+        f'(deny file-write* (require-all (require-not (subpath "{tmp_path}")) '
+        '(require-not (literal "/dev/null"))))'
+    ) in profile_text
+    assert '(allow sysctl-read (sysctl-name "hw.pagesize_compat"))' in profile_text
+    assert '(allow sysctl-read (sysctl-name "kern.ostype"))' in profile_text
+    assert '(allow file-write* (literal "/dev/null"))' in profile_text
+    assert '(allow file-write* (subpath "/dev"))' not in profile_text
+    assert '(require-not (literal "/dev/null"))' in profile_text
     assert f'(allow file-write* (subpath "{tmp_path}"))' in profile_text
     assert f'(deny file-read* file-write* (subpath "{tmp_path / ".git"}"))' in profile_text
     assert "(deny network*)" in profile_text
+
+
+@requires_macos_seatbelt
+async def test_seatbelt_supports_minimal_toolchain_runtime(tmp_path: Path) -> None:
+    if shutil.which("rg") is None:
+        pytest.skip("requires ripgrep (rg) on PATH")
+
+    target = tmp_path / "haystack.txt"
+    target.write_text("alpha\nneedle-in-haystack\ngamma\n", encoding="utf-8")
+    backend = SeatbeltBackend(cwd=tmp_path, executable="/usr/bin/sandbox-exec")
+    session = await backend.open(_workspace_profile())
+    try:
+        search = await session.execute(FileSearchOperation(pattern="needle", path=tmp_path))
+        uv_version = await session.execute(CommandOperation(command="uv --version", cwd=tmp_path))
+        uname = await session.execute(CommandOperation(command="uname -s", cwd=tmp_path))
+        devnull = await session.execute(
+            CommandOperation(command="printf ok > /dev/null", cwd=tmp_path)
+        )
+    finally:
+        await session.close()
+
+    assert isinstance(search, OperationCompleted)
+    assert search.is_error is False
+    assert "needle-in-haystack" in search.output
+    assert isinstance(uv_version, ProcessCompleted)
+    assert uv_version.exit_code == 0
+    assert uv_version.output.startswith("uv ")
+    assert uname == ProcessCompleted(output="Darwin\n", exit_code=0)
+    assert devnull == ProcessCompleted(output="", exit_code=0)
+    assert "runtime_write:/dev/null" in session.boundary.filesystem_rules
+    assert "runtime_sysctl_read:hw.pagesize_compat" in session.boundary.process_rules
+    assert "runtime_sysctl_read:kern.ostype" in session.boundary.process_rules
 
 
 def test_compiler_denies_ambient_process_authority(tmp_path: Path) -> None:
