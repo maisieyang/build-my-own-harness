@@ -272,9 +272,10 @@ $EDITOR .env
 uv run oh
 ```
 
-Set `OPENHARNESS_API_KEY`, `OPENHARNESS_BASE_URL`, and
-`OPENHARNESS_MODEL` in `.env`. The defaults target Qwen through DashScope, but
-the loop contains no provider-specific branches.
+Fill in the blank values in `.env`'s minimum dogfood block. It contains the
+OpenAI-compatible provider settings, web capability key, provider request
+fields, and verified sandbox switch needed by the repository's current
+dogfood setup; the loop itself contains no provider-specific branches.
 
 Type `/` in the REPL to open the combined menu of built-ins, user commands, and
 skills. An initial prompt can be supplied directly:
@@ -282,6 +283,21 @@ skills. An initial prompt can be supplied directly:
 ```bash
 uv run oh "review this repository and identify the highest-risk gap"
 ```
+
+### macOS Seatbelt dogfood
+
+The minimum `.env.example` block already enables the sandbox. The default
+backend on macOS is Seatbelt, and bare `oh` enters the interactive chat
+session, so the everyday dogfood command is simply:
+
+```bash
+uv run oh
+```
+
+Run it from a normal macOS Terminal, not from an `oh` or other process that is
+already running under Seatbelt: macOS does not allow nested `sandbox-exec`
+boundaries. Inside the REPL, use `/permissions` to confirm that the installed
+boundary reports `macos-seatbelt sandbox-exec (verified)`.
 
 ## Command map
 
