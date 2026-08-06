@@ -97,12 +97,14 @@ def test_park_decision_and_explicit_resume_are_durable_and_skip_judge_until_resu
 
     monkeypatch.setattr(cli_module, "_open_sandbox_session", _open)
     run_calls = 0
+    authorization_contexts: list[tuple[str, ...]] = []
 
     async def _run(
         initial_messages: list[ConversationMessage], context: QueryContext
     ) -> AsyncIterator[ApiStreamEvent]:
         nonlocal run_calls
         run_calls += 1
+        authorization_contexts.append(context.authorization_context)
         assistant = ConversationMessage(
             role="assistant", content=[TextBlock(text="permission lifecycle")]
         )
@@ -182,6 +184,7 @@ def test_park_decision_and_explicit_resume_are_durable_and_skip_judge_until_resu
     assert judge_calls == 2
     assert "goal met after 1 auto-turn" in result.stdout
     assert persisted == [decision, decision]
+    assert authorization_contexts[1] == authorization_contexts[2]
 
 
 def _snapshot_with_runtime(runtime: object) -> dict[str, object]:
