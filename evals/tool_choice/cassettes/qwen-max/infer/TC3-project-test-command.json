@@ -1,0 +1,20 @@
+{
+  "case_id": "TC3-project-test-command",
+  "model": "qwen-max",
+  "kind": "infer",
+  "recorded_at": "2026-08-06T10:39:33.999323+00:00",
+  "request_summary": "TC3-project-test-command: 跑一下项目的全量测试，看看现在是不是绿的",
+  "response": {
+    "tool_uses": [
+      {
+        "id": "call_decf797c1b1242d68d9f95",
+        "name": "Bash",
+        "input": {
+          "command": "uv run pytest -m \"not integration\" -q"
+        }
+      }
+    ],
+    "text": "",
+    "stop_reason": "tool_use"
+  }
+}

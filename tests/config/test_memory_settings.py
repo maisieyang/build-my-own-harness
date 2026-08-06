@@ -56,6 +56,16 @@ class TestSettingsEnableMemoryDefault:
         settings = Settings()
         assert settings.enable_memory is True
 
+    def test_project_instructions_are_enabled_independently(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _seed_required_env(monkeypatch)
+
+        settings = Settings(enable_memory=False)
+
+        assert settings.enable_project_instructions is True
+        assert settings.max_project_instruction_chars == 12_000
+
     def test_memory_nested_uses_default_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _seed_required_env(monkeypatch)
         settings = Settings()

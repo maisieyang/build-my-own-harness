@@ -91,10 +91,8 @@ class MemorySettings(BaseModel):
         default=12_000,
         ge=0,
         description=(
-            "Per-CLAUDE.md-file char cap for the cascade load. Files "
-            "above this size are truncated with a marker — caps the "
-            "worst case where a user writes a 100k-char CLAUDE.md that "
-            "would otherwise blow the prompt budget."
+            "Deprecated compatibility setting. Project instructions use "
+            "Settings.max_project_instruction_chars."
         ),
     )
 
@@ -706,6 +704,23 @@ class Settings(BaseSettings):
         ),
     )
 
+    enable_project_instructions: bool = Field(
+        default=True,
+        description=(
+            "Load AGENTS.md and CLAUDE.md project instructions from the "
+            "active workspace. Independent of durable memory. Env var: "
+            "OPENHARNESS_ENABLE_PROJECT_INSTRUCTIONS."
+        ),
+    )
+    max_project_instruction_chars: int = Field(
+        default=12_000,
+        ge=0,
+        description=(
+            "Per-file character cap for project instructions. Env var: "
+            "OPENHARNESS_MAX_PROJECT_INSTRUCTION_CHARS."
+        ),
+    )
+
     # P10-T4.4e (decisions/25 D28.10): memory subsystem opt-OUT.
     # **Deviation from plugins' opt-in pattern**: memory is read-only +
     # side-effect-free in Phase 10 (the only write is ``use_count++`` to
@@ -717,10 +732,9 @@ class Settings(BaseSettings):
         description=(
             "Enable the memory subsystem (Phase 10, D28.10). When true "
             "(default), the CLI assembles a :class:`FilesystemMemoryStore` "
-            "at ``~/.openharness/memory/<basename>-<sha1(cwd)>/``, loads "
-            "the CLAUDE.md cascade, and injects both into the system "
-            "prompt per turn. When false, neither section appears — "
-            "the prompt is byte-identical to the pre-Phase-10 layout. "
+            "at ``~/.openharness/memory/<basename>-<sha1(cwd)>/`` and "
+            "injects the memory section into the system prompt per turn. "
+            "Project instructions are configured independently. "
             "Env var: OPENHARNESS_ENABLE_MEMORY. Overridden by the "
             "``--enable-memory`` / ``--no-enable-memory`` CLI flag."
         ),

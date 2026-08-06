@@ -62,6 +62,7 @@ class ToolChoiceSample:
     expected_tool: str | None
     expected_input_contains: dict[str, list[str]]
     forbidden_tools: tuple[str, ...]
+    project_instructions: str | None
     notes: str
 
 
@@ -93,15 +94,27 @@ def load_tool_choice_dataset(path: Path) -> list[ToolChoiceSample]:
                 expected_tool=entry["expected_tool"],
                 expected_input_contains=entry["expected_input_contains"],
                 forbidden_tools=tuple(entry["forbidden_tools"]),
+                project_instructions=entry.get("project_instructions"),
                 notes=entry["notes"],
             )
         )
     return samples
 
 
-def _build_eval_system_prompt() -> str:
+def _build_eval_system_prompt(sample: ToolChoiceSample) -> str:
     registry = create_default_tool_registry()
-    return build_system_prompt(registry.to_api_schema(), _EVAL_ENV)
+    instruction_content = None
+    if sample.project_instructions is not None:
+        instruction_content = (
+            "## Project Instructions\n\n"
+            "### /workspace/AGENTS.md\n\n"
+            f"```md\n{sample.project_instructions}\n```"
+        )
+    return build_system_prompt(
+        registry.to_api_schema(),
+        _EVAL_ENV,
+        project_instructions_content=instruction_content,
+    )
 
 
 async def infer_tool_choice(
@@ -121,7 +134,7 @@ async def infer_tool_choice(
     request = ApiMessageRequest(
         model=model,
         max_tokens=max_tokens,
-        system=_build_eval_system_prompt(),
+        system=_build_eval_system_prompt(sample),
         messages=sample.messages,
         tools=registry.to_api_schema(),
         stream=True,

@@ -144,7 +144,7 @@ from openharness.prompts import (
     PLAN_MODE_PROMPT_SECTION,
     build_system_prompt,
     detect_environment,
-    load_claude_md_prompt,
+    load_project_instructions,
 )
 from openharness.protocols import (
     ConversationMessage,
@@ -501,6 +501,15 @@ def _resolve_sandbox_config(
     )
 
 
+def _append_project_instructions(
+    base_prompt: str,
+    project_instructions_content: str | None,
+) -> str:
+    if project_instructions_content is None:
+        return base_prompt
+    return f"{base_prompt}\n\n{project_instructions_content}"
+
+
 def _sandbox_profile(config: SandboxConfig) -> RuntimePermissionProfile:
     """Translate user configuration intent into the canonical profile.
 
@@ -659,12 +668,7 @@ async def _run_ask(
     enable_plugins = (
         enable_plugins_override if enable_plugins_override is not None else settings.enable_plugins
     )
-    # P10-T4.4f (decisions/25 D28.10): memory subsystem opt-OUT. CLI
-    # flag overrides Settings. When OFF, no FilesystemMemoryStore is
-    # constructed, no CLAUDE.md cascade is loaded, system prompt is
-    # byte-identical to pre-Phase-10 layout. Default ON because memory
-    # is read-only + side-effect-free (only side effect is use_count++
-    # in a private user-dir file).
+    # Durable memory is independent from target-project instructions.
     enable_memory = (
         enable_memory_override if enable_memory_override is not None else settings.enable_memory
     )
@@ -914,35 +918,35 @@ async def _run_ask(
             effective_hook_registry = application.hook_registry
             effective_settings = application.settings
 
-        # P10-T4.4f: memory subsystem assembly. When enabled, construct
-        # FilesystemMemoryStore + load CLAUDE.md cascade ONCE per
-        # ``oh ask`` invocation. The per-query memory manifest (relevance
-        # scoring + use_count tick) is computed below at prompt-build
-        # time so the user's actual ``prompt`` arg drives selection.
+        project_instructions_content = (
+            load_project_instructions(
+                env.cwd,
+                max_chars_per_file=settings.max_project_instruction_chars,
+            )
+            if settings.enable_project_instructions
+            else None
+        )
+
+        # Durable memory assembly is independent from project instructions.
         memory_dir: Path | None = None
         memory_store: MemoryStore | None = None
-        claude_md_content: str | None = None
         if enable_memory:
             memory_dir = get_project_memory_dir(env.cwd)
             memory_store = FilesystemMemoryStore(project_dir=memory_dir)
             memory_store.discover()  # warm cache for relevance pass
-            claude_md_content = load_claude_md_prompt(
-                env.cwd,
-                max_chars_per_file=settings.memory.max_claude_md_chars,
-            )
 
         # System prompt is built AFTER MCP tools + LoadSkill register so
         # the LLM's tool catalog includes them. Skill catalog is injected
         # by ``build_system_prompt`` itself via the ``skill_store`` kwarg.
-        # P5d-T4: bundle.system_prompt REPLACES base when set; otherwise
-        # build against EFFECTIVE registry so the tool catalog reflects
-        # any whitelist filter. P10-T4.4f (refined P16-T1/T2 D36.10/D36.11):
-        # when memory is enabled AND the bundle doesn't override, inject
-        # ``claude_md_content`` + the CC-style ``## Memory`` section
-        # (rules block + MEMORY.md index) so the LLM sees project
-        # instructions + memory entrypoint alongside tools / env.
+        # A bundle may replace the harness base prompt, but target-project
+        # instructions remain a separate project-owned context layer.
+        # Otherwise build against the effective registry and compose project
+        # instructions with the optional durable-memory section.
         if bundle is not None and bundle.system_prompt is not None:
-            system_prompt = bundle.system_prompt
+            system_prompt = _append_project_instructions(
+                bundle.system_prompt,
+                project_instructions_content,
+            )
         else:
             memory_index_content: str | None = None
             if memory_store is not None and memory_dir is not None:
@@ -955,7 +959,7 @@ async def _run_ask(
                 effective_registry.to_api_schema(),
                 env,
                 skill_store=skill_store,
-                claude_md_content=claude_md_content,
+                project_instructions_content=project_instructions_content,
                 memory_dir=memory_dir,
                 memory_index_content=memory_index_content,
                 web_enabled=effective_web,
@@ -1399,11 +1403,7 @@ async def _run_chat(
     enable_plugins = (
         enable_plugins_override if enable_plugins_override is not None else settings.enable_plugins
     )
-    # P10-T4.4f: memory subsystem opt-OUT. Same shape as ``_run_ask``.
-    # When enabled, memory_manifest is rebuilt **per turn** with the
-    # current user_input as the relevance query — so multi-turn
-    # conversations get fresh memory selection each turn instead of
-    # only at session start.
+    # Durable memory is independent from target-project instructions.
     enable_memory = (
         enable_memory_override if enable_memory_override is not None else settings.enable_memory
     )
@@ -1533,21 +1533,22 @@ async def _run_chat(
                 plugin_catalog=plugin_catalogs.commands,
             )
 
-        # P10-T4.4f (refined P16-T1/T2 D36.11): memory subsystem
-        # assembled ONCE per ``oh chat`` session. Per-turn MEMORY.md
-        # re-read happens inside the loop so the LLM sees the index
-        # updated by the previous turn's writes.
+        project_instructions_content = (
+            load_project_instructions(
+                env.cwd,
+                max_chars_per_file=settings.max_project_instruction_chars,
+            )
+            if settings.enable_project_instructions
+            else None
+        )
+
+        # Durable memory is assembled once per chat session.
         memory_dir: Path | None = None
         memory_store: MemoryStore | None = None
-        claude_md_content: str | None = None
         if enable_memory:
             memory_dir = get_project_memory_dir(env.cwd)
             memory_store = FilesystemMemoryStore(project_dir=memory_dir)
             memory_store.discover()  # warm cache for per-turn relevance pass
-            claude_md_content = load_claude_md_prompt(
-                env.cwd,
-                max_chars_per_file=settings.memory.max_claude_md_chars,
-            )
 
         # Bundle resolves on FIRST turn only (per D24.4). Tracked
         # outside the loop so subsequent turns reuse the same context.
@@ -1568,7 +1569,7 @@ async def _run_chat(
             registry.to_api_schema(),
             env,
             skill_store=skill_store,
-            claude_md_content=claude_md_content,
+            project_instructions_content=project_instructions_content,
             web_enabled=effective_web,
         )
 
@@ -2060,14 +2061,17 @@ async def _run_chat(
                 effective_hook_registry = application.hook_registry
                 effective_settings = application.settings
                 if bundle.system_prompt is not None:
-                    system_prompt = bundle.system_prompt
+                    system_prompt = _append_project_instructions(
+                        bundle.system_prompt,
+                        project_instructions_content,
+                    )
                     bundle_overrides_prompt = True
                 else:
                     system_prompt = build_system_prompt(
                         effective_registry.to_api_schema(),
                         env,
                         skill_store=skill_store,
-                        claude_md_content=claude_md_content,
+                        project_instructions_content=project_instructions_content,
                         web_enabled=effective_web,
                     )
             bundle_resolved = True
@@ -2095,7 +2099,7 @@ async def _run_chat(
                     effective_registry.to_api_schema(),
                     env,
                     skill_store=skill_store,
-                    claude_md_content=claude_md_content,
+                    project_instructions_content=project_instructions_content,
                     memory_dir=memory_dir,
                     memory_index_content=memory_index_content,
                     web_enabled=effective_web,
@@ -2375,6 +2379,7 @@ def _root(
             no_skills=False,
             no_commands=False,
             sandbox=None,
+            sandbox_backend=None,
             sandbox_image=None,
             sandbox_network=None,
             sandbox_memory=None,
@@ -2618,10 +2623,11 @@ def ask(
         hidden=True,
         help=(
             "Enable the memory subsystem (Phase 10, D28.10). When ON "
-            "(default), CLAUDE.md cascade + per-project durable memory "
-            "are injected into the system prompt. When OFF, neither "
-            "section appears — useful for a stateless harness or for "
-            "isolating from a misbehaving memory file. Overrides "
+            "(default), per-project durable memory is injected into the "
+            "system prompt. Project instructions are controlled "
+            "independently. When OFF, durable memory is omitted — useful "
+            "for a stateless harness or for isolating from a misbehaving "
+            "memory file. Overrides "
             "OPENHARNESS_ENABLE_MEMORY."
         ),
     ),
@@ -3032,6 +3038,9 @@ def chat(
         raise typer.Exit(code=1) from exc
     except (AuthenticationFailure, RateLimitFailure, RequestFailure) as exc:
         typer.echo(f"API error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except SandboxUnavailableError as exc:
+        typer.echo(f"Sandbox error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     except OpenHarnessError as exc:
         typer.echo(f"Error: {exc}", err=True)

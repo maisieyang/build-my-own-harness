@@ -42,6 +42,26 @@ if TYPE_CHECKING:
     from openharness.permissions.profile import RuntimePermissionProfile
 
 
+_RUNTIME_SYSCTL_READ_RULES = (
+    ("sysctl-name", "hw.activecpu"),
+    ("sysctl-name", "hw.logicalcpu"),
+    ("sysctl-name", "hw.memsize"),
+    ("sysctl-name", "hw.ncpu"),
+    ("sysctl-name", "hw.pagesize_compat"),
+    ("sysctl-name", "kern.argmax"),
+    ("sysctl-name", "kern.hostname"),
+    ("sysctl-name", "kern.osrelease"),
+    ("sysctl-name", "kern.ostype"),
+    ("sysctl-name", "kern.osversion"),
+    ("sysctl-name", "kern.secure_kernel"),
+    ("sysctl-name", "kern.usrstack64"),
+    ("sysctl-name-prefix", "hw.optional."),
+    ("sysctl-name-prefix", "kern.proc.pid."),
+    ("sysctl-name-prefix", "sysctl.proc_cputype"),
+)
+_RUNTIME_WRITABLE_PATHS = (Path("/dev/null"),)
+
+
 def _seatbelt_string(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
@@ -95,25 +115,16 @@ def compile_seatbelt_profile(
         "(allow process-fork)",
         "(allow signal (target same-sandbox))",
         "(allow process-info* (target same-sandbox))",
-        # Common read-only kernel queries needed by the dynamic loader and
-        # language runtimes.  These grant no filesystem, network, or cross-
-        # sandbox process authority.
-        '(allow sysctl-read (sysctl-name "hw.activecpu"))',
-        '(allow sysctl-read (sysctl-name "hw.logicalcpu"))',
-        '(allow sysctl-read (sysctl-name "hw.memsize"))',
-        '(allow sysctl-read (sysctl-name "hw.ncpu"))',
-        '(allow sysctl-read (sysctl-name "kern.argmax"))',
-        '(allow sysctl-read (sysctl-name "kern.hostname"))',
-        '(allow sysctl-read (sysctl-name "kern.osrelease"))',
-        '(allow sysctl-read (sysctl-name "kern.osversion"))',
-        '(allow sysctl-read (sysctl-name "kern.secure_kernel"))',
-        '(allow sysctl-read (sysctl-name "kern.usrstack64"))',
-        '(allow sysctl-read (sysctl-name-prefix "hw.optional."))',
-        '(allow sysctl-read (sysctl-name-prefix "kern.proc.pid."))',
-        '(allow sysctl-read (sysctl-name-prefix "sysctl.proc_cputype"))',
         "(allow ipc-posix-sem)",
         "(allow pseudo-tty)",
     ]
+    # Common read-only kernel queries needed by the dynamic loader and
+    # language runtimes. These grant no filesystem, network, or cross-sandbox
+    # process authority.
+    lines.extend(
+        f'(allow sysctl-read ({selector} "{_seatbelt_string(value)}"))'
+        for selector, value in _RUNTIME_SYSCTL_READ_RULES
+    )
     readable_paths = {
         str(_absolute_policy_path(rule.path, cwd))
         for rule in profile.filesystem.rules
@@ -135,11 +146,15 @@ def compile_seatbelt_profile(
         for rule in profile.filesystem.rules
         if rule.access is FilesystemAccess.WRITE
     ]
-    if writable_paths:
-        exclusions = " ".join(f'(require-not (subpath "{path}"))' for path in writable_paths)
-        lines.append(f"(deny file-write* (require-all {exclusions}))")
-    else:
-        lines.append("(deny file-write*)")
+    runtime_writable_paths = tuple(_seatbelt_string(str(path)) for path in _RUNTIME_WRITABLE_PATHS)
+    write_exclusions = [
+        *(f'(require-not (subpath "{path}"))' for path in writable_paths),
+        *(f'(require-not (literal "{path}"))' for path in runtime_writable_paths),
+    ]
+    exclusions = " ".join(write_exclusions)
+    lines.append(f"(deny file-write* (require-all {exclusions}))")
+    for path in runtime_writable_paths:
+        lines.append(f'(allow file-write* (literal "{path}"))')
     for rule in sorted(
         profile.filesystem.rules,
         key=lambda item: (item.normalized_path(), item.access.value),
@@ -545,11 +560,18 @@ class SeatbeltBackend:
             for rule in profile.filesystem.rules
         )
         runtime_read_rules = tuple(f"runtime_read:{path}" for path in _runtime_read_roots())
+        runtime_write_rules = tuple(f"runtime_write:{path}" for path in _RUNTIME_WRITABLE_PATHS)
         process_rules = [
             "deny-default",
             "non-login-shell",
             "child-process-sandbox-inheritance",
             "signal-and-process-info:target-same-sandbox",
+            *(
+                f"runtime_sysctl_read:{value}"
+                if selector == "sysctl-name"
+                else f"runtime_sysctl_read_prefix:{value}"
+                for selector, value in _RUNTIME_SYSCTL_READ_RULES
+            ),
         ]
         if profile.process.timeout_seconds is not None:
             process_rules.append(f"timeout<={profile.process.timeout_seconds}s")
@@ -583,7 +605,11 @@ class SeatbeltBackend:
             backend_version="sandbox-exec",
             covered_effects=tuple(covered_effects),
             verification=BoundaryVerification.VERIFIED,
-            filesystem_rules=(*filesystem_rules, *runtime_read_rules),
+            filesystem_rules=(
+                *filesystem_rules,
+                *runtime_read_rules,
+                *runtime_write_rules,
+            ),
             network_rules=network_rules,
             environment_rules=(profile.environment.inherit.value,),
             process_rules=tuple(process_rules),
