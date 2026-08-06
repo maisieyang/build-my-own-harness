@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from typer.testing import CliRunner
 
 import openharness.cli as cli_module
+from openharness.execution import SandboxUnavailableError
 
 if TYPE_CHECKING:
     import pytest
@@ -49,7 +50,24 @@ class TestBareEntry:
         # Same defaults as an argless ``oh chat`` invocation.
         assert captured["model_override"] is None
         assert captured["permission_mode_override"] is None
+        assert captured["sandbox_backend_override"] is None
         assert captured["resume"] is False
+
+    def test_sandbox_startup_failure_is_rendered_without_traceback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def _fail_to_start(**kwargs: Any) -> None:
+            del kwargs
+            raise SandboxUnavailableError("seatbelt failed to install boundary")
+
+        monkeypatch.setattr(cli_module, "_run_chat", _fail_to_start)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.app, ["chat"])
+
+        assert result.exit_code == 1
+        assert "Sandbox error: seatbelt failed to install boundary" in result.stderr
+        assert "Traceback" not in result.stderr
 
     def test_version_still_short_circuits(self, monkeypatch: pytest.MonkeyPatch) -> None:
         captured = _capture_run_chat(monkeypatch)

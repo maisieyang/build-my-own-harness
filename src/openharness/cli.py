@@ -2375,6 +2375,7 @@ def _root(
             no_skills=False,
             no_commands=False,
             sandbox=None,
+            sandbox_backend=None,
             sandbox_image=None,
             sandbox_network=None,
             sandbox_memory=None,
@@ -3032,6 +3033,9 @@ def chat(
         raise typer.Exit(code=1) from exc
     except (AuthenticationFailure, RateLimitFailure, RequestFailure) as exc:
         typer.echo(f"API error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except SandboxUnavailableError as exc:
+        typer.echo(f"Sandbox error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     except OpenHarnessError as exc:
         typer.echo(f"Error: {exc}", err=True)
