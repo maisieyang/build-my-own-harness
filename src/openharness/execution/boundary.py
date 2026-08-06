@@ -68,6 +68,16 @@ class EnforcedBoundary:
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()
 
+    @property
+    def backend_fingerprint(self) -> str:
+        """Stable identity of the sandbox implementation enforcing the facts."""
+        encoded = json.dumps(
+            {"backend": self.backend, "backend_version": self.backend_version},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
 
 @dataclass(frozen=True)
 class BackendSupport:
@@ -189,6 +199,7 @@ class BoundaryViolation:
     dimension: str
     requested: str
     evidence: str
+    hard_deny: bool = False
 
 
 ExecutionResult: TypeAlias = (

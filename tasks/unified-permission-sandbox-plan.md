@@ -55,12 +55,20 @@ consumer of the session runtime and never owns permissions.
   reauthorized before external review. `/permissions` lists MCP, Web, Browser,
   Computer Use, stdio server postures, and trusted control surfaces, including
   unregistered and locally uncovered boundaries.
-- S7 has substantial existing implementation but is not accepted by this
-  status update. Its full Goal3 acceptance matrix and lifecycle verification
-  remain separate work; S6 does not claim that local boundary overlays,
-  park/resume, or Goal pause semantics are complete.
-- S6 verification on 2026-08-06: `2743 passed, 11 deselected`, total coverage
-  `95.06%`, strict mypy clean, Ruff clean, and format check clean.
+- S7 complete: every review envelope carries the exact final-argument,
+  profile, enforced-boundary, backend, request, and grant fingerprints, plus
+  the typed crossing, minimum permission delta, and data flow. Event IDs remain
+  distinct from semantic request fingerprints, so an identical retry with a
+  new tool-use ID can consume one grant while any argument or runtime-fact
+  change invalidates it. Local overlays bind the approval to the operation that
+  actually crossed the boundary, preserve hard denies, and never mutate the
+  base profile. Repeated semantic denials open a persisted circuit breaker.
+  Filesystem sandbox denials are structured rather than inferred from stderr.
+  Park/approve/deny/resume is durable and resume is a one-shot typed transition;
+  Goal parks before its judge without resetting or consuming the auto-turn
+  count, and resume drift fails closed.
+- S7 verification on 2026-08-06: `2756 passed, 11 deselected`, total coverage
+  `95.11%`, strict mypy clean, Ruff clean, and format check clean.
 
 ## S0 — Correctness floor and experiment cleanup
 

@@ -14,6 +14,7 @@ from openharness.execution import (
 from openharness.permissions import (
     PermissionDelta,
     PermissionDeltaRequest,
+    PermissionFilesystemAccess,
     PermissionResolutionStatus,
     PermissionReviewDecision,
     PermissionReviewVerdict,
@@ -41,6 +42,13 @@ def _request(*, command: str = "curl https://example.com") -> PermissionDeltaReq
         profile=profile,
         boundary=_boundary(profile_fingerprint=profile.fingerprint),
         delta=PermissionDelta.network_domain("example.com"),
+        crossing=BoundaryViolation(
+            dimension="network.domain",
+            requested="example.com:443",
+            evidence="network allowlist rejected the destination",
+        ),
+        data_sources=("workspace",),
+        data_destinations=("example.com:443",),
     )
 
 
@@ -61,7 +69,43 @@ def test_request_fingerprints_exact_final_arguments_and_boundary() -> None:
     assert request.arguments_fingerprint != changed.arguments_fingerprint
     assert request.profile_fingerprint == workspace_runtime_profile().fingerprint
     assert request.boundary_fingerprint
+    assert request.backend_fingerprint
+    assert request.request_fingerprint
+    assert request.grant_fingerprint == request.request_fingerprint
+    assert request.data_sources == ("workspace",)
+    assert request.data_destinations == ("example.com:443",)
     assert request.request_id != changed.request_id
+
+
+def test_filesystem_delta_records_the_minimum_access() -> None:
+    read = PermissionDelta.filesystem_path(
+        "/outside/input.txt", access=PermissionFilesystemAccess.READ
+    )
+    write = PermissionDelta.filesystem_path(
+        "/outside/output.txt", access=PermissionFilesystemAccess.WRITE
+    )
+
+    assert read.filesystem_access is PermissionFilesystemAccess.READ
+    assert write.filesystem_access is PermissionFilesystemAccess.WRITE
+
+
+def test_exact_request_fingerprint_survives_new_tool_use_id() -> None:
+    request = _request()
+    retry = PermissionDeltaRequest.create(
+        tool_use_id="tool-2",
+        tool_name=request.tool_name,
+        final_arguments=request.final_arguments,
+        profile=workspace_runtime_profile(),
+        boundary=_boundary(profile_fingerprint=workspace_runtime_profile().fingerprint),
+        delta=request.delta,
+        crossing=request.crossing,
+        data_sources=request.data_sources,
+        data_destinations=request.data_destinations,
+    )
+
+    assert retry.request_id != request.request_id
+    assert retry.request_fingerprint == request.request_fingerprint
+    assert retry.grant_fingerprint == request.grant_fingerprint
 
 
 def test_request_refuses_unverified_or_mismatched_boundary() -> None:
@@ -81,6 +125,9 @@ def test_request_refuses_unverified_or_mismatched_boundary() -> None:
             profile=profile,
             boundary=unverified,
             delta=PermissionDelta.network_domain("example.com"),
+            crossing=BoundaryViolation(
+                dimension="network.domain", requested="example.com", evidence="denied"
+            ),
         )
     mismatch = _boundary(profile_fingerprint="wrong")
     with pytest.raises(ValueError, match="profile fingerprint"):
@@ -91,6 +138,9 @@ def test_request_refuses_unverified_or_mismatched_boundary() -> None:
             profile=profile,
             boundary=mismatch,
             delta=PermissionDelta.network_domain("example.com"),
+            crossing=BoundaryViolation(
+                dimension="network.domain", requested="example.com", evidence="denied"
+            ),
         )
 
 
@@ -137,6 +187,31 @@ async def test_reviewer_approval_is_an_exact_one_shot_grant() -> None:
 
 
 @pytest.mark.asyncio
+async def test_human_grant_matches_exact_retry_with_new_tool_use_id_only() -> None:
+    profile = workspace_runtime_profile()
+    boundary = _boundary(profile_fingerprint=profile.fingerprint)
+    runtime = PermissionRuntime(profile=profile, boundary=boundary)
+    request = _request()
+    runtime.park(request, reason="needs a person")
+    runtime.approve_parked(request.request_id)
+    retry = PermissionDeltaRequest.create(
+        tool_use_id="tool-2",
+        tool_name=request.tool_name,
+        final_arguments=request.final_arguments,
+        profile=profile,
+        boundary=boundary,
+        delta=request.delta,
+        crossing=request.crossing,
+        data_sources=request.data_sources,
+        data_destinations=request.data_destinations,
+    )
+
+    assert runtime.consume_grant(retry) is True
+    assert runtime.consume_grant(retry) is False
+    assert runtime.consume_grant(_request(command="curl https://other.example")) is False
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "verdict",
     [PermissionReviewVerdict.defer("needs a person"), PermissionReviewVerdict.failed("offline")],
@@ -172,7 +247,18 @@ async def test_repeated_denial_opens_circuit_without_reviewer_recall() -> None:
     request = _request()
 
     first = await runtime.resolve_external(request)
-    second = await runtime.resolve_external(request)
+    second_request = PermissionDeltaRequest.create(
+        tool_use_id="tool-2",
+        tool_name=request.tool_name,
+        final_arguments=request.final_arguments,
+        profile=profile,
+        boundary=runtime.boundary,
+        delta=request.delta,
+        crossing=request.crossing,
+        data_sources=request.data_sources,
+        data_destinations=request.data_destinations,
+    )
+    second = await runtime.resolve_external(second_request)
 
     assert first.status is PermissionResolutionStatus.DENIED
     assert second.status is PermissionResolutionStatus.DENIED
@@ -193,6 +279,7 @@ def test_park_state_round_trips_and_resume_refuses_boundary_drift() -> None:
         state=runtime.export_state(),
     )
     assert restored.parked_request == request
+    assert restored.export_state().backend_fingerprint == boundary.backend_fingerprint
 
     drifted = _boundary(profile_fingerprint=profile.fingerprint, backend_version="2")
     with pytest.raises(ValueError, match="boundary drift"):
@@ -214,6 +301,11 @@ def test_human_approve_and_deny_are_typed_and_exact() -> None:
 
     runtime.approve_parked(request.request_id)
     assert runtime.parked_request is None
+    resumed = runtime.resume_decided()
+    assert resumed.request_fingerprint == request.request_fingerprint
+    assert resumed.decision is PermissionReviewDecision.APPROVE
+    with pytest.raises(ValueError, match="no permission decision"):
+        runtime.resume_decided()
     assert runtime.consume_grant(request) is True
 
     runtime.park(request, reason="needs a person")
@@ -241,6 +333,9 @@ async def test_hard_deny_never_calls_reviewer() -> None:
         profile=profile,
         boundary=runtime.boundary,
         delta=request.delta,
+        crossing=request.crossing,
+        data_sources=request.data_sources,
+        data_destinations=request.data_destinations,
     )
 
     resolution = await runtime.resolve_external(request)
@@ -313,6 +408,29 @@ async def test_missing_reviewer_parks_and_request_drift_is_rejected() -> None:
     boundary_drift = request.model_copy(update={"boundary_fingerprint": "wrong"})
     with pytest.raises(ValueError, match="boundary drift"):
         runtime.consume_grant(boundary_drift)
+    other_backend = EnforcedBoundary(
+        profile_fingerprint=profile.fingerprint,
+        backend="other",
+        backend_version="1",
+        covered_effects=(ExecutionEffect.COMMAND,),
+        verification=BoundaryVerification.VERIFIED,
+    )
+    backend_drift = PermissionDeltaRequest.create(
+        tool_use_id=request.tool_use_id,
+        tool_name=request.tool_name,
+        final_arguments=request.final_arguments,
+        profile=profile,
+        boundary=other_backend,
+        delta=request.delta,
+        crossing=request.crossing,
+        data_sources=request.data_sources,
+        data_destinations=request.data_destinations,
+    )
+    with pytest.raises(ValueError, match="backend drift"):
+        runtime.consume_grant(backend_drift)
+    tampered_grant = request.model_copy(update={"grant_fingerprint": "wrong"})
+    with pytest.raises(ValueError, match="integrity"):
+        runtime.consume_grant(tampered_grant)
 
 
 def test_state_dict_round_trip_and_profile_drift_are_rejected() -> None:
@@ -334,4 +452,13 @@ def test_state_dict_round_trip_and_profile_drift_are_rejected() -> None:
             profile=changed,
             boundary=changed_boundary,
             state=state,
+        )
+
+    backend_tampered = dict(state)
+    backend_tampered["backend_fingerprint"] = "wrong"
+    with pytest.raises(ValueError, match="backend drift"):
+        PermissionRuntime.from_state(
+            profile=profile,
+            boundary=boundary,
+            state=backend_tampered,
         )

@@ -149,3 +149,36 @@ def test_unknown_operation_and_os_error_are_payload_errors(
 
     assert unknown["is_error"] is True
     assert "denied" in str(failed["output"])
+
+
+@pytest.mark.parametrize(
+    ("kind", "dimension"),
+    [
+        ("read", "filesystem.read"),
+        ("search", "filesystem.search"),
+        ("write", "filesystem.write"),
+        ("edit", "filesystem.write"),
+    ],
+)
+def test_permission_error_is_a_typed_boundary_violation(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    kind: str,
+    dimension: str,
+) -> None:
+    def fail(request: dict[str, object]) -> dict[str, object]:
+        del request
+        raise PermissionError("operation not permitted")
+
+    monkeypatch.setattr(worker, f"_{kind}", fail)
+    target = tmp_path / "outside.txt"
+    result = worker.run({"kind": kind, "path": str(target), "line_cap": 1})
+
+    assert result["metadata"] == {
+        "boundary_violation": {
+            "dimension": dimension,
+            "requested": str(target),
+            "evidence": "OS sandbox denied the filesystem operation",
+            "hard_deny": False,
+        }
+    }

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from openharness.execution import (
+    BoundaryViolation,
     CommandOperation,
     ExecutionEffect,
     FileReadOperation,
@@ -130,8 +131,9 @@ async def test_file_worker_cannot_write_outside_workspace(tmp_path: Path) -> Non
 
     result = await session.execute(FileWriteOperation(path=outside, content="escape"))
 
-    assert isinstance(result, OperationCompleted)
-    assert result.is_error is True
+    assert isinstance(result, BoundaryViolation)
+    assert result.dimension == "filesystem.write"
+    assert result.requested == str(outside)
     assert not outside.exists()
     await session.close()
 
@@ -150,10 +152,10 @@ async def test_command_and_file_worker_cannot_read_outside_declared_roots(tmp_pa
 
         assert isinstance(command_result, ProcessCompleted)
         assert command_result.exit_code != 0
-        assert isinstance(file_result, OperationCompleted)
-        assert file_result.is_error is True
+        assert isinstance(file_result, BoundaryViolation)
+        assert file_result.dimension == "filesystem.read"
         assert payload not in command_result.output
-        assert payload not in file_result.output
+        assert payload not in file_result.evidence
     finally:
         outside.unlink(missing_ok=True)
         await session.close()

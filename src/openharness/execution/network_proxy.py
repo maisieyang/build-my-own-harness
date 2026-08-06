@@ -60,6 +60,7 @@ def evaluate_network_target(
             dimension="network.domain",
             requested=requested,
             evidence="domain is explicitly denied",
+            hard_deny=True,
         )
     if policy.allow_domains and not any(
         _domain_matches(target.host, rule) for rule in policy.allow_domains

@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 from openharness.execution import (
     BoundaryVerification,
+    BoundaryViolation,
     EnforcedBoundary,
     ExecutionEffect,
 )
@@ -59,6 +60,13 @@ def _request() -> PermissionDeltaRequest:
         profile=profile,
         boundary=boundary,
         delta=PermissionDelta.external_tool("web"),
+        crossing=BoundaryViolation(
+            dimension="external.web",
+            requested="WebFetch",
+            evidence="outside local sandbox",
+        ),
+        data_sources=("final tool arguments",),
+        data_destinations=("web",),
     )
 
 

@@ -18,7 +18,12 @@ from pathlib import Path
 
 import pytest
 
-from openharness.execution import BoundaryVerification, EnforcedBoundary, ExecutionEffect
+from openharness.execution import (
+    BoundaryVerification,
+    BoundaryViolation,
+    EnforcedBoundary,
+    ExecutionEffect,
+)
 from openharness.permissions import (
     PermissionDelta,
     PermissionDeltaRequest,
@@ -298,6 +303,13 @@ class TestSerializeSnapshot:
             profile=profile,
             boundary=boundary,
             delta=PermissionDelta.external_tool("web"),
+            crossing=BoundaryViolation(
+                dimension="external.web",
+                requested="WebFetch",
+                evidence="outside local sandbox",
+            ),
+            data_sources=("final tool arguments",),
+            data_destinations=("web",),
         )
         runtime.park(request, reason="needs a person")
 
@@ -311,7 +323,10 @@ class TestSerializeSnapshot:
         state = out["extra"]["permission_runtime"]
         assert state["profile_fingerprint"] == profile.fingerprint
         assert state["boundary_fingerprint"] == boundary.fingerprint
+        assert state["backend_fingerprint"] == boundary.backend_fingerprint
         assert state["parked_request"]["request_id"] == request.request_id
+        assert state["parked_request"]["request_fingerprint"] == request.request_fingerprint
+        assert state["parked_request"]["grant_fingerprint"] == request.grant_fingerprint
         assert state["parked_request"]["backend"] == "test"
 
 
@@ -341,6 +356,13 @@ def test_permission_decision_amends_current_snapshot_without_rotating(
         profile=profile,
         boundary=boundary,
         delta=PermissionDelta.external_tool("web"),
+        crossing=BoundaryViolation(
+            dimension="external.web",
+            requested="WebFetch",
+            evidence="outside local sandbox",
+        ),
+        data_sources=("final tool arguments",),
+        data_destinations=("web",),
     )
     runtime.park(request, reason="needs approval")
     assert update_permission_runtime_snapshot(cwd=tmp_path, runtime=runtime) is not None
@@ -349,6 +371,11 @@ def test_permission_decision_amends_current_snapshot_without_rotating(
     assert (
         loaded["extra"]["permission_runtime"]["parked_request"]["request_id"] == request.request_id
     )
+
+    runtime.approve_parked(request.request_id)
+    assert update_permission_runtime_snapshot(cwd=tmp_path, runtime=runtime) is not None
+    loaded = load_snapshot(tmp_path)
+    assert request.grant_fingerprint in loaded["extra"]["permission_runtime"]["grants"]
 
 
 class TestPermissionRuntimeSnapshotAmendmentFailures:

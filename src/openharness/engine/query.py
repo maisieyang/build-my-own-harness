@@ -66,6 +66,7 @@ from openharness.permissions import (
     PermissionDelta,
     PermissionDeltaKind,
     PermissionDeltaRequest,
+    PermissionFilesystemAccess,
     PermissionMode,
     PermissionResolutionStatus,
 )
@@ -696,11 +697,19 @@ def _boundary_violation_metadata(result: ToolResult) -> BoundaryViolation | None
     dimension = raw.get("dimension")
     requested = raw.get("requested")
     evidence = raw.get("evidence")
+    hard_deny = raw.get("hard_deny", False)
     if not (
         isinstance(dimension, str) and isinstance(requested, str) and isinstance(evidence, str)
     ):
         return None
-    return BoundaryViolation(dimension=dimension, requested=requested, evidence=evidence)
+    if not isinstance(hard_deny, bool):
+        return None
+    return BoundaryViolation(
+        dimension=dimension,
+        requested=requested,
+        evidence=evidence,
+        hard_deny=hard_deny,
+    )
 
 
 def _delta_for_violation(violation: BoundaryViolation) -> PermissionDelta:
@@ -709,9 +718,23 @@ def _delta_for_violation(violation: BoundaryViolation) -> PermissionDelta:
         return PermissionDelta(
             kind=PermissionDeltaKind.NETWORK_DOMAIN,
             value=host,
-            hard_deny="explicitly denied" in violation.evidence,
+            hard_deny=violation.hard_deny,
         )
-    return PermissionDelta.filesystem_path(violation.requested)
+    access = {
+        "filesystem.read": PermissionFilesystemAccess.READ,
+        "filesystem.search": PermissionFilesystemAccess.SEARCH,
+    }.get(violation.dimension, PermissionFilesystemAccess.WRITE)
+    return PermissionDelta.filesystem_path(violation.requested, access=access)
+
+
+def _dataflow_for_violation(
+    violation: BoundaryViolation,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    if violation.dimension in {"filesystem.read", "filesystem.search"}:
+        return (violation.requested,), ("model context",)
+    if violation.dimension.startswith("filesystem."):
+        return ("final tool arguments",), (violation.requested,)
+    return ("sandbox-visible data",), (violation.requested,)
 
 
 async def _resolve_local_boundary_violation(
@@ -727,6 +750,7 @@ async def _resolve_local_boundary_violation(
     runtime = context.permission_runtime
     if violation is None or runtime is None:
         return result
+    data_sources, data_destinations = _dataflow_for_violation(violation)
     request = PermissionDeltaRequest.create(
         tool_use_id=tool_use.id,
         tool_name=tool.name,
@@ -734,6 +758,9 @@ async def _resolve_local_boundary_violation(
         profile=runtime.profile,
         boundary=runtime.boundary,
         delta=_delta_for_violation(violation),
+        crossing=violation,
+        data_sources=data_sources,
+        data_destinations=data_destinations,
     )
     approved = runtime.consume_grant(request)
     resolution_reason = "human approved exact request"
@@ -766,7 +793,7 @@ async def _resolve_local_boundary_violation(
             metadata=result.metadata,
         )
     try:
-        session.arm(request.delta)
+        session.arm(request)
         retried = await tool.execute(args, exec_context)
     except (SandboxUnavailableError, RuntimeError, ValueError) as exc:
         runtime.park(request, reason=f"approved overlay could not be installed: {exc}")
@@ -841,6 +868,16 @@ async def _external_effect_failure(
             profile=runtime.profile,
             boundary=runtime.boundary,
             delta=PermissionDelta.external_tool(surface.value),
+            crossing=BoundaryViolation(
+                dimension=f"external.{surface.value}",
+                requested=tool.name,
+                evidence=(
+                    f"{kind.value} external effect is outside the local sandbox; "
+                    f"trust={tool.trust_source}"
+                ),
+            ),
+            data_sources=("final tool arguments",),
+            data_destinations=(surface.value,),
         )
         if runtime.consume_grant(request):
             return None

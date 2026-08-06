@@ -83,6 +83,7 @@ def tool_result_from_operation(
                     "dimension": result.dimension,
                     "requested": result.requested,
                     "evidence": result.evidence,
+                    "hard_deny": result.hard_deny,
                 }
             },
         )

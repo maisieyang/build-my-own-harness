@@ -1711,6 +1711,7 @@ async def _run_chat(
         pending_input: str | None = initial_prompt
         eof_armed = False
         while True:
+            manual_input_received = False
             try:
                 if pending_input is not None:
                     user_input = pending_input
@@ -1725,10 +1726,10 @@ async def _run_chat(
                         typer.echo(f">>> {user_input}")
                 elif prompt_session is not None:
                     user_input = await prompt_session.prompt_async(">>> ")
-                    goal_auto_turns = 0  # manual input re-arms the loop (D48.5)
+                    manual_input_received = True
                 else:
                     user_input = await asyncio.to_thread(input, ">>> ")
-                    goal_auto_turns = 0  # manual input re-arms the loop (D48.5)
+                    manual_input_received = True
             except EOFError:
                 if eof_armed:
                     typer.echo("")  # newline after EOF
@@ -1827,14 +1828,19 @@ async def _run_chat(
                 typer.echo(f"(denied exact request {request_id[:12]}; use /resume)")
                 continue
             if user_input == "/resume":
-                if permission_runtime is None or permission_runtime.last_decided_request is None:
+                if permission_runtime is None:
                     typer.echo("(no permission decision to resume)")
                     continue
-                decision = permission_runtime.last_human_decision
-                request = permission_runtime.last_decided_request
+                try:
+                    transition = permission_runtime.resume_decided()
+                except ValueError:
+                    typer.echo("(no permission decision to resume)")
+                    continue
+                if settings.snapshot.enabled:
+                    update_permission_runtime_snapshot(cwd=env.cwd, runtime=permission_runtime)
                 pending_input = (
                     "[permission decision] The exact request "
-                    f"{request.request_id} was {decision.value if decision is not None else 'decided'}. "
+                    f"{transition.request_id} was {transition.decision.value}. "
                     "If approved, retry the identical tool arguments once. If denied, find a "
                     "solution inside the current verified boundary."
                 )
@@ -2059,6 +2065,12 @@ async def _run_chat(
                     )
             bundle_resolved = True
 
+            # Only conversational input re-arms the Goal turn budget. Lifecycle
+            # commands such as /approve, /deny, and /resume are an asynchronous
+            # handoff and must preserve the counter exactly.
+            if manual_input_received:
+                goal_auto_turns = 0
+
             # P10-T4.4f: rebuild system_prompt with per-turn memory
             # manifest unless the bundle explicitly overrode the prompt
             # (bundle.system_prompt set → user opted out of harness-
@@ -2252,7 +2264,6 @@ async def _run_chat(
                         "/goal clear. "
                         f"blocker: {permission_confirmation_required})"
                     )
-                    goal_auto_turns = 0
                     continue
                 evidence = _repl.goal_evidence_messages(history, goal.condition)
                 transcript = render_history_transcript(evidence)

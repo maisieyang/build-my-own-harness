@@ -320,7 +320,7 @@ class SeatbeltSession:
 
     async def _execute_file_operation(
         self, operation: DataPlaneOperation
-    ) -> OperationCompleted | TimedOut | ExecutionFailed:
+    ) -> OperationCompleted | TimedOut | ExecutionFailed | BoundaryViolation:
         request = _worker_request(operation)
         if request is None:
             return ExecutionFailed(reason="Seatbelt session received an unknown operation")
@@ -354,10 +354,30 @@ class SeatbeltSession:
             return ExecutionFailed(reason=f"sandbox worker failed: {detail or process.returncode}")
         try:
             response = json.loads(stdout)
+            metadata = dict(response["metadata"])
+            raw_violation = metadata.get("boundary_violation")
+            if isinstance(raw_violation, dict):
+                dimension = raw_violation.get("dimension")
+                requested = raw_violation.get("requested")
+                evidence = raw_violation.get("evidence")
+                hard_deny = raw_violation.get("hard_deny", False)
+                if not (
+                    isinstance(dimension, str)
+                    and isinstance(requested, str)
+                    and isinstance(evidence, str)
+                    and isinstance(hard_deny, bool)
+                ):
+                    raise ValueError("invalid boundary violation payload")
+                return BoundaryViolation(
+                    dimension=dimension,
+                    requested=requested,
+                    evidence=evidence,
+                    hard_deny=hard_deny,
+                )
             return OperationCompleted(
                 output=str(response["output"]),
                 is_error=bool(response["is_error"]),
-                metadata=dict(response["metadata"]),
+                metadata=metadata,
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             return ExecutionFailed(reason=f"invalid sandbox worker response: {exc}")

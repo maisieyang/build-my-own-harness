@@ -130,6 +130,7 @@ class Bash(BaseTool[BashInput]):
                             "dimension": sandbox_result.dimension,
                             "requested": sandbox_result.requested,
                             "evidence": sandbox_result.evidence,
+                            "hard_deny": sandbox_result.hard_deny,
                         }
                     },
                 )

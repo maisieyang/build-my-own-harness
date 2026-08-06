@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import signal
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
@@ -225,6 +226,38 @@ async def test_worker_process_failures_are_structured(
 
     assert isinstance(result, ExecutionFailed)
     assert reason in result.reason
+
+
+async def test_worker_permission_payload_becomes_typed_boundary_violation(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "outside.txt"
+    payload = {
+        "output": "denied",
+        "is_error": True,
+        "metadata": {
+            "boundary_violation": {
+                "dimension": "filesystem.read",
+                "requested": str(target),
+                "evidence": "OS sandbox denied the filesystem operation",
+                "hard_deny": False,
+            }
+        },
+    }
+    process = AsyncMock()
+    process.returncode = 0
+    process.communicate.return_value = (json.dumps(payload).encode(), b"")
+    with patch(
+        "openharness.execution.seatbelt.asyncio.create_subprocess_exec",
+        AsyncMock(return_value=process),
+    ):
+        result = await _session(tmp_path).execute(FileReadOperation(target))
+
+    assert result == BoundaryViolation(
+        dimension="filesystem.read",
+        requested=str(target),
+        evidence="OS sandbox denied the filesystem operation",
+    )
 
 
 async def test_command_timeout_kills_process_group(tmp_path: Path) -> None:

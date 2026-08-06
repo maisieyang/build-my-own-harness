@@ -6,6 +6,11 @@ from typing import TYPE_CHECKING, cast
 
 from engine.conftest import _AllowAllChecker, _StubApiClient
 from openharness.engine import QueryContext, run_query
+from openharness.engine.query import (
+    _boundary_violation_metadata,
+    _dataflow_for_violation,
+    _delta_for_violation,
+)
 from openharness.execution import (
     BackendSupport,
     BoundaryVerification,
@@ -17,6 +22,7 @@ from openharness.execution import (
 )
 from openharness.permissions import (
     PermissionDeltaRequest,
+    PermissionFilesystemAccess,
     PermissionReviewDecision,
     PermissionReviewVerdict,
     PermissionRuntime,
@@ -34,6 +40,7 @@ from openharness.protocols import (
     UsageSnapshot,
 )
 from openharness.tools import Bash, ToolRegistry
+from openharness.tools.base import ToolResult
 
 if TYPE_CHECKING:
     from openharness.api import OpenAICompatibleApiClient
@@ -211,6 +218,7 @@ async def test_explicit_network_deny_never_reaches_reviewer() -> None:
                 dimension="network.domain",
                 requested="blocked.example:443",
                 evidence="domain is explicitly denied",
+                hard_deny=True,
             )
 
     profile = workspace_runtime_profile()
@@ -461,3 +469,44 @@ async def test_approved_overlay_that_still_violates_boundary_parks_once() -> Non
         "permission parked: one-shot overlay did not satisfy the exact boundary request"
     )
     assert runtime.parked_request is not None
+
+
+def test_boundary_metadata_and_minimum_filesystem_deltas_are_typed() -> None:
+    assert _boundary_violation_metadata(ToolResult(output="x")) is None
+    assert (
+        _boundary_violation_metadata(
+            ToolResult(output="x", metadata={"boundary_violation": {"dimension": 1}})
+        )
+        is None
+    )
+    assert (
+        _boundary_violation_metadata(
+            ToolResult(
+                output="x",
+                metadata={
+                    "boundary_violation": {
+                        "dimension": "filesystem.read",
+                        "requested": "/outside/in",
+                        "evidence": "denied",
+                        "hard_deny": "false",
+                    }
+                },
+            )
+        )
+        is None
+    )
+
+    read = BoundaryViolation("filesystem.read", "/outside/in", "denied")
+    search = BoundaryViolation("filesystem.search", "/outside", "denied")
+    write = BoundaryViolation("filesystem.write", "/outside/out", "denied")
+    assert _delta_for_violation(read).filesystem_access is PermissionFilesystemAccess.READ
+    assert _delta_for_violation(search).filesystem_access is PermissionFilesystemAccess.SEARCH
+    assert _delta_for_violation(write).filesystem_access is PermissionFilesystemAccess.WRITE
+    assert _dataflow_for_violation(read) == (("/outside/in",), ("model context",))
+    assert _dataflow_for_violation(write) == (
+        ("final tool arguments",),
+        ("/outside/out",),
+    )
+    assert _dataflow_for_violation(
+        BoundaryViolation("network.domain", "example.com:443", "denied")
+    ) == (("sandbox-visible data",), ("example.com:443",))

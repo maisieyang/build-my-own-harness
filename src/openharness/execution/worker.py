@@ -23,6 +23,27 @@ def _failure(output: str) -> dict[str, object]:
     return {"output": output, "is_error": True, "metadata": {}}
 
 
+def _permission_violation(kind: str, request: dict[str, Any]) -> dict[str, object]:
+    dimension = {
+        "read": "filesystem.read",
+        "search": "filesystem.search",
+        "write": "filesystem.write",
+        "edit": "filesystem.write",
+    }[kind]
+    return {
+        "output": f"sandbox boundary violation ({dimension}): {request.get('path', '')}",
+        "is_error": True,
+        "metadata": {
+            "boundary_violation": {
+                "dimension": dimension,
+                "requested": str(request.get("path", "")),
+                "evidence": "OS sandbox denied the filesystem operation",
+                "hard_deny": False,
+            }
+        },
+    }
+
+
 def _read(request: dict[str, Any]) -> dict[str, object]:
     path = Path(request["path"])
     if not path.exists():
@@ -163,6 +184,8 @@ def run(request: dict[str, Any]) -> dict[str, object]:
         return _failure(f"unknown worker operation: {kind}")
     try:
         return handlers[kind](request)
+    except PermissionError:
+        return _permission_violation(kind, request)
     except (OSError, subprocess.SubprocessError) as exc:
         return _failure(f"{kind} failed: {exc}")
 

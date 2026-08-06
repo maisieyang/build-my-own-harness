@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 import openharness.cli as cli_module
 from openharness.execution import (
     BoundaryVerification,
+    BoundaryViolation,
     EnforcedBoundary,
     ExecutionEffect,
 )
@@ -106,7 +107,7 @@ def test_park_decision_and_explicit_resume_are_durable_and_skip_judge_until_resu
             role="assistant", content=[TextBlock(text="permission lifecycle")]
         )
         messages = [*initial_messages, assistant]
-        if run_calls == 1:
+        if run_calls == 2:
             assert context.permission_runtime is not None
             request = PermissionDeltaRequest.create(
                 tool_use_id="tool-1",
@@ -115,6 +116,13 @@ def test_park_decision_and_explicit_resume_are_durable_and_skip_judge_until_resu
                 profile=context.permission_runtime.profile,
                 boundary=context.permission_runtime.boundary,
                 delta=PermissionDelta.external_tool("web"),
+                crossing=BoundaryViolation(
+                    dimension="external.web",
+                    requested="WebFetch",
+                    evidence="outside local sandbox",
+                ),
+                data_sources=("final tool arguments",),
+                data_destinations=("web",),
             )
             context.permission_runtime.park(request, reason="owner decision needed")
             yield PermissionParkedEvent(
@@ -143,6 +151,8 @@ def test_park_decision_and_explicit_resume_are_durable_and_skip_judge_until_resu
         nonlocal judge_calls
         del args, kwargs
         judge_calls += 1
+        if judge_calls == 1:
+            return GoalJudgeResult(verdict=GoalJudgeVerdict.NOT_MET, reason="continue once")
         return GoalJudgeResult(verdict=GoalJudgeVerdict.MET, reason="resumed")
 
     monkeypatch.setattr(cli_module, "judge_goal_completion", _judge)
@@ -162,9 +172,10 @@ def test_park_decision_and_explicit_resume_are_durable_and_skip_judge_until_resu
     assert result.exit_code == 0
     assert "goal blocked on permission" in result.stdout
     assert "use /resume" in result.stdout
-    assert run_calls == 2
-    assert judge_calls == 1
-    assert persisted == [decision]
+    assert run_calls == 3
+    assert judge_calls == 2
+    assert "goal met after 1 auto-turn" in result.stdout
+    assert persisted == [decision, decision]
 
 
 def _snapshot_with_runtime(runtime: object) -> dict[str, object]:
