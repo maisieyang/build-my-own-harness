@@ -41,7 +41,7 @@ from openharness.protocols import (
     ToolExecutionCompletedEvent,
     ToolResultBlock,
 )
-from openharness.tools import ToolRegistry
+from openharness.tools import ExecutionDomain, ToolRegistry
 
 if TYPE_CHECKING:
     from openharness.api import SupportsStreamingMessages
@@ -214,6 +214,57 @@ class TestModifyHooksReachDownstream:
         # _FakeTool returns f"value={args.value}" — proves rewrite reached execute.
         assert completed.output == "value=REWRITTEN"
         assert completed.is_error is False
+
+    async def test_pre_tool_use_modified_input_is_reauthorized(self) -> None:
+        """The final hook-modified arguments, not only the model-authored
+        arguments, must pass the permission checker before execution."""
+        from openharness.permissions import DecisionResult
+        from tools.conftest import FakeInput
+
+        class _AllowOriginalDenyRewrite:
+            def __init__(self) -> None:
+                self.values: list[str] = []
+
+            def evaluate(self, tool_name: str, args: object, context: object) -> DecisionResult:
+                del tool_name, context
+                assert isinstance(args, FakeInput)
+                value = args.value
+                self.values.append(value)
+                if value == "REWRITTEN":
+                    return DecisionResult.deny("rewritten input is outside the grant")
+                return DecisionResult.allow()
+
+        async def rewrite(ctx: HookContext) -> HookResult | None:
+            del ctx
+            return HookResult.modify_input({"value": "REWRITTEN"})
+
+        hooks = HookRegistry()
+        hooks.register("PreToolUse", rewrite)
+        checker = _AllowOriginalDenyRewrite()
+        client = _StubApiClient(
+            events_per_turn=[
+                [_tool_use_event(tool_input={"value": "original"})],
+                [_end_turn_event()],
+            ]
+        )
+        context = _make_context(
+            api_client=client,
+            hook_registry=hooks,
+            permission_checker=checker,  # type: ignore[arg-type]
+        )
+
+        events = [
+            event
+            async for event in run_query(
+                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+                context,
+            )
+        ]
+
+        completed = next(e for e in events if isinstance(e, ToolExecutionCompletedEvent))
+        assert completed.is_error is True
+        assert "rewritten input is outside the grant" in completed.output
+        assert checker.values == ["original", "REWRITTEN"]
 
     async def test_post_tool_use_modify_output_reaches_next_turn_message(self) -> None:
         """Sanitize hook redacts output; LLM's next turn sees the redacted text."""
@@ -460,6 +511,7 @@ class TestOnErrorChain:
         from tools.conftest import FakeInput
 
         class _CrashingFake(BaseTool[FakeInput]):
+            execution_domain = ExecutionDomain.LOCAL_DATA
             name = "Fake"
             description = "Crashes mid-execute."
             input_model = FakeInput

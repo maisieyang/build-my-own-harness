@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from openharness.tools.base import BaseTool, ExecutionDomain, ToolExecutionContext, ToolResult
 
 
 class FakeInput(BaseModel):
@@ -30,6 +30,7 @@ class _FakeTool(BaseTool[FakeInput]):
     name = "Fake"
     description = "Fake tool used in tests."
     input_model = FakeInput
+    execution_domain = ExecutionDomain.LOCAL_DATA
 
     async def execute(
         self,

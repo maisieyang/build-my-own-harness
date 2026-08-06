@@ -34,8 +34,15 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
+from openharness.execution import (
+    BoundaryViolation,
+    CommandOperation,
+    ExecutionFailed,
+    ProcessCompleted,
+    TimedOut,
+)
 from openharness.execution.host import _HOST_EXECUTION
-from openharness.tools.base import BaseTool, ToolResult
+from openharness.tools.base import BaseTool, ExecutionDomain, ToolResult
 
 if TYPE_CHECKING:
     from openharness.tools.base import ToolExecutionContext
@@ -80,6 +87,7 @@ class Bash(BaseTool[BashInput]):
        exit_code, metadata dict)
     """
 
+    execution_domain = ExecutionDomain.LOCAL_DATA
     name = "Bash"
     description = (
         "Execute a shell command in the project's cwd. Merges stdout/stderr; "
@@ -96,6 +104,48 @@ class Bash(BaseTool[BashInput]):
         timeout = (
             args.timeout_seconds if args.timeout_seconds is not None else DEFAULT_TIMEOUT_SECONDS
         )
+        if context.sandbox_session is not None:
+            sandbox_result = await context.sandbox_session.execute(
+                CommandOperation(
+                    command=args.command,
+                    cwd=context.cwd,
+                    timeout=float(timeout),
+                )
+            )
+            if isinstance(sandbox_result, TimedOut):
+                return ToolResult(
+                    is_error=True,
+                    output=f"command timed out after {timeout}s",
+                    metadata={"timed_out": True},
+                )
+            if isinstance(sandbox_result, BoundaryViolation):
+                return ToolResult(
+                    is_error=True,
+                    output=(
+                        f"sandbox boundary violation ({sandbox_result.dimension}): "
+                        f"{sandbox_result.requested}; {sandbox_result.evidence}"
+                    ),
+                    metadata={
+                        "boundary_violation": {
+                            "dimension": sandbox_result.dimension,
+                            "requested": sandbox_result.requested,
+                            "evidence": sandbox_result.evidence,
+                            "hard_deny": sandbox_result.hard_deny,
+                        }
+                    },
+                )
+            if isinstance(sandbox_result, ExecutionFailed):
+                return ToolResult(
+                    is_error=True,
+                    output=f"sandbox command failed: {sandbox_result.reason}",
+                )
+            if not isinstance(sandbox_result, ProcessCompleted):
+                return ToolResult(is_error=True, output="sandbox returned an invalid result")
+            return _command_result(
+                output=sandbox_result.output,
+                exit_code=sandbox_result.exit_code,
+                elapsed_ms=0,
+            )
         # P7-T3:fall back to the host singleton when ``execution_env``
         # isn't populated. This happens when a test or external caller
         # constructs ``ToolExecutionContext(cwd=p)`` directly without
@@ -122,29 +172,29 @@ class Bash(BaseTool[BashInput]):
                 },
             )
 
-        output = result.output
-        # Strict empty-only: only the empty-output case triggers the
-        # sentinel; whitespace-only output (e.g., bare ``echo`` -> "\n")
-        # passes through unchanged. is_error is decided by exit_code.
-        if output == "":
-            output = NO_OUTPUT_SENTINEL
-        elif len(output) > MAX_OUTPUT_CHARS:
-            # F6 (dogfood Day 1, learnings/dogfood-day1): head+tail, never
-            # head-only. Command output packs its information density at the
-            # ends — errors surface early, summaries/exit text land LAST
-            # (pytest's "N passed" is the final line). Head-only truncation
-            # amputated exactly that line and the model, left with nothing
-            # true to quote, fabricated its own count. 50/50 split mirrors
-            # Layer-1's head_tail_truncate convention (D14.1).
-            dropped = len(output) - MAX_OUTPUT_CHARS
-            half = MAX_OUTPUT_CHARS // 2
-            output = output[:half] + f"\n... [truncated {dropped} chars] ...\n" + output[-half:]
-
-        return ToolResult(
-            output=output,
-            is_error=(result.exit_code != 0),
-            metadata={
-                "exit_code": result.exit_code,
-                "duration_ms": elapsed_ms,
-            },
+        return _command_result(
+            output=result.output,
+            exit_code=result.exit_code,
+            elapsed_ms=elapsed_ms,
         )
+
+
+def _command_result(*, output: str, exit_code: int, elapsed_ms: int) -> ToolResult:
+    # Strict empty-only: only the empty-output case triggers the
+    # sentinel; whitespace-only output (e.g., bare ``echo`` -> "\n")
+    # passes through unchanged. is_error is decided by exit_code.
+    if output == "":
+        output = NO_OUTPUT_SENTINEL
+    elif len(output) > MAX_OUTPUT_CHARS:
+        dropped = len(output) - MAX_OUTPUT_CHARS
+        half = MAX_OUTPUT_CHARS // 2
+        output = output[:half] + f"\n... [truncated {dropped} chars] ...\n" + output[-half:]
+
+    return ToolResult(
+        output=output,
+        is_error=(exit_code != 0),
+        metadata={
+            "exit_code": exit_code,
+            "duration_ms": elapsed_ms,
+        },
+    )

@@ -14,6 +14,8 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import TYPE_CHECKING
 
+from openharness.tools.base import ExecutionDomain, TrustedControlSurface
+
 if TYPE_CHECKING:
     from openharness.hooks.context import Hook
     from openharness.hooks.events import HookEvent
@@ -32,6 +34,11 @@ class HookRegistry:
         # ... later, executor reads:
         hooks = registry.get("PreToolUse")  # [my_log_hook, my_cost_hook]
     """
+
+    # Hooks run in-process and may deny or rewrite model calls. They are not
+    # model-callable data-plane tools and are deliberately trusted control.
+    execution_domain = ExecutionDomain.TRUSTED_CONTROL
+    trusted_control_surface = TrustedControlSurface.HOOKS
 
     def __init__(self) -> None:
         # defaultdict so register on a new event doesn't require seeding;
@@ -94,3 +101,7 @@ class HookRegistry:
         constructing HookContext for events with no listeners).
         """
         return all(not hooks for hooks in self._hooks.values())
+
+    def registration_count(self) -> int:
+        """Return the number of active in-process hook registrations."""
+        return sum(len(hooks) for hooks in self._hooks.values())

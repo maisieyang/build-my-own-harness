@@ -13,6 +13,11 @@ from typing import TYPE_CHECKING
 from typer.testing import CliRunner
 
 import openharness.cli as cli_module
+from openharness.execution import (
+    BoundaryVerification,
+    EnforcedBoundary,
+    ExecutionEffect,
+)
 from openharness.protocols.content import TextBlock
 from openharness.protocols.messages import ConversationMessage
 from openharness.protocols.stream_events import (
@@ -167,6 +172,108 @@ class TestBuiltinSlashCommands:
         # Should be exactly 1 user message ("world"), not accumulated history.
         assert len(third_turn_messages) == 1
         assert third_turn_messages[0].role == "user"
+
+
+class TestVerifiedSandboxStatus:
+    def test_permissions_reports_active_profile_and_verified_boundary(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
+        closed: list[bool] = []
+
+        class _Backend:
+            def __init__(self, **kwargs: object) -> None:
+                pass
+
+            async def open(self, profile: object) -> object:
+                class _Session:
+                    boundary = EnforcedBoundary(
+                        profile_fingerprint=profile.fingerprint,  # type: ignore[attr-defined]
+                        backend="macos-seatbelt",
+                        backend_version="test",
+                        covered_effects=(
+                            ExecutionEffect.COMMAND,
+                            ExecutionEffect.FILE_READ,
+                            ExecutionEffect.FILE_WRITE,
+                            ExecutionEffect.FILE_SEARCH,
+                        ),
+                        verification=BoundaryVerification.VERIFIED,
+                    )
+
+                    async def close(self) -> None:
+                        closed.append(True)
+
+                return _Session()
+
+        monkeypatch.setattr(cli_module, "SeatbeltBackend", _Backend)
+        _stub_input_sequence(monkeypatch, ["/permissions", "/exit"])
+
+        result = CliRunner().invoke(cli_module.app, ["chat", "--sandbox"])
+
+        assert result.exit_code == 0, result.stderr
+        assert "canonical profile: workspace" in result.stdout
+        assert "verified boundary: macos-seatbelt test (verified)" in result.stdout
+        assert "covered effects: command, file_read, file_write, file_search" in result.stdout
+        assert closed == [True]
+
+    def test_one_sandbox_session_is_reused_across_chat_turns(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
+        opened = 0
+        session_ids: list[int] = []
+
+        class _Backend:
+            def __init__(self, **kwargs: object) -> None:
+                pass
+
+            async def open(self, profile: object) -> object:
+                nonlocal opened
+                opened += 1
+
+                class _Session:
+                    boundary = EnforcedBoundary(
+                        profile_fingerprint=profile.fingerprint,  # type: ignore[attr-defined]
+                        backend="macos-seatbelt",
+                        backend_version="test",
+                        covered_effects=(
+                            ExecutionEffect.COMMAND,
+                            ExecutionEffect.FILE_READ,
+                            ExecutionEffect.FILE_WRITE,
+                            ExecutionEffect.FILE_SEARCH,
+                        ),
+                        verification=BoundaryVerification.VERIFIED,
+                    )
+
+                    async def close(self) -> None:
+                        pass
+
+                return _Session()
+
+        async def _capture_session(
+            initial_messages: list[ConversationMessage], context: object
+        ) -> AsyncIterator[ApiStreamEvent]:
+            session_ids.append(id(context.sandbox_session))  # type: ignore[attr-defined]
+            assistant = ConversationMessage(role="assistant", content=[TextBlock(text="ok")])
+            yield ApiMessageCompleteEvent(
+                message=assistant,
+                usage=UsageSnapshot(input_tokens=1, output_tokens=1),
+                stop_reason="end_turn",
+            )
+            yield ConversationCompleteEvent(messages=[*initial_messages, assistant])
+
+        monkeypatch.setattr(cli_module, "SeatbeltBackend", _Backend)
+        monkeypatch.setattr(cli_module, "run_query", _capture_session)
+        _stub_input_sequence(monkeypatch, ["one", "two", "/exit"])
+
+        result = CliRunner().invoke(cli_module.app, ["chat", "--sandbox"])
+
+        assert result.exit_code == 0, result.stderr
+        assert opened == 1
+        assert len(session_ids) == 2
+        assert session_ids[0] == session_ids[1]
 
 
 # --------------------------------------------------------------------------- #

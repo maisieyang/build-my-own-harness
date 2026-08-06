@@ -11,6 +11,18 @@ from __future__ import annotations
 
 import pytest
 
+from openharness.execution import (
+    BoundaryVerification,
+    BoundaryViolation,
+    EnforcedBoundary,
+    ExecutionEffect,
+)
+from openharness.permissions import (
+    ExternalToolPolicy,
+    PermissionDelta,
+    PermissionDeltaRequest,
+    RuntimePermissionProfile,
+)
 from openharness.protocols.content import TextBlock, ToolResultBlock
 from openharness.protocols.messages import ConversationMessage
 from openharness.repl import (
@@ -22,11 +34,13 @@ from openharness.repl import (
     build_goal_sentinel,
     build_plan_approval_sentinel,
     find_active_goal,
+    format_permissions_status,
     format_status_bar,
     goal_evidence_messages,
     goal_prompt_section,
     parse_goal_command,
 )
+from openharness.tools import ExecutionDomain, ExternalEffectSurface
 
 
 class TestParseGoalCommand:
@@ -178,3 +192,110 @@ class TestStatusBarGoal:
 class TestSlashMenu:
     def test_goal_is_a_builtin_command(self) -> None:
         assert "/goal" in [c.name for c in BUILTIN_SLASH_COMMANDS]
+
+    def test_permissions_is_a_builtin_command(self) -> None:
+        assert "/permissions" in [c.name for c in BUILTIN_SLASH_COMMANDS]
+
+
+class TestPermissionStatus:
+    def test_configured_intent_and_installed_facts_are_separate(self) -> None:
+        profile = RuntimePermissionProfile(name="workspace")
+        boundary = EnforcedBoundary(
+            profile_fingerprint=profile.fingerprint,
+            backend="seatbelt",
+            backend_version="1",
+            covered_effects=(ExecutionEffect.COMMAND,),
+            verification=BoundaryVerification.VERIFIED,
+        )
+
+        status = format_permissions_status(
+            profile=profile,
+            external_policy=profile.external_tools,
+            boundary=boundary,
+            tool_domains={ExecutionDomain.LOCAL_DATA: ("Bash", "Read")},
+            external_surfaces={ExternalEffectSurface.MCP: ("Github.create_issue",)},
+            mcp_server_postures={"Github": "sandbox=required, environment=minimal, trust=trusted"},
+            trusted_control_status={
+                "hooks": "enabled; trusted in-process authority",
+                "plugins": "disabled",
+            },
+            legacy_mode="default",
+        )
+
+        assert "Configured intent" in status
+        assert "workspace" in status
+        assert profile.fingerprint[:12] in status
+        assert "Installed facts" in status
+        assert "seatbelt" in status
+        assert "command" in status
+        assert "Bash, Read" in status
+        assert "mcp=ask" in status
+        assert "mcp: ask; tools=Github.create_issue" in status
+        assert "not covered by local sandbox" in status
+        assert "web: ask; not registered; not covered by local sandbox" in status
+        assert "browser: ask; not registered; not covered by local sandbox" in status
+        assert "computer_use: ask; not registered; not covered by local sandbox" in status
+        assert "sandbox=required, environment=minimal, trust=trusted" in status
+        assert "Trusted control plane" in status
+        assert "hooks: enabled; trusted in-process authority" in status
+        assert "plugins: disabled" in status
+
+    def test_legacy_runtime_does_not_claim_an_installed_boundary(self) -> None:
+        status = format_permissions_status(
+            profile=None,
+            external_policy=ExternalToolPolicy(),
+            boundary=None,
+            tool_domains={},
+            external_surfaces={},
+            mcp_server_postures={},
+            trusted_control_status={"hooks": "disabled", "plugins": "disabled"},
+            legacy_mode="auto",
+        )
+
+        assert "canonical profile: not configured" in status
+        assert "legacy mode: auto" in status
+        assert "verified boundary: none" in status
+
+    def test_parked_request_is_visible_after_returning_to_the_session(self) -> None:
+        profile = RuntimePermissionProfile(name="workspace")
+        boundary = EnforcedBoundary(
+            profile_fingerprint=profile.fingerprint,
+            backend="seatbelt",
+            backend_version="1",
+            covered_effects=(ExecutionEffect.COMMAND,),
+            verification=BoundaryVerification.VERIFIED,
+            network_rules=("deny-all",),
+        )
+        request = PermissionDeltaRequest.create(
+            tool_use_id="tool-1",
+            tool_name="Bash",
+            final_arguments={"command": "uv sync"},
+            profile=profile,
+            boundary=boundary,
+            delta=PermissionDelta.network_domain("pypi.org"),
+            crossing=BoundaryViolation(
+                dimension="network.domain",
+                requested="pypi.org:443",
+                evidence="not allowed",
+            ),
+            data_sources=("sandbox-visible data",),
+            data_destinations=("pypi.org:443",),
+        )
+
+        status = format_permissions_status(
+            profile=profile,
+            external_policy=profile.external_tools,
+            boundary=boundary,
+            tool_domains={},
+            external_surfaces={},
+            mcp_server_postures={},
+            trusted_control_status={"hooks": "disabled", "plugins": "disabled"},
+            legacy_mode="default",
+            parked_request=request,
+        )
+
+        assert "Parked permission request" in status
+        assert request.request_id in status
+        assert 'final arguments: {"command":"uv sync"}' in status
+        assert "network_domain=pypi.org" in status
+        assert "sandbox-visible data -> pypi.org:443" in status

@@ -36,7 +36,7 @@ from openharness.protocols import (
     ToolUseBlock,
     UsageSnapshot,
 )
-from openharness.tools import ToolRegistry
+from openharness.tools import ExecutionDomain, ToolRegistry
 
 if TYPE_CHECKING:
     from openharness.api import OpenAICompatibleApiClient
@@ -413,6 +413,7 @@ class TestRunQueryRecoveryPaths:
         from tools.conftest import FakeInput
 
         class _ErroringFake(BaseTool[FakeInput]):
+            execution_domain = ExecutionDomain.LOCAL_DATA
             name = "Fake"
             description = "Always returns is_error=True."
             input_model = FakeInput
@@ -523,6 +524,7 @@ class TestRunQueryProgrammingErrorPropagation:
         from tools.conftest import FakeInput
 
         class _CrashingFake(BaseTool[FakeInput]):
+            execution_domain = ExecutionDomain.LOCAL_DATA
             name = "Fake"
             description = "Crashes mid-execution -- should propagate."
             input_model = FakeInput
@@ -573,6 +575,7 @@ class TestRunQueryDryRunMode:
         # A tool that would CRASH if actually called -- proves DRY_RUN
         # short-circuit really skips execute.
         class _MustNotRun(BaseTool[FakeInput]):
+            execution_domain = ExecutionDomain.LOCAL_DATA
             name = "Fake"
             description = "Crashes if executed -- DRY_RUN should never run this."
             input_model = FakeInput
@@ -620,6 +623,7 @@ class TestRunQueryDryRunMode:
 
         # Fake that masquerades as Bash for deny-list purposes.
         class _BashLike(BaseTool[FakeInput]):
+            execution_domain = ExecutionDomain.LOCAL_DATA
             name = "Bash"
             description = "Bash-like; would run if execute() reached."
             input_model = FakeInput

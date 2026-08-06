@@ -50,6 +50,7 @@ from openharness.observability import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
+    from pathlib import Path
     from types import TracebackType
 
     from openharness.mcp.config import McpServerConfig
@@ -83,10 +84,12 @@ class McpClientPool:
         trusted_servers: Iterable[str] = (),
         *,
         init_timeout: float = 5.0,
+        sandbox_cwd: Path | None = None,
     ) -> None:
         self._configs = tuple(configs)
         self._trusted: set[str] = set(trusted_servers)
         self._init_timeout = init_timeout
+        self._sandbox_cwd = sandbox_cwd
         # Populated by __aenter__.
         self._stack: AsyncExitStack | None = None
         self._adapters: list[McpToolAdapter] = []
@@ -157,8 +160,24 @@ class McpClientPool:
         via ``stack`` so adapters' captured references stay valid for the
         duration of the pool's context.
         """
+        trusted = cfg.name in self._trusted
+        if not cfg.sandbox and not trusted:
+            logger.warning(
+                "mcp_server_error",
+                server=cfg.name,
+                phase="init",
+                error="UntrustedHostPosture",
+            )
+            raise McpInitError(
+                f"MCP server {cfg.name!r} is untrusted and has no stdio sandbox; "
+                "enable its sandbox or explicitly trust the server"
+            )
         try:
-            client = McpClient(cfg, init_timeout=self._init_timeout)
+            client = McpClient(
+                cfg,
+                init_timeout=self._init_timeout,
+                sandbox_cwd=self._sandbox_cwd,
+            )
             # Enter the McpClient context on the SHARED stack — McpClient
             # itself handles its own teardown order;we just attach it.
             await stack.enter_async_context(client)
@@ -174,7 +193,6 @@ class McpClientPool:
             )
             raise
 
-        trusted = cfg.name in self._trusted
         raw_tools = await client.list_tools()
         return [
             McpToolAdapter(

@@ -22,6 +22,7 @@ from pydantic import BaseModel, ValidationError
 
 from openharness.mcp import McpClient, McpServerConfig, McpToolAdapter
 from openharness.mcp.adapter import _synth_input_model
+from openharness.tools import ExternalEffectKind
 from openharness.tools.base import ToolExecutionContext
 
 _TEST_SERVER = Path(__file__).parent / "_test_server.py"
@@ -158,11 +159,17 @@ def _fake_tool_def(
     description: str = "",
     schema: dict[str, Any] | None = None,
     read_only_hint: bool | None = None,
+    destructive_hint: bool | None = None,
 ) -> SimpleNamespace:
     """Build a SDK-Tool-shaped duck-typed object — same fields we access:
     name, description, inputSchema, annotations.readOnlyHint."""
     annotations = (
-        SimpleNamespace(readOnlyHint=read_only_hint) if read_only_hint is not None else None
+        SimpleNamespace(
+            readOnlyHint=read_only_hint,
+            destructiveHint=destructive_hint,
+        )
+        if read_only_hint is not None or destructive_hint is not None
+        else None
     )
     return SimpleNamespace(
         name=name,
@@ -178,16 +185,20 @@ class TestTrustGating:
         adapter = McpToolAdapter("Svr", tool, client=None, trust=True)  # type: ignore[arg-type]
         assert adapter.is_read_only is True
         assert adapter.trust_source == "trusted-server"
+        assert adapter.external_effect_kind is ExternalEffectKind.READ_ONLY
+        assert adapter.external_effect_trusted is True
 
     def test_trusted_with_read_only_false(self) -> None:
         tool = _fake_tool_def(read_only_hint=False)
         adapter = McpToolAdapter("Svr", tool, client=None, trust=True)  # type: ignore[arg-type]
         assert adapter.is_read_only is False
+        assert adapter.external_effect_kind is ExternalEffectKind.MUTATING
 
     def test_trusted_with_no_annotation_defaults_false(self) -> None:
         tool = _fake_tool_def(read_only_hint=None)  # no annotations
         adapter = McpToolAdapter("Svr", tool, client=None, trust=True)  # type: ignore[arg-type]
         assert adapter.is_read_only is False
+        assert adapter.external_effect_kind is ExternalEffectKind.UNKNOWN
 
     def test_untrusted_forces_false_even_if_server_claims_true(self) -> None:
         # The trust whitelist is the truth source — server's self-report
@@ -196,6 +207,14 @@ class TestTrustGating:
         adapter = McpToolAdapter("Svr", tool, client=None, trust=False)  # type: ignore[arg-type]
         assert adapter.is_read_only is False
         assert adapter.trust_source == "strict-default"
+        assert adapter.external_effect_kind is ExternalEffectKind.UNKNOWN
+        assert adapter.external_effect_trusted is False
+
+    def test_trusted_destructive_hint_is_classified_destructive(self) -> None:
+        tool = _fake_tool_def(read_only_hint=False, destructive_hint=True)
+        adapter = McpToolAdapter("Svr", tool, client=None, trust=True)  # type: ignore[arg-type]
+
+        assert adapter.external_effect_kind is ExternalEffectKind.DESTRUCTIVE
 
 
 # --------------------------------------------------------------------------- #

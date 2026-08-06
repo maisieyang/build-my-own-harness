@@ -85,8 +85,8 @@ flowchart LR
     U["用户或脚本"] --> C["REPL 与 headless CLI"]
     C --> E["Agent engine"]
     E <--> M["OpenAI-compatible 模型"]
-    E --> P["Permissions 与 hooks"]
-    P --> X["Host、Docker 或 gVisor"]
+    E --> P["Permission profile、已验证 boundary 与 hooks"]
+    P --> X["Seatbelt、Docker command backend 或 legacy host"]
     E <--> S["Compaction、snapshots 与 memory"]
     C --> V["独立 /goal 判官"]
     V -->|"checker feedback"| E
@@ -96,7 +96,8 @@ flowchart LR
 控制面的 ownership model 分为四部分：
 
 1. **动作。** Typed streaming 和 tool call 进入 allow/ask/deny 授权层、生命周期
-   hooks、不可逆操作红线，以及 host 或 Docker/gVisor 执行环境。
+   hooks 与 external-effect policy；选择 sandbox posture 后，本地 data-plane tools
+   共享同一个已验证的 session boundary。
 2. **证据与状态。** Tool results、compaction、memory 与 snapshots 保存长任务
    恢复所需的可信状态。
 3. **能力。** Skills、commands、mode bundles、MCP、plugins 与 subagents 扩展
@@ -296,13 +297,22 @@ uv run ruff format --check
   Messages adapter。
 - Claude Code plugin compatibility 当前只发现 plugin metadata 与 `SKILL.md`
   tree，不导入 Claude Code `.mcp.json` 和 declarative agents。
-- MCP transport 仅支持 stdio。
-- Docker/gVisor isolation 是可选项；默认仍是 host execution。
+- MCP transport 仅支持 stdio。其子进程始终只获得最小、已过滤凭据的环境变量；
+  未启用独立 sandbox 的 stdio server 必须出现在显式 trusted-server 列表中，否则
+  启动会 fail closed。
+- MCP、Web、Browser 与 Computer Use 是彼此独立的 external-effect policy surface。
+  本地 filesystem sandbox 不能证明这些调用安全；即使 surface 配置为宽泛的
+  `allow`，不可信、未知、可修改或破坏性的外部调用仍需要一次精确审批。
+- Hooks 与 plugins 是 opt-in、进程内运行的 trusted control-plane code。它们可以
+  拒绝或改写调用，但改写后的最终参数会在 dispatch 前重新授权。
+- Isolation 仍是 opt-in。macOS 上由 Seatbelt backend 覆盖统一的本地 data plane；
+  Docker 明确保持 command-only backend，未启用 sandbox 的 posture 继续使用 legacy
+  host execution。
 - `/goal` judge 具有概率性，只读取 conversation evidence 而不直接读取操作系统
   状态，因此必须 fail closed，并受明确的 turn cap 约束。
-- Permission、sandbox、worktree isolation 与 completion 彼此正交；`/goal` 遇到
-  需要人工确认的 permission failure 会暂停，但无人值守 permission policy 仍是
-  开放设计边界。
+- Permission intent 与 sandbox enforcement 是两份独立 contract：reviewer 只能依据
+  已验证 boundary，并且只能授予一次精确 overlay。无法处理的请求会被持久化 park；
+  `/goal` 会在 judge 之前暂停，只有明确 `/approve` 或 `/deny` 后再 `/resume` 才继续。
 
 ## 设计留痕
 

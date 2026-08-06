@@ -37,7 +37,7 @@ from openharness.protocols.messages import ConversationMessage
 from openharness.protocols.stream_events import ApiMessageCompleteEvent
 from openharness.protocols.usage import UsageSnapshot
 from openharness.tools import ToolRegistry
-from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from openharness.tools.base import BaseTool, ExecutionDomain, ToolExecutionContext, ToolResult
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -69,6 +69,7 @@ class _BigOutputTool(BaseTool[_BigInput]):
     name = "BigOutput"
     description = "Returns a deliberately oversized string."
     input_model = _BigInput
+    execution_domain = ExecutionDomain.LOCAL_DATA
 
     async def execute(
         self,

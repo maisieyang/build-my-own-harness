@@ -68,6 +68,7 @@ from openharness.observability import get_logger
 
 if TYPE_CHECKING:
     from openharness.engine.context import QueryContext
+    from openharness.permissions import PermissionRuntime
     from openharness.protocols.messages import ConversationMessage
 
 _logger = get_logger("snapshot")
@@ -294,6 +295,10 @@ def _serialize_snapshot(
     the enum repr — so JSON consumers (and a future v2 → v1 reader)
     don't need access to the Python enum class.
     """
+    permission_runtime = getattr(context, "permission_runtime", None)
+    extra: dict[str, Any] = {}
+    if permission_runtime is not None:
+        extra["permission_runtime"] = permission_runtime.export_state().model_dump(mode="json")
     return {
         "version": SNAPSHOT_VERSION,
         "schema": SNAPSHOT_SCHEMA,
@@ -309,7 +314,7 @@ def _serialize_snapshot(
         # silently mutate the snapshot dict (nested lists like
         # ``recent_files`` would otherwise be shared by reference).
         "tool_metadata": copy.deepcopy(tool_metadata),
-        "extra": {},
+        "extra": extra,
     }
 
 
@@ -401,6 +406,46 @@ def append_messages_to_snapshot(
     except OSError as exc:
         _logger.warning(
             "snapshot_amend_write_failed",
+            snapshot=str(snapshot_path),
+            error=str(exc),
+        )
+        return None
+    return snapshot_path
+
+
+def update_permission_runtime_snapshot(
+    *,
+    cwd: str | Path,
+    runtime: PermissionRuntime,
+) -> Path | None:
+    """Atomically amend only the durable permission lifecycle state."""
+    storage_dir = get_snapshot_dir(Path(cwd).resolve())
+    snapshot_path = storage_dir / "current.json"
+    try:
+        payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError) as exc:
+        _logger.warning(
+            "permission_snapshot_amend_read_failed",
+            snapshot=str(snapshot_path),
+            error=str(exc),
+        )
+        return None
+    extra = payload.get("extra")
+    if not isinstance(extra, dict):
+        extra = {}
+        payload["extra"] = extra
+    extra["permission_runtime"] = runtime.export_state().model_dump(mode="json")
+    try:
+        _atomic_write(
+            storage_dir=storage_dir,
+            target=snapshot_path,
+            content=json.dumps(payload, indent=2, ensure_ascii=False),
+        )
+    except OSError as exc:
+        _logger.warning(
+            "permission_snapshot_amend_write_failed",
             snapshot=str(snapshot_path),
             error=str(exc),
         )

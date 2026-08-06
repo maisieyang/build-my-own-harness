@@ -38,7 +38,7 @@ from openharness.protocols import (
     ConversationMessage,
     TextBlock,
 )
-from openharness.tools.base import BaseTool, ToolResult
+from openharness.tools.base import BaseTool, ExecutionDomain, ToolResult
 
 if TYPE_CHECKING:
     from openharness.tools.base import ToolExecutionContext
@@ -66,6 +66,7 @@ class SpawnAgentInput(BaseModel):
 class SpawnAgent(BaseTool[SpawnAgentInput]):
     """Delegate a sub-task to a fresh agent loop with its own conversation context."""
 
+    execution_domain = ExecutionDomain.DELEGATED_RUNTIME
     name = "Agent"
     description = (
         "Delegate a sub-task to a fresh agent loop with its own conversation "

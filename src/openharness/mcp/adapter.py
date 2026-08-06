@@ -39,7 +39,13 @@ from typing import TYPE_CHECKING, Any, Literal
 from pydantic import BaseModel, Field, create_model
 
 from openharness.mcp.client import McpCallError
-from openharness.tools.base import BaseTool, ToolResult
+from openharness.tools.base import (
+    BaseTool,
+    ExecutionDomain,
+    ExternalEffectKind,
+    ExternalEffectSurface,
+    ToolResult,
+)
 
 if TYPE_CHECKING:
     from openharness.mcp.client import McpClient
@@ -144,6 +150,9 @@ class McpToolAdapter(BaseTool[BaseModel]):
         )
     """
 
+    execution_domain = ExecutionDomain.EXTERNAL_EFFECT
+    external_effect_surface = ExternalEffectSurface.MCP
+
     def __init__(
         self,
         server_name: str,
@@ -166,6 +175,8 @@ class McpToolAdapter(BaseTool[BaseModel]):
         # ONCE at adapter construction;McpClientPool passes the right
         # value based on Settings.trusted_mcp_servers.
         self.is_read_only = self._resolve_read_only(raw_tool_def, trust)
+        self.external_effect_kind = self._resolve_effect_kind(raw_tool_def, trust)
+        self.external_effect_trusted = trust
         # Stored for execute().
         self._tool_name = tool_name
         self._client = client
@@ -186,6 +197,24 @@ class McpToolAdapter(BaseTool[BaseModel]):
         annotations = getattr(raw_tool_def, "annotations", None)
         hint = getattr(annotations, "readOnlyHint", None) if annotations else None
         return bool(hint) if hint is not None else False
+
+    @staticmethod
+    def _resolve_effect_kind(raw_tool_def: Any, trust: bool) -> ExternalEffectKind:
+        """Classify trusted MCP annotations; ambiguity stays unknown."""
+        if not trust:
+            return ExternalEffectKind.UNKNOWN
+        annotations = getattr(raw_tool_def, "annotations", None)
+        if annotations is None:
+            return ExternalEffectKind.UNKNOWN
+        destructive = getattr(annotations, "destructiveHint", None)
+        read_only = getattr(annotations, "readOnlyHint", None)
+        if destructive is True:
+            return ExternalEffectKind.DESTRUCTIVE
+        if read_only is True:
+            return ExternalEffectKind.READ_ONLY
+        if read_only is False:
+            return ExternalEffectKind.MUTATING
+        return ExternalEffectKind.UNKNOWN
 
     async def execute(
         self,

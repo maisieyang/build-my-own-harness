@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from openharness.tools.base import BaseTool, ToolResult
+from openharness.tools.base import BaseTool, ExecutionDomain, ToolResult
 
 if TYPE_CHECKING:
     from openharness.skills.store import SkillStore
@@ -51,6 +51,7 @@ class LoadSkillInput(BaseModel):
 class LoadSkillTool(BaseTool[LoadSkillInput]):
     """Load a named skill's body for expert guidance."""
 
+    execution_domain = ExecutionDomain.TRUSTED_CONTROL
     name = "LoadSkill"
     description = (
         "Load the body of a named skill from the 'Available Skills' catalog "

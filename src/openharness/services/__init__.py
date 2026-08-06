@@ -59,6 +59,7 @@ from openharness.services.snapshot import (
     append_messages_to_snapshot,
     get_snapshot_dir,
     load_snapshot,
+    update_permission_runtime_snapshot,
     write_session_snapshot,
 )
 from openharness.services.summarize import summarize
@@ -88,6 +89,7 @@ __all__ = [
     "threshold_tokens",
     "try_context_collapse",
     "try_session_memory_compaction",
+    "update_permission_runtime_snapshot",
     "update_session_memory_file",
     "write_session_snapshot",
 ]

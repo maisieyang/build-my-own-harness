@@ -17,6 +17,7 @@ legacy ``input(">>> ")`` path byte-for-byte.
 
 from __future__ import annotations
 
+import json
 import sys
 from dataclasses import dataclass
 from enum import Enum
@@ -32,6 +33,7 @@ from openharness.permissions.rules import (
     PermissionRules,
     plan_mode_preset,
 )
+from openharness.tools import ExternalEffectSurface
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -39,7 +41,14 @@ if TYPE_CHECKING:
     from prompt_toolkit.completion import CompleteEvent
     from prompt_toolkit.document import Document
 
+    from openharness.execution import EnforcedBoundary
+    from openharness.permissions import (
+        ExternalToolPolicy,
+        PermissionDeltaRequest,
+        RuntimePermissionProfile,
+    )
     from openharness.protocols.messages import ConversationMessage
+    from openharness.tools import ExecutionDomain
 
 
 @dataclass(frozen=True)
@@ -79,6 +88,10 @@ BUILTIN_SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand(
         "/goal", "set a session goal — an independent checker auto-continues turns until met"
     ),
+    SlashCommand("/permissions", "show configured intent and verified runtime boundary"),
+    SlashCommand("/approve", "approve the exact parked permission request"),
+    SlashCommand("/deny", "deny the exact parked permission request"),
+    SlashCommand("/resume", "resume after an explicit permission decision"),
     SlashCommand("/skills", "list available skills"),
     SlashCommand("/memory", "list memories in this project's memory store"),
     SlashCommand("/exit", "leave the REPL"),
@@ -440,6 +453,99 @@ def format_status_bar(
     if threshold_ratio is not None:
         bar += f" · auto-compact @{threshold_ratio:.0%}"
     return bar
+
+
+def format_permissions_status(
+    *,
+    profile: RuntimePermissionProfile | None,
+    external_policy: ExternalToolPolicy,
+    boundary: EnforcedBoundary | None,
+    tool_domains: Mapping[ExecutionDomain, tuple[str, ...]],
+    external_surfaces: Mapping[ExternalEffectSurface, tuple[str, ...]],
+    mcp_server_postures: Mapping[str, str],
+    trusted_control_status: Mapping[str, str],
+    legacy_mode: str,
+    parked_request: PermissionDeltaRequest | None = None,
+) -> str:
+    """Render configured permission intent separately from enforced facts.
+
+    S1 intentionally has no compiler wired into execution yet.  Reporting
+    ``none`` is therefore a security property: the UI must not imply that a
+    configured profile, Docker class, or legacy mode has become enforcement.
+    """
+    lines = ["Configured intent"]
+    if profile is None:
+        lines.append("  canonical profile: not configured")
+    else:
+        lines.append(f"  canonical profile: {profile.name}")
+        lines.append(f"  profile fingerprint: {profile.fingerprint[:12]}")
+    lines.append(f"  legacy mode: {legacy_mode}")
+    lines.append(
+        "  external policy (independent of local sandbox): "
+        f"mcp={external_policy.mcp.value}, web={external_policy.web.value}, "
+        f"browser={external_policy.browser.value}, "
+        f"computer_use={external_policy.computer_use.value}"
+    )
+
+    lines.append("Installed facts")
+    if boundary is None:
+        lines.append("  verified boundary: none")
+    else:
+        covered = ", ".join(effect.value for effect in boundary.covered_effects) or "none"
+        lines.append(
+            f"  verified boundary: {boundary.backend} {boundary.backend_version} "
+            f"({boundary.verification.value})"
+        )
+        lines.append(f"  covered effects: {covered}")
+
+    lines.append("Tool execution domains")
+    if not tool_domains:
+        lines.append("  none registered")
+    else:
+        for domain, tools in sorted(tool_domains.items(), key=lambda item: item[0].value):
+            lines.append(f"  {domain.value}: {', '.join(tools)}")
+    lines.append("External surfaces")
+    for surface in ExternalEffectSurface:
+        tools = external_surfaces.get(surface, ())
+        tool_status = f"tools={', '.join(tools)}" if tools else "not registered"
+        mode = getattr(external_policy, surface.value).value
+        lines.append(f"  {surface.value}: {mode}; {tool_status}; not covered by local sandbox")
+
+    lines.append("stdio MCP process postures")
+    if not mcp_server_postures:
+        lines.append("  none configured")
+    else:
+        for name, posture in sorted(mcp_server_postures.items()):
+            lines.append(f"  {name}: {posture}")
+
+    lines.append("Trusted control plane (in-process host authority; not sandboxed)")
+    for control_surface in ("hooks", "plugins"):
+        lines.append(
+            f"  {control_surface}: {trusted_control_status.get(control_surface, 'not declared')}"
+        )
+    if parked_request is not None:
+        lines.append("Parked permission request")
+        lines.append(f"  id: {parked_request.request_id}")
+        lines.append(f"  tool: {parked_request.tool_name} ({parked_request.tool_use_id})")
+        lines.append(
+            "  final arguments: "
+            + json.dumps(
+                parked_request.final_arguments,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        lines.append(f"  delta: {parked_request.delta.kind.value}={parked_request.delta.value}")
+        lines.append(
+            "  data flow: "
+            f"{', '.join(parked_request.data_sources) or 'none'} -> "
+            f"{', '.join(parked_request.data_destinations) or 'none'}"
+        )
+        lines.append(
+            f"  boundary: {parked_request.backend} {parked_request.boundary_fingerprint[:12]}"
+        )
+    return "\n".join(lines)
 
 
 def default_history_path(cwd: str | Path) -> Path:

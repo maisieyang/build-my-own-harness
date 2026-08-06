@@ -18,7 +18,19 @@ from pathlib import Path
 
 import pytest
 
-from openharness.permissions import PermissionMode
+from openharness.execution import (
+    BoundaryVerification,
+    BoundaryViolation,
+    EnforcedBoundary,
+    ExecutionEffect,
+)
+from openharness.permissions import (
+    PermissionDelta,
+    PermissionDeltaRequest,
+    PermissionMode,
+    PermissionRuntime,
+    workspace_runtime_profile,
+)
 from openharness.protocols import (
     ConversationMessage,
     TextBlock,
@@ -37,6 +49,7 @@ from openharness.services.snapshot import (
     append_messages_to_snapshot,
     get_snapshot_dir,
     load_snapshot,
+    update_permission_runtime_snapshot,
     write_session_snapshot,
 )
 
@@ -52,6 +65,19 @@ class _StubContext:
     permission_mode: PermissionMode = PermissionMode.DEFAULT
     system_prompt: str | None = "test prompt"
     max_tokens: int = 1024
+    permission_runtime: PermissionRuntime | None = None
+
+
+def _permission_runtime() -> PermissionRuntime:
+    profile = workspace_runtime_profile()
+    boundary = EnforcedBoundary(
+        profile_fingerprint=profile.fingerprint,
+        backend="test",
+        backend_version="1",
+        covered_effects=(ExecutionEffect.COMMAND,),
+        verification=BoundaryVerification.VERIFIED,
+    )
+    return PermissionRuntime(profile=profile, boundary=boundary)
 
 
 # --------------------------------------------------------------------------- #
@@ -258,6 +284,168 @@ class TestSerializeSnapshot:
         assert out["permission_mode"] == "auto"
         assert isinstance(out["permission_mode"], str)
 
+    def test_permission_runtime_state_persists_exact_park_fingerprints(
+        self, tmp_path: Path
+    ) -> None:
+        profile = workspace_runtime_profile()
+        boundary = EnforcedBoundary(
+            profile_fingerprint=profile.fingerprint,
+            backend="test",
+            backend_version="1",
+            covered_effects=(ExecutionEffect.COMMAND,),
+            verification=BoundaryVerification.VERIFIED,
+        )
+        runtime = PermissionRuntime(profile=profile, boundary=boundary)
+        request = PermissionDeltaRequest.create(
+            tool_use_id="tool-1",
+            tool_name="WebFetch",
+            final_arguments={"url": "https://example.com"},
+            profile=profile,
+            boundary=boundary,
+            delta=PermissionDelta.external_tool("web"),
+            crossing=BoundaryViolation(
+                dimension="external.web",
+                requested="WebFetch",
+                evidence="outside local sandbox",
+            ),
+            data_sources=("final tool arguments",),
+            data_destinations=("web",),
+        )
+        runtime.park(request, reason="needs a person")
+
+        out = _serialize_snapshot(
+            cwd=tmp_path,
+            tool_metadata={},
+            messages=[],
+            context=_StubContext(permission_runtime=runtime),  # type: ignore[arg-type]
+        )
+
+        state = out["extra"]["permission_runtime"]
+        assert state["profile_fingerprint"] == profile.fingerprint
+        assert state["boundary_fingerprint"] == boundary.fingerprint
+        assert state["backend_fingerprint"] == boundary.backend_fingerprint
+        assert state["parked_request"]["request_id"] == request.request_id
+        assert state["parked_request"]["request_fingerprint"] == request.request_fingerprint
+        assert state["parked_request"]["grant_fingerprint"] == request.grant_fingerprint
+        assert state["parked_request"]["backend"] == "test"
+
+
+def test_permission_decision_amends_current_snapshot_without_rotating(
+    tmp_path: Path,
+) -> None:
+    profile = workspace_runtime_profile()
+    boundary = EnforcedBoundary(
+        profile_fingerprint=profile.fingerprint,
+        backend="test",
+        backend_version="1",
+        covered_effects=(ExecutionEffect.COMMAND,),
+        verification=BoundaryVerification.VERIFIED,
+    )
+    runtime = PermissionRuntime(profile=profile, boundary=boundary)
+    write_session_snapshot(
+        cwd=tmp_path,
+        tool_metadata={},
+        messages=[],
+        context=_StubContext(permission_runtime=runtime),  # type: ignore[arg-type]
+    )
+
+    request = PermissionDeltaRequest.create(
+        tool_use_id="tool-1",
+        tool_name="WebFetch",
+        final_arguments={"url": "https://example.com"},
+        profile=profile,
+        boundary=boundary,
+        delta=PermissionDelta.external_tool("web"),
+        crossing=BoundaryViolation(
+            dimension="external.web",
+            requested="WebFetch",
+            evidence="outside local sandbox",
+        ),
+        data_sources=("final tool arguments",),
+        data_destinations=("web",),
+    )
+    runtime.park(request, reason="needs approval")
+    assert update_permission_runtime_snapshot(cwd=tmp_path, runtime=runtime) is not None
+
+    loaded = load_snapshot(tmp_path)
+    assert (
+        loaded["extra"]["permission_runtime"]["parked_request"]["request_id"] == request.request_id
+    )
+
+    runtime.approve_parked(request.request_id)
+    assert update_permission_runtime_snapshot(cwd=tmp_path, runtime=runtime) is not None
+    loaded = load_snapshot(tmp_path)
+    assert request.grant_fingerprint in loaded["extra"]["permission_runtime"]["grants"]
+
+
+class TestPermissionRuntimeSnapshotAmendmentFailures:
+    def test_missing_snapshot_is_a_non_fatal_noop(self, tmp_path: Path) -> None:
+        assert (
+            update_permission_runtime_snapshot(
+                cwd=tmp_path,
+                runtime=_permission_runtime(),
+            )
+            is None
+        )
+
+    def test_malformed_snapshot_is_a_non_fatal_noop(self, tmp_path: Path) -> None:
+        snapshot_dir = get_snapshot_dir(tmp_path)
+        snapshot_dir.mkdir(parents=True)
+        (snapshot_dir / "current.json").write_text("{broken", encoding="utf-8")
+
+        assert (
+            update_permission_runtime_snapshot(
+                cwd=tmp_path,
+                runtime=_permission_runtime(),
+            )
+            is None
+        )
+
+    def test_non_object_extra_is_replaced_without_losing_other_fields(self, tmp_path: Path) -> None:
+        runtime = _permission_runtime()
+        path = write_session_snapshot(
+            cwd=tmp_path,
+            tool_metadata={"keep": True},
+            messages=[],
+            context=_StubContext(),  # type: ignore[arg-type]
+        )
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["extra"] = "invalid"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        assert update_permission_runtime_snapshot(cwd=tmp_path, runtime=runtime) == path
+
+        amended = json.loads(path.read_text(encoding="utf-8"))
+        assert amended["tool_metadata"] == {"keep": True}
+        assert amended["extra"]["permission_runtime"] == runtime.export_state().model_dump(
+            mode="json"
+        )
+
+    def test_atomic_write_failure_does_not_break_the_session(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        runtime = _permission_runtime()
+        path = write_session_snapshot(
+            cwd=tmp_path,
+            tool_metadata={},
+            messages=[],
+            context=_StubContext(),  # type: ignore[arg-type]
+        )
+        before = path.read_text(encoding="utf-8")
+
+        def _fail_write(**kwargs: object) -> None:
+            del kwargs
+            raise OSError("disk full")
+
+        monkeypatch.setattr("openharness.services.snapshot._atomic_write", _fail_write)
+
+        assert update_permission_runtime_snapshot(cwd=tmp_path, runtime=runtime) is None
+        assert path.read_text(encoding="utf-8") == before
+
+
+class TestSerializeSnapshotFields:
     def test_messages_serialized_as_dicts_with_type_discriminator(self, tmp_path: Path) -> None:
         out = _serialize_snapshot(
             cwd=tmp_path,

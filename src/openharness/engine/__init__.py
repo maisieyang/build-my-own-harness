@@ -16,9 +16,10 @@ Public API:
 from __future__ import annotations
 
 from openharness.engine.context import QueryContext
-from openharness.engine.query import run_query
+from openharness.engine.query import extract_authorization_context, run_query
 
 __all__ = [
     "QueryContext",
+    "extract_authorization_context",
     "run_query",
 ]

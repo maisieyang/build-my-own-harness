@@ -97,6 +97,38 @@ class ToolExecutionCompletedEvent(StrictModel):
     is_error: bool
 
 
+class BoundaryViolationEvent(StrictModel):
+    """Typed report that a verified runtime boundary rejected an effect."""
+
+    type: Literal["boundary_violation"] = "boundary_violation"
+    tool_use_id: str
+    tool_name: str
+    dimension: str
+    requested: str
+    evidence: str
+
+
+class PermissionParkedEvent(StrictModel):
+    """The turn stopped because an exact permission request needs a person."""
+
+    type: Literal["permission_parked"] = "permission_parked"
+    request_id: str
+    tool_use_id: str
+    tool_name: str
+    delta_kind: str
+    delta_value: str
+    profile_fingerprint: str
+    boundary_fingerprint: str
+    backend: str
+    backend_fingerprint: str
+    final_arguments: dict[str, Any]
+    data_sources: tuple[str, ...]
+    data_destinations: tuple[str, ...]
+    boundary_facts: dict[str, Any]
+    reason: str
+    messages: list[ConversationMessage]
+
+
 class ConversationCompleteEvent(StrictModel):
     """P6+-T1: yielded as the FINAL event of ``run_query`` when the
     loop exits (end_turn reached or max_turns hit).
@@ -122,6 +154,8 @@ ApiStreamEvent: TypeAlias = Annotated[
     | ApiRetryEvent
     | ToolExecutionStartedEvent
     | ToolExecutionCompletedEvent
+    | BoundaryViolationEvent
+    | PermissionParkedEvent
     | ConversationCompleteEvent,
     Field(discriminator="type"),
 ]

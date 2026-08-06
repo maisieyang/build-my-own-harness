@@ -20,9 +20,13 @@ from __future__ import annotations
 
 from openharness.tools.base import (
     BaseTool,
+    ExecutionDomain,
+    ExternalEffectKind,
+    ExternalEffectSurface,
     ToolExecutionContext,
     ToolRegistry,
     ToolResult,
+    TrustedControlSurface,
 )
 from openharness.tools.bash import Bash
 from openharness.tools.edit import Edit
@@ -61,6 +65,9 @@ __all__ = [
     "BaseTool",
     "Bash",
     "Edit",
+    "ExecutionDomain",
+    "ExternalEffectKind",
+    "ExternalEffectSurface",
     "Grep",
     "LoadSkillInput",
     "LoadSkillTool",
@@ -70,6 +77,7 @@ __all__ = [
     "ToolExecutionContext",
     "ToolRegistry",
     "ToolResult",
+    "TrustedControlSurface",
     "Write",
     "create_default_tool_registry",
 ]

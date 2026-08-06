@@ -34,7 +34,13 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from openharness.tools.base import BaseTool, ToolResult
+from openharness.execution import FileEditOperation
+from openharness.tools.base import (
+    BaseTool,
+    ExecutionDomain,
+    ToolResult,
+    tool_result_from_operation,
+)
 
 if TYPE_CHECKING:
     from openharness.tools.base import ToolExecutionContext
@@ -58,6 +64,7 @@ class EditInput(BaseModel):
 class Edit(BaseTool[EditInput]):
     """Replace exact-match string(s) in a text file."""
 
+    execution_domain = ExecutionDomain.LOCAL_DATA
     name = "Edit"
     description = (
         "Replace an exact substring (no regex) in a text file. By default "
@@ -73,6 +80,17 @@ class Edit(BaseTool[EditInput]):
         context: ToolExecutionContext,
     ) -> ToolResult:
         path = _resolve(args.path, context.cwd)
+
+        if context.sandbox_session is not None:
+            sandbox_result = await context.sandbox_session.execute(
+                FileEditOperation(
+                    path=path,
+                    old_str=args.old_str,
+                    new_str=args.new_str,
+                    replace_all=args.replace_all,
+                )
+            )
+            return tool_result_from_operation(sandbox_result)
 
         # P3-T3.3f:project-root scope check moved to AuthZ Tier 3
         # (TierBasedPermissionChecker) — Edit no longer double-checks here.

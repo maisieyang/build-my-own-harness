@@ -108,7 +108,7 @@ class TestInteractiveBranch:
         assert factory_kwargs["history_path"].suffix == ".txt"
         # Status provider is live and reflects the configured model.
         status = factory_kwargs["status_provider"]()
-        assert "qwen3.7-max" in status
+        assert "qwen-plus" in status
 
     def test_non_tty_keeps_legacy_input_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_minimum_env(monkeypatch)

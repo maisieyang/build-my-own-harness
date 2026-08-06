@@ -16,7 +16,7 @@ import dataclasses
 
 import pytest
 
-from openharness.mcp import McpServerConfig
+from openharness.mcp import McpEnvironmentPosture, McpServerConfig
 
 
 class TestConstruction:
@@ -25,6 +25,8 @@ class TestConstruction:
         assert cfg.name == "fs"
         assert cfg.command == ("npx", "server-filesystem")
         assert cfg.env == {}
+        assert cfg.sandbox is False
+        assert cfg.environment_posture is McpEnvironmentPosture.MINIMAL
 
     def test_with_env_vars(self) -> None:
         cfg = McpServerConfig(
@@ -33,6 +35,10 @@ class TestConstruction:
             env={"GITHUB_TOKEN": "ghp_abc123"},
         )
         assert cfg.env == {"GITHUB_TOKEN": "ghp_abc123"}
+
+    def test_stdio_sandbox_is_explicit_opt_in(self) -> None:
+        cfg = McpServerConfig(name="local", command=("node", "server.js"), sandbox=True)
+        assert cfg.sandbox is True
 
     def test_is_frozen(self) -> None:
         cfg = McpServerConfig(name="x", command=("y",))

@@ -90,8 +90,8 @@ flowchart LR
     U["User or script"] --> C["REPL and headless CLI"]
     C --> E["Agent engine"]
     E <--> M["OpenAI-compatible model"]
-    E --> P["Permissions and hooks"]
-    P --> X["Host, Docker, or gVisor"]
+    E --> P["Permission profile, verified boundary, and hooks"]
+    P --> X["Seatbelt, Docker command backend, or legacy host"]
     E <--> S["Compaction, snapshots, and memory"]
     C --> V["Independent /goal judge"]
     V -->|"checker feedback"| E
@@ -101,8 +101,9 @@ flowchart LR
 The ownership model has four parts:
 
 1. **Actions.** Typed streaming and tool calls feed an allow/ask/deny
-   authorization layer, lifecycle hooks, irreversible-operation red lines, and
-   host or Docker/gVisor execution.
+   authorization layer, lifecycle hooks, external-effect policy, and—when the
+   sandbox posture is selected—one verified session boundary shared by the
+   local data-plane tools.
 2. **Evidence and state.** Tool results, compaction, memory, and snapshots
    preserve enough trustworthy state for long tasks to recover.
 3. **Capabilities.** Skills, commands, mode bundles, MCP servers, plugins, and
@@ -326,13 +327,39 @@ uv run ruff format --check
 - Claude Code plugin compatibility currently discovers plugin metadata and
   `SKILL.md` trees. Claude Code `.mcp.json` and declarative agents are not
   imported.
-- MCP transport is stdio only.
-- Docker/gVisor isolation is optional; host execution is the default.
+- MCP transport is stdio only. Its subprocess always receives a minimal,
+  credential-filtered environment. An unsandboxed stdio server must be on the
+  explicit trusted-server list; otherwise startup fails closed.
+- MCP, Web, Browser, and Computer Use are independent external-effect policy
+  surfaces. A local filesystem sandbox never implies that these calls are safe;
+  untrusted, unknown, mutating, and destructive external calls still require
+  exact approval even under a broad surface allow.
+- Hooks and plugins are opt-in trusted, in-process control-plane code. They can
+  enforce or rewrite a call, but rewritten final arguments are authorized again
+  before dispatch.
+- Isolation remains opt-in. On macOS the Seatbelt backend covers the unified
+  local data plane with a deny-by-default policy, same-sandbox-only process
+  signals, explicit workspace/profile roots, and reported toolchain read
+  dependencies. Docker remains an explicitly command-only backend; existing
+  protected control paths are read-only binds and missing ones are reserved by
+  read-only mounts so the reported boundary cannot be created around later. A
+  non-sandbox posture retains legacy host execution.
+- Domain-restricted network access is mediated by the managed proxy. Plain HTTP
+  binds the `Host` header to the checked absolute URL; public HTTPS CONNECT
+  binds cleartext TLS SNI to the checked authority and fails closed when that
+  identity cannot be verified. Private and loopback targets remain independent
+  explicit profile choices.
 - The `/goal` judge is probabilistic, reads conversation evidence rather than
   operating-system state, fails closed, and is bounded by an explicit turn cap.
-- Permission, sandbox, worktree isolation, and completion remain orthogonal;
-  `/goal` pauses on confirmation-required permission failures, but unattended
-  permission policy is still an open design boundary.
+- Permission intent and sandbox enforcement are separate contracts: reviewers
+  receive the original human authorization context, complete active profile,
+  verified boundary facts, exact final arguments, and minimal delta. They can
+  grant one exact overlay only after the replacement boundary proves the same
+  backend and covers the requested effect. Hard denies and unrepresentable
+  boundary violations never reach review. Requests a reviewer cannot resolve
+  are durably parked; the terminal and `/permissions` show their arguments,
+  delta, data flow, and boundary before `/approve` or `/deny`. `/goal` pauses
+  before its judge and resumes only after an explicit decision plus `/resume`.
 
 ## Design record
 

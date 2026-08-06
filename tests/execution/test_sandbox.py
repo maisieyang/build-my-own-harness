@@ -216,6 +216,31 @@ class TestSandboxSpawnConfig:
         assert host["Memory"] == 1024**3  # 1GB default
         assert host["CpuQuota"] == 100_000  # 1 CPU default
         assert host["PidsLimit"] == 256
+        assert host["ReadonlyRootfs"] is True
+        assert host["CapDrop"] == ["ALL"]
+        assert host["SecurityOpt"] == ["no-new-privileges:true"]
+        assert "/tmp" in host["Tmpfs"]
+        for protected in (".git", ".codex", ".agents"):
+            mount = host["Tmpfs"][f"{_CONTAINER_CWD}/{protected}"]
+            assert "ro" in mount.split(",")
+        assert config["User"] != ""
+
+    async def test_protected_workspace_paths_are_mounted_read_only(self, tmp_path: Path) -> None:
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".codex").mkdir()
+        docker_cls, _container, _exec = _make_mock_docker()
+
+        with patch("aiodocker.Docker", docker_cls):
+            async with SandboxExecution(cwd=tmp_path):
+                pass
+
+        config = docker_cls.return_value.containers.create.call_args.kwargs["config"]
+        assert f"{tmp_path / '.git'}:{_CONTAINER_CWD}/.git:ro" in config["HostConfig"]["Binds"]
+        assert f"{tmp_path / '.codex'}:{_CONTAINER_CWD}/.codex:ro" in config["HostConfig"]["Binds"]
+        tmpfs = config["HostConfig"]["Tmpfs"]
+        assert f"{_CONTAINER_CWD}/.git" not in tmpfs
+        assert f"{_CONTAINER_CWD}/.codex" not in tmpfs
+        assert f"{_CONTAINER_CWD}/.agents" in tmpfs
 
     async def test_custom_image_and_network(self, tmp_path: Path) -> None:
         docker_cls, _container, _exec = _make_mock_docker()
@@ -323,6 +348,20 @@ class TestSandboxRunCommand:
 
         assert result.output == "first second"
 
+    async def test_run_command_drains_but_bounds_retained_output(self, tmp_path: Path) -> None:
+        docker_cls, _container, exec_mock = _make_mock_docker()
+        _set_stream_output(exec_mock, [b"0123", b"456789"])
+
+        with (
+            patch("aiodocker.Docker", docker_cls),
+            patch("openharness.execution.sandbox._MAX_RETAINED_OUTPUT_BYTES", 4),
+        ):
+            async with SandboxExecution(cwd=tmp_path) as sb:
+                result = await sb.run_command("anything", cwd=tmp_path)
+
+        assert "output truncated" in result.output
+        assert result.output.endswith("6789")
+
     async def test_run_command_outside_context_raises(self, tmp_path: Path) -> None:
         sb = SandboxExecution(cwd=tmp_path)
         with pytest.raises(RuntimeError, match="outside an active"):
@@ -340,14 +379,6 @@ class TestSandboxRunCommand:
 
         stream_mock.read_out = AsyncMock(side_effect=_never)
 
-        # Mock the kill exec too (terminate path).
-        kill_exec = MagicMock()
-        kill_ctx = AsyncMock()
-        kill_ctx.__aenter__ = AsyncMock()
-        kill_ctx.__aexit__ = AsyncMock(return_value=None)
-        kill_exec.start = MagicMock(return_value=kill_ctx)
-        container.exec = AsyncMock(side_effect=[exec_mock, kill_exec, kill_exec])
-
         with patch("aiodocker.Docker", docker_cls):
             async with SandboxExecution(cwd=tmp_path) as sb:
                 # Patch the grace period to be near-zero so this test
@@ -358,6 +389,8 @@ class TestSandboxRunCommand:
         assert result.timed_out is True
         assert result.exit_code == -1
         assert result.output == ""
+        container.stop.assert_any_await(timeout=0)
+        assert container.start.await_count == 2
 
     async def test_run_command_handles_none_exit_code(self, tmp_path: Path) -> None:
         # Edge case: aiodocker can return ExitCode=None for some races.

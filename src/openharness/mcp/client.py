@@ -43,6 +43,7 @@ Public surface:
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Any
 
@@ -50,9 +51,12 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from openharness.errors import OpenHarnessError
+from openharness.execution.seatbelt import build_sandbox_environment, compile_seatbelt_profile
 from openharness.observability import get_logger
+from openharness.permissions import workspace_runtime_profile
 
 if TYPE_CHECKING:
+    from pathlib import Path
     from types import TracebackType
 
     from openharness.mcp.config import McpServerConfig
@@ -64,6 +68,42 @@ logger = get_logger("mcp")
 # Phase 5 boundary sub-decision: 5 s per-server init timeout. Configurable
 # via ``McpClient(init_timeout=...)`` for tests + slow real servers.
 _DEFAULT_INIT_TIMEOUT_SECONDS = 5.0
+
+
+def _build_stdio_parameters(
+    config: McpServerConfig,
+    *,
+    sandbox_cwd: Path | None,
+) -> StdioServerParameters:
+    # A stdio server never receives the harness process's ambient environment.
+    # Explicit ``config.env`` values are user-provided grants layered over the
+    # same minimal baseline used by sandboxed local processes.
+    profile = workspace_runtime_profile()
+    environment = build_sandbox_environment(profile)
+    environment.update(config.env)
+    if not config.sandbox:
+        return StdioServerParameters(
+            command=config.command[0],
+            args=list(config.command[1:]),
+            env=environment,
+        )
+    if sandbox_cwd is None:
+        raise McpInitError(f"MCP server {config.name!r} requested sandboxing without a sandbox cwd")
+    executable = "/usr/bin/sandbox-exec"
+    if not os.path.isfile(executable) or not os.access(executable, os.X_OK):
+        raise McpInitError(
+            f"MCP server {config.name!r} requested sandboxing but sandbox-exec is unavailable"
+        )
+    return StdioServerParameters(
+        command=executable,
+        args=[
+            "-p",
+            compile_seatbelt_profile(profile, cwd=sandbox_cwd),
+            *config.command,
+        ],
+        env=environment,
+        cwd=sandbox_cwd,
+    )
 
 
 class McpInitError(OpenHarnessError):
@@ -105,9 +145,11 @@ class McpClient:
         config: McpServerConfig,
         *,
         init_timeout: float = _DEFAULT_INIT_TIMEOUT_SECONDS,
+        sandbox_cwd: Path | None = None,
     ) -> None:
         self._config = config
         self._init_timeout = init_timeout
+        self._sandbox_cwd = sandbox_cwd
         # Populated by __aenter__ / cleared by __aexit__.
         self._stack: AsyncExitStack | None = None
         self._session: ClientSession | None = None
@@ -121,14 +163,7 @@ class McpClient:
     async def __aenter__(self) -> McpClient:
         stack = AsyncExitStack()
         try:
-            params = StdioServerParameters(
-                command=self._config.command[0],
-                args=list(self._config.command[1:]),
-                # SDK semantics: env=None inherits parent;dict merges with
-                # SDK's default-environment dict. Empty dict → None so we
-                # don't accidentally clear PATH and friends.
-                env=dict(self._config.env) if self._config.env else None,
-            )
+            params = _build_stdio_parameters(self._config, sandbox_cwd=self._sandbox_cwd)
             read, write = await stack.enter_async_context(stdio_client(params))
             session = await stack.enter_async_context(ClientSession(read, write))
             # Bounded init handshake — pathological servers that hang on

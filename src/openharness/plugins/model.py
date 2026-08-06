@@ -530,6 +530,7 @@ def _parse_mcp_servers(
                     name=srv_name,
                     command=tuple(str(c) for c in raw_command),
                     env=resolved_env,
+                    sandbox=bool(item.get("sandbox", False)),
                 )
             )
         except ValueError as exc:
