@@ -133,6 +133,12 @@ def test_park_decision_and_explicit_resume_are_durable_and_skip_judge_until_resu
                 delta_value=request.delta.value,
                 profile_fingerprint=request.profile_fingerprint,
                 boundary_fingerprint=request.boundary_fingerprint,
+                backend=request.backend,
+                backend_fingerprint=request.backend_fingerprint,
+                final_arguments=request.final_arguments,
+                data_sources=request.data_sources,
+                data_destinations=request.data_destinations,
+                boundary_facts=request.boundary_facts,
                 reason="owner decision needed",
                 messages=messages,
             )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from typing import TYPE_CHECKING
 
@@ -56,6 +57,14 @@ def test_compiler_allows_workspace_write_but_denies_nested_protected_path(
     assert f'(allow file-write* (subpath "{tmp_path}"))' in profile_text
     assert f'(deny file-read* file-write* (subpath "{tmp_path / ".git"}"))' in profile_text
     assert "(deny network*)" in profile_text
+
+
+def test_compiler_denies_ambient_process_authority(tmp_path: Path) -> None:
+    profile_text = compile_seatbelt_profile(_workspace_profile(), cwd=tmp_path)
+
+    assert "(deny default)" in profile_text
+    assert "(allow signal (target same-sandbox))" in profile_text
+    assert "(allow process-info* (target same-sandbox))" in profile_text
 
 
 def test_compiler_escapes_paths_as_seatbelt_strings(tmp_path: Path) -> None:
@@ -174,4 +183,41 @@ async def test_command_and_file_worker_cannot_read_outside_declared_roots(tmp_pa
         assert payload not in file_result.evidence
     finally:
         outside.unlink(missing_ok=True)
+        await session.close()
+
+
+@requires_macos_seatbelt
+async def test_command_cannot_signal_a_host_process_outside_its_sandbox(
+    tmp_path: Path,
+) -> None:
+    target = await asyncio.create_subprocess_exec("/bin/sleep", "60")
+    backend = SeatbeltBackend(cwd=tmp_path, executable="/usr/bin/sandbox-exec")
+    session = await backend.open(_workspace_profile())
+    try:
+        result = await session.execute(
+            CommandOperation(command=f"/bin/kill -TERM {target.pid}", cwd=tmp_path)
+        )
+
+        assert isinstance(result, ProcessCompleted)
+        assert result.exit_code != 0
+        assert target.returncode is None
+    finally:
+        await session.close()
+        if target.returncode is None:
+            target.terminate()
+        await target.wait()
+
+
+@requires_macos_seatbelt
+async def test_command_cannot_read_private_etc_outside_profile(tmp_path: Path) -> None:
+    backend = SeatbeltBackend(cwd=tmp_path, executable="/usr/bin/sandbox-exec")
+    session = await backend.open(_workspace_profile())
+    try:
+        result = await session.execute(
+            CommandOperation(command="/bin/cat /private/etc/hosts", cwd=tmp_path)
+        )
+
+        assert isinstance(result, ProcessCompleted)
+        assert result.exit_code != 0
+    finally:
         await session.close()

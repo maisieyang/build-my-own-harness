@@ -54,9 +54,9 @@ def _absolute_policy_path(raw: str, cwd: Path) -> Path:
 def _runtime_read_roots() -> tuple[Path, ...]:
     """Host paths needed to launch the trusted toolchain under Seatbelt.
 
-    These are backend implementation dependencies, not model data roots.  The
-    model still receives read access only to READ/WRITE roots from the profile;
-    runtime roots contain executables, libraries, devices, and this worker.
+    These paths are an explicit part of the backend's effective read boundary.
+    Keep them limited to executable/library trees and individual runtime files;
+    in particular, do not expose broad configuration or device directories.
     """
     candidates = (
         Path("/System"),
@@ -66,8 +66,11 @@ def _runtime_read_roots() -> tuple[Path, ...]:
         Path("/Library"),
         Path("/opt/homebrew"),
         Path("/usr/local"),
-        Path("/dev"),
-        Path("/private/etc"),
+        Path("/dev/null"),
+        Path("/dev/random"),
+        Path("/dev/urandom"),
+        Path("/dev/tty"),
+        Path("/dev/ptmx"),
         Path("/private/var/select"),
         Path("/private/var/db/dyld"),
         Path(sys.prefix),
@@ -85,7 +88,32 @@ def compile_seatbelt_profile(
     network_proxy_port: int | None = None,
 ) -> str:
     """Lower the filesystem/network subset into deterministic SBPL."""
-    lines = ["(version 1)", "(allow default)"]
+    lines = [
+        "(version 1)",
+        "(deny default)",
+        "(allow process-exec)",
+        "(allow process-fork)",
+        "(allow signal (target same-sandbox))",
+        "(allow process-info* (target same-sandbox))",
+        # Common read-only kernel queries needed by the dynamic loader and
+        # language runtimes.  These grant no filesystem, network, or cross-
+        # sandbox process authority.
+        '(allow sysctl-read (sysctl-name "hw.activecpu"))',
+        '(allow sysctl-read (sysctl-name "hw.logicalcpu"))',
+        '(allow sysctl-read (sysctl-name "hw.memsize"))',
+        '(allow sysctl-read (sysctl-name "hw.ncpu"))',
+        '(allow sysctl-read (sysctl-name "kern.argmax"))',
+        '(allow sysctl-read (sysctl-name "kern.hostname"))',
+        '(allow sysctl-read (sysctl-name "kern.osrelease"))',
+        '(allow sysctl-read (sysctl-name "kern.osversion"))',
+        '(allow sysctl-read (sysctl-name "kern.secure_kernel"))',
+        '(allow sysctl-read (sysctl-name "kern.usrstack64"))',
+        '(allow sysctl-read (sysctl-name-prefix "hw.optional."))',
+        '(allow sysctl-read (sysctl-name-prefix "kern.proc.pid."))',
+        '(allow sysctl-read (sysctl-name-prefix "sysctl.proc_cputype"))',
+        "(allow ipc-posix-sem)",
+        "(allow pseudo-tty)",
+    ]
     readable_paths = {
         str(_absolute_policy_path(rule.path, cwd))
         for rule in profile.filesystem.rules
@@ -98,21 +126,10 @@ def compile_seatbelt_profile(
         for parent in Path(raw_path).parents
         if str(parent) not in readable_paths
     }
-    read_exclusions = " ".join(
-        [
-            *(
-                f'(require-not (subpath "{_seatbelt_string(path)}"))'
-                for path in sorted(readable_paths)
-            ),
-            *(
-                f'(require-not (literal "{_seatbelt_string(path)}"))'
-                for path in sorted(traversal_paths)
-            ),
-        ]
-    )
-    lines.append(f"(deny file-read* (require-all {read_exclusions}))")
     for path in sorted(traversal_paths):
         lines.append(f'(allow file-read* (literal "{_seatbelt_string(path)}"))')
+    for path in sorted(readable_paths):
+        lines.append(f'(allow file-read* (subpath "{_seatbelt_string(path)}"))')
     writable_paths = [
         _seatbelt_string(str(_absolute_policy_path(rule.path, cwd)))
         for rule in profile.filesystem.rules
@@ -248,6 +265,7 @@ class SeatbeltSession:
         boundary_root: Path,
         default_timeout: float | None = None,
         network_proxy: NetworkProxySession | None = None,
+        hard_deny_rules: tuple[tuple[FilesystemAccess, Path], ...] = (),
     ) -> None:
         self._executable = executable
         self._profile_text = profile_text
@@ -256,6 +274,7 @@ class SeatbeltSession:
         self._boundary_root = boundary_root
         self._default_timeout = default_timeout
         self._network_proxy = network_proxy
+        self._hard_deny_rules = hard_deny_rules
         self._closed = False
 
     @property
@@ -372,7 +391,12 @@ class SeatbeltSession:
                     dimension=dimension,
                     requested=requested,
                     evidence=evidence,
-                    hard_deny=hard_deny,
+                    hard_deny=hard_deny
+                    or _matches_hard_deny(
+                        operation,
+                        requested=requested,
+                        rules=self._hard_deny_rules,
+                    ),
                 )
             return OperationCompleted(
                 output=str(response["output"]),
@@ -521,9 +545,12 @@ class SeatbeltBackend:
             for rule in profile.filesystem.rules
         )
         runtime_read_rules = tuple(f"runtime_read:{path}" for path in _runtime_read_roots())
-        process_rules = ["non-login-shell", "child-process-inheritance"]
-        if profile.process.no_new_privileges:
-            process_rules.append("privilege-escalation-contained-by-seatbelt")
+        process_rules = [
+            "deny-default",
+            "non-login-shell",
+            "child-process-sandbox-inheritance",
+            "signal-and-process-info:target-same-sandbox",
+        ]
         if profile.process.timeout_seconds is not None:
             process_rules.append(f"timeout<={profile.process.timeout_seconds}s")
         covered_effects = [
@@ -570,7 +597,37 @@ class SeatbeltBackend:
             boundary_root=self._cwd,
             default_timeout=profile.process.timeout_seconds,
             network_proxy=network_proxy,
+            hard_deny_rules=tuple(
+                (rule.access, _absolute_policy_path(rule.path, self._cwd))
+                for rule in profile.filesystem.rules
+                if rule.access
+                in {
+                    FilesystemAccess.DENY,
+                    FilesystemAccess.DENY_READ,
+                    FilesystemAccess.DENY_WRITE,
+                }
+            ),
         )
+
+
+def _matches_hard_deny(
+    operation: DataPlaneOperation,
+    *,
+    requested: str,
+    rules: tuple[tuple[FilesystemAccess, Path], ...],
+) -> bool:
+    requested_path = Path(requested).resolve(strict=False)
+    is_read = isinstance(operation, (FileReadOperation, FileSearchOperation))
+    is_write = isinstance(operation, (FileWriteOperation, FileEditOperation))
+    for access, root in rules:
+        applies = (
+            access is FilesystemAccess.DENY
+            or (is_read and access is FilesystemAccess.DENY_READ)
+            or (is_write and access is FilesystemAccess.DENY_WRITE)
+        )
+        if applies and (requested_path == root or requested_path.is_relative_to(root)):
+            return True
+    return False
 
 
 def _bounded_timeout(requested: float | None, policy_limit: float | None) -> float | None:

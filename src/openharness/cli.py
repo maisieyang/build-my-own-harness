@@ -94,7 +94,7 @@ from openharness.commands import (
 from openharness.commands.model import Command  # noqa: TC001 — runtime use in LayeredStore generic
 from openharness.compaction import TruncateToolResultHook
 from openharness.config import Settings
-from openharness.engine import QueryContext, run_query
+from openharness.engine import QueryContext, extract_authorization_context, run_query
 from openharness.engine.slash_skill import synthesize_skill_envelope
 from openharness.errors import LoopError, OpenHarnessError
 from openharness.execution import (
@@ -1019,6 +1019,7 @@ async def _run_ask(
             max_turns=max_turns,
             permission_mode=permission_mode,
             external_tool_policy=sandbox_config.external_tools,
+            authorization_context=(prompt,),
             skill_store=skill_store,
             # P6-T1 (D16.5): propagate the sub-agent recursion cap from
             # Settings into the top-level QueryContext. ``agent_depth=0``
@@ -1092,6 +1093,7 @@ async def _run_ask(
                     ),
                     permission_runtime=permission_runtime,
                     external_tool_policy=sandbox_config.external_tools,
+                    authorization_context=(prompt,),
                     skill_store=skill_store,
                     memory_store=memory_store,
                     session_memory_path=context.session_memory_path,
@@ -1794,6 +1796,11 @@ async def _run_chat(
                             ),
                         },
                         legacy_mode=permission_mode.value,
+                        parked_request=(
+                            permission_runtime.parked_request
+                            if permission_runtime is not None
+                            else None
+                        ),
                     )
                 )
                 continue
@@ -2117,6 +2124,11 @@ async def _run_chat(
                     f"{turn_system_prompt}\n\n{_repl.goal_prompt_section(goal.condition)}"
                 )
 
+            authorization_messages = list(history)
+            if not slash_skill_invoked:
+                authorization_messages.append(
+                    ConversationMessage(role="user", content=[TextBlock(text=user_input)])
+                )
             context = QueryContext(
                 api_client=client,
                 tool_registry=effective_registry,
@@ -2128,6 +2140,7 @@ async def _run_chat(
                 max_tokens=max_tokens,
                 permission_mode=permission_mode,
                 external_tool_policy=sandbox_config.external_tools,
+                authorization_context=extract_authorization_context(authorization_messages),
                 skill_store=skill_store,
                 max_agent_depth=settings.max_agent_depth,
                 execution_env=execution_env,

@@ -52,6 +52,8 @@ def _request() -> PermissionDeltaRequest:
         backend_version="1",
         covered_effects=(ExecutionEffect.COMMAND,),
         verification=BoundaryVerification.VERIFIED,
+        filesystem_rules=("write:/workspace", "deny_write:/workspace/.git"),
+        network_rules=("deny-all",),
     )
     return PermissionDeltaRequest.create(
         tool_use_id="tool-1",
@@ -67,6 +69,7 @@ def _request() -> PermissionDeltaRequest:
         ),
         data_sources=("final tool arguments",),
         data_destinations=("web",),
+        authorization_context=("Inspect the public example.com page, but do not publish.",),
     )
 
 
@@ -82,6 +85,10 @@ async def test_reviewer_receives_exact_structured_envelope() -> None:
     assert "https://example.com/private" in sent
     assert _request().arguments_fingerprint in sent
     assert _request().boundary_fingerprint in sent
+    assert "Inspect the public example.com page, but do not publish." in sent
+    assert '"filesystem_rules":["deny_write:/workspace/.git","write:/workspace"]' in sent
+    assert '"network_rules":["deny-all"]' in sent
+    assert '"name":"workspace"' in sent
     assert client.last_request.tools == []
 
 

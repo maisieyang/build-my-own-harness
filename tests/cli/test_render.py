@@ -37,6 +37,7 @@ from openharness.protocols.stream_events import (
     ApiMessageCompleteEvent,
     ApiRetryEvent,
     ApiTextDeltaEvent,
+    PermissionParkedEvent,
     ToolExecutionCompletedEvent,
     ToolExecutionStartedEvent,
 )
@@ -64,6 +65,38 @@ def _final_event(text: str = "") -> ApiMessageCompleteEvent:
         usage=UsageSnapshot(input_tokens=1, output_tokens=len(text.split())),
         stop_reason="end_turn",
     )
+
+
+@pytest.mark.asyncio
+async def test_parked_permission_renders_auditable_request_details() -> None:
+    out = io.StringIO()
+    err = io.StringIO()
+    event = PermissionParkedEvent(
+        request_id="a" * 64,
+        tool_use_id="tool-1",
+        tool_name="Bash",
+        delta_kind="network_domain",
+        delta_value="pypi.org",
+        profile_fingerprint="b" * 64,
+        boundary_fingerprint="c" * 64,
+        backend="macos-seatbelt",
+        backend_fingerprint="d" * 64,
+        final_arguments={"command": "uv sync"},
+        data_sources=("sandbox-visible data",),
+        data_destinations=("pypi.org:443",),
+        boundary_facts={"network_rules": ["deny-all"]},
+        reason="network access requires review",
+        messages=[],
+    )
+
+    await render_stream(_async_iter([event]), stdout=out, stderr=err)
+
+    rendered = err.getvalue()
+    assert 'final arguments: {"command":"uv sync"}' in rendered
+    assert "delta: network_domain=pypi.org" in rendered
+    assert "sandbox-visible data -> pypi.org:443" in rendered
+    assert "boundary: macos-seatbelt cccccccccccc" in rendered
+    assert "/approve aaaaaaaaaaaa" in rendered
 
 
 class TestTextDeltas:

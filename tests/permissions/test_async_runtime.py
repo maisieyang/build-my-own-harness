@@ -345,6 +345,33 @@ async def test_hard_deny_never_calls_reviewer() -> None:
 
 
 @pytest.mark.asyncio
+async def test_hard_deny_crossing_never_calls_reviewer_even_if_delta_is_not_marked() -> None:
+    profile = workspace_runtime_profile()
+    reviewer = _Reviewer(PermissionReviewVerdict.approve("must not be used"))
+    boundary = _boundary(profile_fingerprint=profile.fingerprint)
+    runtime = PermissionRuntime(profile=profile, boundary=boundary, reviewer=reviewer)
+    request = PermissionDeltaRequest.create(
+        tool_use_id="tool-hard-crossing",
+        tool_name="Write",
+        final_arguments={"path": ".git/config", "content": "x"},
+        profile=profile,
+        boundary=boundary,
+        delta=PermissionDelta.filesystem_path(".git/config"),
+        crossing=BoundaryViolation(
+            dimension="filesystem.write",
+            requested=".git/config",
+            evidence="protected path",
+            hard_deny=True,
+        ),
+    )
+
+    resolution = await runtime.resolve_external(request)
+
+    assert resolution.status is PermissionResolutionStatus.DENIED
+    assert reviewer.calls == []
+
+
+@pytest.mark.asyncio
 async def test_reviewer_exception_parks() -> None:
     class _BrokenReviewer:
         async def review(self, request: PermissionDeltaRequest) -> PermissionReviewVerdict:

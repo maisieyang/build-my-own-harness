@@ -162,7 +162,25 @@ async def render_stream(
                 out.write(_render_tool_completed(event))
                 out.flush()
             elif isinstance(event, PermissionParkedEvent):
-                err.write(f"[permission parked {event.request_id[:12]}: {event.reason}]\n")
+                arguments = json.dumps(
+                    event.final_arguments,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                sources = ", ".join(event.data_sources) or "none"
+                destinations = ", ".join(event.data_destinations) or "none"
+                err.write(
+                    f"[permission parked {event.request_id[:12]}: {event.reason}]\n"
+                    f"  tool: {event.tool_name} ({event.tool_use_id})\n"
+                    f"  final arguments: {arguments}\n"
+                    f"  delta: {event.delta_kind}={event.delta_value}\n"
+                    f"  data flow: {sources} -> {destinations}\n"
+                    f"  boundary: {event.backend} "
+                    f"{event.boundary_fingerprint[:12]}\n"
+                    f"  review: /approve {event.request_id[:12]} or "
+                    f"/deny {event.request_id[:12]}\n"
+                )
                 err.flush()
     finally:
         # If the stream raised mid-tool-execution, keep the terminal sane

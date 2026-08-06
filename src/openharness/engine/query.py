@@ -76,6 +76,7 @@ from openharness.protocols import (
     BoundaryViolationEvent,
     ConversationCompleteEvent,
     PermissionParkedEvent,
+    TextBlock,
     ToolExecutionCompletedEvent,
     ToolExecutionStartedEvent,
     ToolResultBlock,
@@ -205,6 +206,23 @@ def _sanitize_tool_input(tool_input: dict[str, Any], cwd: Path) -> dict[str, Any
     return out
 
 
+def extract_authorization_context(
+    messages: list[ConversationMessage],
+) -> tuple[str, ...]:
+    """Extract human-authored or human-derived scope, never agent feedback."""
+    context: list[str] = []
+    for message in messages:
+        if message.role != "user":
+            continue
+        for block in message.content:
+            if not isinstance(block, TextBlock) or not block.text.strip():
+                continue
+            if block.text.startswith(("[goal set] ", "[goal checker] ")):
+                continue
+            context.append(block.text)
+    return tuple(context)
+
+
 async def run_query(
     initial_messages: list[ConversationMessage],
     context: QueryContext,
@@ -229,6 +247,11 @@ async def run_query(
     # Defensive copy: the caller's list must not be mutated even though the
     # messages helpers (engine.messages) all return new lists.
     messages = list(initial_messages)
+    authorization_context = (
+        context.authorization_context
+        if context.authorization_context
+        else extract_authorization_context(messages)
+    )
 
     # P6-T4 (D16.7):``bind_run`` auto-detects nested invocations (sub-agent's
     # ``run_query`` re-enters within parent's bound context) and stashes the
@@ -483,7 +506,12 @@ async def run_query(
                         output = f"would call {tool_use.name} with {tool_use.input}"
                         is_error = False
                     else:
-                        outcome = await _dispatch_one(tool_use, context, exec_context)
+                        outcome = await _dispatch_one(
+                            tool_use,
+                            context,
+                            exec_context,
+                            authorization_context=authorization_context,
+                        )
                         output, is_error = outcome.output, outcome.is_error
 
                     # 5c: log dispatch-complete. Per D13.6, output content
@@ -565,6 +593,12 @@ async def run_query(
                         delta_value=parked.delta.value,
                         profile_fingerprint=parked.profile_fingerprint,
                         boundary_fingerprint=parked.boundary_fingerprint,
+                        backend=parked.backend,
+                        backend_fingerprint=parked.backend_fingerprint,
+                        final_arguments=parked.final_arguments,
+                        data_sources=parked.data_sources,
+                        data_destinations=parked.data_destinations,
+                        boundary_facts=parked.boundary_facts,
                         reason=context.permission_runtime.parked_reason or "human review required",
                         messages=messages,
                     )
@@ -579,6 +613,8 @@ async def _dispatch_one(
     tool_use: ToolUseBlock,
     context: QueryContext,
     exec_context: ToolExecutionContext,
+    *,
+    authorization_context: tuple[str, ...] = (),
 ) -> _DispatchOutcome:
     """Run a single tool dispatch. Returns ``(output, is_error)``.
 
@@ -639,7 +675,13 @@ async def _dispatch_one(
             if permission_failure is not None:
                 return _outcome(permission_failure)
 
-    external_failure = await _external_effect_failure(tool, tool_use, args, context)
+    external_failure = await _external_effect_failure(
+        tool,
+        tool_use,
+        args,
+        context,
+        authorization_context=authorization_context,
+    )
     if external_failure is not None:
         return _outcome(external_failure)
 
@@ -661,6 +703,7 @@ async def _dispatch_one(
         context=context,
         exec_context=exec_context,
         result=result,
+        authorization_context=authorization_context,
     )
 
     # PostToolUse hook chain — can modify output / metadata / is_error.
@@ -712,7 +755,7 @@ def _boundary_violation_metadata(result: ToolResult) -> BoundaryViolation | None
     )
 
 
-def _delta_for_violation(violation: BoundaryViolation) -> PermissionDelta:
+def _delta_for_violation(violation: BoundaryViolation) -> PermissionDelta | None:
     if violation.dimension.startswith("network."):
         host = violation.requested.rsplit(":", 1)[0].strip("[]")
         return PermissionDelta(
@@ -723,8 +766,15 @@ def _delta_for_violation(violation: BoundaryViolation) -> PermissionDelta:
     access = {
         "filesystem.read": PermissionFilesystemAccess.READ,
         "filesystem.search": PermissionFilesystemAccess.SEARCH,
-    }.get(violation.dimension, PermissionFilesystemAccess.WRITE)
-    return PermissionDelta.filesystem_path(violation.requested, access=access)
+        "filesystem.write": PermissionFilesystemAccess.WRITE,
+    }.get(violation.dimension)
+    if access is None:
+        return None
+    return PermissionDelta.filesystem_path(
+        violation.requested,
+        access=access,
+        hard_deny=violation.hard_deny,
+    )
 
 
 def _dataflow_for_violation(
@@ -745,11 +795,22 @@ async def _resolve_local_boundary_violation(
     context: QueryContext,
     exec_context: ToolExecutionContext,
     result: ToolResult,
+    authorization_context: tuple[str, ...] = (),
 ) -> ToolResult:
     violation = _boundary_violation_metadata(result)
     runtime = context.permission_runtime
     if violation is None or runtime is None:
         return result
+    delta = _delta_for_violation(violation)
+    if delta is None:
+        return ToolResult(
+            output=(
+                "permission denied: boundary violation cannot be represented as "
+                f"a minimal permission delta ({violation.dimension})"
+            ),
+            is_error=True,
+            metadata=result.metadata,
+        )
     data_sources, data_destinations = _dataflow_for_violation(violation)
     request = PermissionDeltaRequest.create(
         tool_use_id=tool_use.id,
@@ -757,10 +818,11 @@ async def _resolve_local_boundary_violation(
         final_arguments=args.model_dump(mode="json"),
         profile=runtime.profile,
         boundary=runtime.boundary,
-        delta=_delta_for_violation(violation),
+        delta=delta,
         crossing=violation,
         data_sources=data_sources,
         data_destinations=data_destinations,
+        authorization_context=authorization_context,
     )
     approved = runtime.consume_grant(request)
     resolution_reason = "human approved exact request"
@@ -833,6 +895,8 @@ async def _external_effect_failure(
     tool_use: ToolUseBlock,
     args: BaseModel,
     context: QueryContext,
+    *,
+    authorization_context: tuple[str, ...] = (),
 ) -> tuple[str, bool] | None:
     if tool.execution_domain is not ExecutionDomain.EXTERNAL_EFFECT:
         return None
@@ -878,6 +942,7 @@ async def _external_effect_failure(
             ),
             data_sources=("final tool arguments",),
             data_destinations=(surface.value,),
+            authorization_context=authorization_context,
         )
         if runtime.consume_grant(request):
             return None

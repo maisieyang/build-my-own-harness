@@ -17,6 +17,7 @@ legacy ``input(">>> ")`` path byte-for-byte.
 
 from __future__ import annotations
 
+import json
 import sys
 from dataclasses import dataclass
 from enum import Enum
@@ -41,7 +42,11 @@ if TYPE_CHECKING:
     from prompt_toolkit.document import Document
 
     from openharness.execution import EnforcedBoundary
-    from openharness.permissions import ExternalToolPolicy, RuntimePermissionProfile
+    from openharness.permissions import (
+        ExternalToolPolicy,
+        PermissionDeltaRequest,
+        RuntimePermissionProfile,
+    )
     from openharness.protocols.messages import ConversationMessage
     from openharness.tools import ExecutionDomain
 
@@ -460,6 +465,7 @@ def format_permissions_status(
     mcp_server_postures: Mapping[str, str],
     trusted_control_status: Mapping[str, str],
     legacy_mode: str,
+    parked_request: PermissionDeltaRequest | None = None,
 ) -> str:
     """Render configured permission intent separately from enforced facts.
 
@@ -516,6 +522,28 @@ def format_permissions_status(
     for control_surface in ("hooks", "plugins"):
         lines.append(
             f"  {control_surface}: {trusted_control_status.get(control_surface, 'not declared')}"
+        )
+    if parked_request is not None:
+        lines.append("Parked permission request")
+        lines.append(f"  id: {parked_request.request_id}")
+        lines.append(f"  tool: {parked_request.tool_name} ({parked_request.tool_use_id})")
+        lines.append(
+            "  final arguments: "
+            + json.dumps(
+                parked_request.final_arguments,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        lines.append(f"  delta: {parked_request.delta.kind.value}={parked_request.delta.value}")
+        lines.append(
+            "  data flow: "
+            f"{', '.join(parked_request.data_sources) or 'none'} -> "
+            f"{', '.join(parked_request.data_destinations) or 'none'}"
+        )
+        lines.append(
+            f"  boundary: {parked_request.backend} {parked_request.boundary_fingerprint[:12]}"
         )
     return "\n".join(lines)
 

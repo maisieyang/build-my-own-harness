@@ -152,6 +152,39 @@ async def test_overlay_fails_closed_when_backend_reports_wrong_fingerprint() -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["backend", "coverage"])
+async def test_overlay_fails_closed_when_verified_facts_do_not_cover_operation(
+    failure: str,
+) -> None:
+    class _IncompleteSession(_Session):
+        @property
+        def boundary(self) -> EnforcedBoundary:
+            return EnforcedBoundary(
+                profile_fingerprint=self.profile.fingerprint,
+                backend="other" if failure == "backend" else "fake",
+                backend_version="1",
+                covered_effects=() if failure == "coverage" else (ExecutionEffect.COMMAND,),
+                verification=BoundaryVerification.VERIFIED,
+            )
+
+    class _IncompleteBackend(_Backend):
+        async def open(self, profile: RuntimePermissionProfile) -> _Session:
+            opened = _IncompleteSession(profile)
+            self.opened.append(opened)
+            return opened
+
+    profile = RuntimePermissionProfile(name="base")
+    base = _ViolatingSession(profile)
+    session = OneShotOverlaySession(backend=_IncompleteBackend(), profile=profile, base=base)
+    operation = CommandOperation(command="curl https://example.com", cwd=Path("/tmp"))
+    await session.execute(operation)
+    session.arm(_request(profile, base.boundary))
+
+    with pytest.raises(RuntimeError, match="overlay boundary verification failed"):
+        await session.execute(operation)
+
+
+@pytest.mark.asyncio
 async def test_filesystem_overlay_is_exact_and_session_close_owns_base() -> None:
     profile = RuntimePermissionProfile(name="base")
     backend = _Backend()

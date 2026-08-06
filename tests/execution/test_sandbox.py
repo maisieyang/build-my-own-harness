@@ -220,6 +220,9 @@ class TestSandboxSpawnConfig:
         assert host["CapDrop"] == ["ALL"]
         assert host["SecurityOpt"] == ["no-new-privileges:true"]
         assert "/tmp" in host["Tmpfs"]
+        for protected in (".git", ".codex", ".agents"):
+            mount = host["Tmpfs"][f"{_CONTAINER_CWD}/{protected}"]
+            assert "ro" in mount.split(",")
         assert config["User"] != ""
 
     async def test_protected_workspace_paths_are_mounted_read_only(self, tmp_path: Path) -> None:
@@ -234,6 +237,10 @@ class TestSandboxSpawnConfig:
         config = docker_cls.return_value.containers.create.call_args.kwargs["config"]
         assert f"{tmp_path / '.git'}:{_CONTAINER_CWD}/.git:ro" in config["HostConfig"]["Binds"]
         assert f"{tmp_path / '.codex'}:{_CONTAINER_CWD}/.codex:ro" in config["HostConfig"]["Binds"]
+        tmpfs = config["HostConfig"]["Tmpfs"]
+        assert f"{_CONTAINER_CWD}/.git" not in tmpfs
+        assert f"{_CONTAINER_CWD}/.codex" not in tmpfs
+        assert f"{_CONTAINER_CWD}/.agents" in tmpfs
 
     async def test_custom_image_and_network(self, tmp_path: Path) -> None:
         docker_cls, _container, _exec = _make_mock_docker()

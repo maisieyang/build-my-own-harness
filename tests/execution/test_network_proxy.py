@@ -5,17 +5,20 @@ from __future__ import annotations
 import asyncio
 import base64
 import socket
+import ssl
 
 import pytest
 
 from openharness.execution.network_proxy import (
     ManagedNetworkProxy,
     NetworkTarget,
+    _http_host_matches,
     _origin_request_header,
     _parse_authority,
     _parse_http_target,
     _parse_proxy_header,
     _proxy_request_id,
+    _tls_client_hello_server_name,
     evaluate_network_target,
 )
 from openharness.permissions import NetworkPolicy
@@ -169,6 +172,47 @@ def test_proxy_auth_and_origin_header_never_forward_proxy_credentials() -> None:
     )
     assert b"host: example.com" in header
     assert b"proxy-" not in header.lower()
+
+
+def _client_hello(server_name: str) -> bytes:
+    incoming = ssl.MemoryBIO()
+    outgoing = ssl.MemoryBIO()
+    tls = ssl.create_default_context().wrap_bio(
+        incoming,
+        outgoing,
+        server_hostname=server_name,
+    )
+    with pytest.raises(ssl.SSLWantReadError):
+        tls.do_handshake()
+    return outgoing.read()
+
+
+def test_tls_client_hello_parser_binds_connect_to_server_name() -> None:
+    assert _tls_client_hello_server_name(_client_hello("allowed.example")) == ("allowed.example")
+    with pytest.raises(ValueError, match="TLS ClientHello"):
+        _tls_client_hello_server_name(b"not tls")
+
+
+def test_http_host_binding_fails_closed_for_missing_or_ambiguous_authority() -> None:
+    assert _http_host_matches("example.com", host="example.com", port=80) is True
+    assert _http_host_matches(None, host="example.com", port=80) is False
+    assert _http_host_matches("example.com:not-a-port", host="example.com", port=80) is False
+
+
+def test_tls_client_hello_parser_rejects_tampered_lengths_and_truncation() -> None:
+    wrong_record_size = bytearray(_client_hello("allowed.example"))
+    wrong_record_size[3:5] = b"\x00\x00"
+    with pytest.raises(ValueError, match="invalid TLS ClientHello"):
+        _tls_client_hello_server_name(bytes(wrong_record_size))
+
+    impossible_handshake = bytearray(_client_hello("allowed.example"))
+    impossible_handshake[6:9] = b"\xff\xff\xff"
+    with pytest.raises(ValueError, match="truncated TLS ClientHello"):
+        _tls_client_hello_server_name(bytes(impossible_handshake))
+
+    truncated_before_session_id = b"\x16\x03\x01\x00\x04\x01\x00\x00\x00"
+    with pytest.raises(ValueError, match="truncated TLS ClientHello"):
+        _tls_client_hello_server_name(truncated_before_session_id)
 
 
 async def test_proxy_rejects_disabled_policy_and_bad_request_ids() -> None:
@@ -330,6 +374,153 @@ async def test_managed_proxy_forwards_plain_http_absolute_form() -> None:
         await proxy.close()
         upstream.close()
         await upstream.wait_closed()
+
+
+async def test_managed_proxy_rejects_http_host_different_from_allowed_url() -> None:
+    proxy = await ManagedNetworkProxy.open(
+        NetworkPolicy(enabled=True, allow_domains=("localhost",), allow_loopback=True)
+    )
+    try:
+        credentials = base64.b64encode(b"host-mismatch:x").decode()
+        reader, writer = await asyncio.open_connection("127.0.0.1", proxy.port)
+        writer.write(
+            (
+                "GET http://localhost:80/ HTTP/1.1\r\n"
+                "Host: forbidden.example\r\n"
+                f"Proxy-Authorization: Basic {credentials}\r\n\r\n"
+            ).encode()
+        )
+        await writer.drain()
+
+        assert (await reader.read()).startswith(b"HTTP/1.1 403")
+        violation = proxy.violations_for("host-mismatch")[0]
+        assert violation.dimension == "network.http_host"
+        assert violation.hard_deny is True
+        writer.close()
+        await writer.wait_closed()
+    finally:
+        await proxy.close()
+
+
+async def test_public_connect_rejects_tls_sni_different_from_allowed_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proxy = await ManagedNetworkProxy.open(
+        NetworkPolicy(enabled=True, allow_domains=("allowed.example",))
+    )
+
+    async def _public_address(host: str, port: int, request_id: str) -> str:
+        del host, port, request_id
+        return "93.184.216.34"
+
+    monkeypatch.setattr(proxy, "_resolve_allowed_address", _public_address)
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", proxy.port)
+        writer.write(_connect_request(host="allowed.example", port=443, request_id="sni-mismatch"))
+        await writer.drain()
+        assert (await reader.readuntil(b"\r\n\r\n")).startswith(b"HTTP/1.1 200")
+        writer.write(_client_hello("forbidden.example"))
+        await writer.drain()
+        assert await reader.read() == b""
+        violation = proxy.violations_for("sni-mismatch")[0]
+        assert violation.dimension == "network.tls_server_name"
+        assert violation.hard_deny is True
+        writer.close()
+        await writer.wait_closed()
+    finally:
+        await proxy.close()
+
+
+async def test_public_connect_rejects_a_non_tls_tunnel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proxy = await ManagedNetworkProxy.open(
+        NetworkPolicy(enabled=True, allow_domains=("allowed.example",))
+    )
+
+    async def _public_address(host: str, port: int, request_id: str) -> str:
+        del host, port, request_id
+        return "93.184.216.34"
+
+    monkeypatch.setattr(proxy, "_resolve_allowed_address", _public_address)
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", proxy.port)
+        writer.write(_connect_request(host="allowed.example", port=443, request_id="not-tls"))
+        await writer.drain()
+        assert (await reader.readuntil(b"\r\n\r\n")).startswith(b"HTTP/1.1 200")
+        writer.write(b"hello")
+        await writer.drain()
+        assert await reader.read() == b""
+        violation = proxy.violations_for("not-tls")[0]
+        assert violation.dimension == "network.tls_server_name"
+        assert violation.requested == "<missing-or-invalid>"
+        writer.close()
+        await writer.wait_closed()
+    finally:
+        await proxy.close()
+
+
+async def test_public_connect_forwards_only_after_tls_sni_matches_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proxy = await ManagedNetworkProxy.open(
+        NetworkPolicy(enabled=True, allow_domains=("allowed.example",))
+    )
+
+    async def _public_address(host: str, port: int, request_id: str) -> str:
+        del host, port, request_id
+        return "93.184.216.34"
+
+    monkeypatch.setattr(proxy, "_resolve_allowed_address", _public_address)
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", proxy.port)
+        writer.write(_connect_request(host="allowed.example", port=443, request_id="sni-match"))
+        await writer.drain()
+        assert (await reader.readuntil(b"\r\n\r\n")).startswith(b"HTTP/1.1 200")
+
+        upstream_reader = asyncio.StreamReader()
+        upstream_reader.feed_eof()
+        upstream_writer = _RecordingWriter()
+
+        async def _open_upstream(address: str, port: int) -> tuple[object, object]:
+            assert address == "93.184.216.34"
+            assert port == 443
+            return upstream_reader, upstream_writer
+
+        monkeypatch.setattr(
+            "openharness.execution.network_proxy.asyncio.open_connection",
+            _open_upstream,
+        )
+        hello = _client_hello("allowed.example")
+        writer.write(hello)
+        await writer.drain()
+        assert await reader.read() == b""
+
+        assert b"".join(upstream_writer.writes) == hello
+        assert upstream_writer.closed is True
+        assert proxy.violations_for("sni-match") == ()
+        writer.close()
+        await writer.wait_closed()
+    finally:
+        await proxy.close()
+
+
+class _RecordingWriter:
+    def __init__(self) -> None:
+        self.writes: list[bytes] = []
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        self.writes.append(data)
+
+    async def drain(self) -> None:
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        return None
 
 
 async def test_dns_failure_is_not_mislabeled_as_a_permission_violation(

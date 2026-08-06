@@ -11,8 +11,18 @@ from __future__ import annotations
 
 import pytest
 
-from openharness.execution import BoundaryVerification, EnforcedBoundary, ExecutionEffect
-from openharness.permissions import ExternalToolPolicy, RuntimePermissionProfile
+from openharness.execution import (
+    BoundaryVerification,
+    BoundaryViolation,
+    EnforcedBoundary,
+    ExecutionEffect,
+)
+from openharness.permissions import (
+    ExternalToolPolicy,
+    PermissionDelta,
+    PermissionDeltaRequest,
+    RuntimePermissionProfile,
+)
 from openharness.protocols.content import TextBlock, ToolResultBlock
 from openharness.protocols.messages import ConversationMessage
 from openharness.repl import (
@@ -245,3 +255,47 @@ class TestPermissionStatus:
         assert "canonical profile: not configured" in status
         assert "legacy mode: auto" in status
         assert "verified boundary: none" in status
+
+    def test_parked_request_is_visible_after_returning_to_the_session(self) -> None:
+        profile = RuntimePermissionProfile(name="workspace")
+        boundary = EnforcedBoundary(
+            profile_fingerprint=profile.fingerprint,
+            backend="seatbelt",
+            backend_version="1",
+            covered_effects=(ExecutionEffect.COMMAND,),
+            verification=BoundaryVerification.VERIFIED,
+            network_rules=("deny-all",),
+        )
+        request = PermissionDeltaRequest.create(
+            tool_use_id="tool-1",
+            tool_name="Bash",
+            final_arguments={"command": "uv sync"},
+            profile=profile,
+            boundary=boundary,
+            delta=PermissionDelta.network_domain("pypi.org"),
+            crossing=BoundaryViolation(
+                dimension="network.domain",
+                requested="pypi.org:443",
+                evidence="not allowed",
+            ),
+            data_sources=("sandbox-visible data",),
+            data_destinations=("pypi.org:443",),
+        )
+
+        status = format_permissions_status(
+            profile=profile,
+            external_policy=profile.external_tools,
+            boundary=boundary,
+            tool_domains={},
+            external_surfaces={},
+            mcp_server_postures={},
+            trusted_control_status={"hooks": "disabled", "plugins": "disabled"},
+            legacy_mode="default",
+            parked_request=request,
+        )
+
+        assert "Parked permission request" in status
+        assert request.request_id in status
+        assert 'final arguments: {"command":"uv sync"}' in status
+        assert "network_domain=pypi.org" in status
+        assert "sandbox-visible data -> pypi.org:443" in status

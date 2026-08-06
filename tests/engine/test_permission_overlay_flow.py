@@ -10,6 +10,7 @@ from openharness.engine.query import (
     _boundary_violation_metadata,
     _dataflow_for_violation,
     _delta_for_violation,
+    extract_authorization_context,
 )
 from openharness.execution import (
     BackendSupport,
@@ -194,7 +195,11 @@ async def test_boundary_review_installs_and_consumes_one_verified_overlay() -> N
         permission_runtime=runtime,
     )
 
-    events = [event async for event in run_query([], context)]
+    user_message = ConversationMessage(
+        role="user",
+        content=[TextBlock(text="Download this one public URL so we can inspect it locally.")],
+    )
+    events = [event async for event in run_query([user_message], context)]
 
     completed = next(event for event in events if isinstance(event, ToolExecutionCompletedEvent))
     assert completed.is_error is False
@@ -205,6 +210,11 @@ async def test_boundary_review_installs_and_consumes_one_verified_overlay() -> N
         "command": "curl https://example.com",
         "timeout_seconds": None,
     }
+    assert reviewer.calls[0].authorization_context == (
+        "Download this one public URL so we can inspect it locally.",
+    )
+    assert reviewer.calls[0].profile_facts == profile.normalized()
+    assert reviewer.calls[0].boundary_facts["network_rules"] == []
     assert len(backend.opened) == 1
     assert backend.opened[0].closed is True
     assert runtime.parked_request is None
@@ -499,9 +509,14 @@ def test_boundary_metadata_and_minimum_filesystem_deltas_are_typed() -> None:
     read = BoundaryViolation("filesystem.read", "/outside/in", "denied")
     search = BoundaryViolation("filesystem.search", "/outside", "denied")
     write = BoundaryViolation("filesystem.write", "/outside/out", "denied")
+    hard_write = BoundaryViolation(
+        "filesystem.write", "/workspace/.git/config", "denied", hard_deny=True
+    )
     assert _delta_for_violation(read).filesystem_access is PermissionFilesystemAccess.READ
     assert _delta_for_violation(search).filesystem_access is PermissionFilesystemAccess.SEARCH
     assert _delta_for_violation(write).filesystem_access is PermissionFilesystemAccess.WRITE
+    assert _delta_for_violation(hard_write).hard_deny is True
+    assert _delta_for_violation(BoundaryViolation("process.signal", "123", "denied")) is None
     assert _dataflow_for_violation(read) == (("/outside/in",), ("model context",))
     assert _dataflow_for_violation(write) == (
         ("final tool arguments",),
@@ -510,3 +525,29 @@ def test_boundary_metadata_and_minimum_filesystem_deltas_are_typed() -> None:
     assert _dataflow_for_violation(
         BoundaryViolation("network.domain", "example.com:443", "denied")
     ) == (("sandbox-visible data",), ("example.com:443",))
+
+
+def test_authorization_context_excludes_machine_generated_goal_turns() -> None:
+    messages = [
+        ConversationMessage(
+            role="user",
+            content=[TextBlock(text="Please update the dependency.")],
+        ),
+        ConversationMessage(
+            role="user",
+            content=[TextBlock(text="[goal-status] set: tests pass")],
+        ),
+        ConversationMessage(
+            role="user",
+            content=[TextBlock(text="[goal set] Work toward this goal now: tests pass")],
+        ),
+        ConversationMessage(
+            role="user",
+            content=[TextBlock(text="[goal checker] not met: run tests again")],
+        ),
+    ]
+
+    assert extract_authorization_context(messages) == (
+        "Please update the dependency.",
+        "[goal-status] set: tests pass",
+    )

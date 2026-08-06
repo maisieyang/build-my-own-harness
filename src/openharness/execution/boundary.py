@@ -50,10 +50,9 @@ class EnforcedBoundary:
     def covers(self, effect: ExecutionEffect) -> bool:
         return self.is_verified and effect in self.covered_effects
 
-    @property
-    def fingerprint(self) -> str:
-        """Stable identity of the facts the backend actually enforced."""
-        payload = {
+    def normalized(self) -> dict[str, object]:
+        """Return the complete, deterministic facts a resolver may inspect."""
+        return {
             "profile_fingerprint": self.profile_fingerprint,
             "backend": self.backend,
             "backend_version": self.backend_version,
@@ -65,6 +64,11 @@ class EnforcedBoundary:
             "process_rules": sorted(self.process_rules),
             "unsupported_features": sorted(self.unsupported_features),
         }
+
+    @property
+    def fingerprint(self) -> str:
+        """Stable identity of the facts the backend actually enforced."""
+        payload = self.normalized()
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()
 

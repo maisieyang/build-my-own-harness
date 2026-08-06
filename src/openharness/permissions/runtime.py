@@ -67,10 +67,12 @@ class PermissionDelta(_FrozenModel):
         path: str,
         *,
         access: PermissionFilesystemAccess = PermissionFilesystemAccess.WRITE,
+        hard_deny: bool = False,
     ) -> PermissionDelta:
         return cls(
             kind=PermissionDeltaKind.FILESYSTEM_PATH,
             value=path,
+            hard_deny=hard_deny,
             filesystem_access=access,
         )
 
@@ -87,8 +89,11 @@ class PermissionDeltaRequest(_FrozenModel):
     boundary_fingerprint: str
     backend: str
     backend_fingerprint: str
+    profile_facts: dict[str, Any]
+    boundary_facts: dict[str, Any]
     delta: PermissionDelta
     crossing: BoundaryViolation
+    authorization_context: tuple[str, ...] = ()
     data_sources: tuple[str, ...] = ()
     data_destinations: tuple[str, ...] = ()
 
@@ -99,6 +104,9 @@ class PermissionDeltaRequest(_FrozenModel):
             "profile_fingerprint": self.profile_fingerprint,
             "boundary_fingerprint": self.boundary_fingerprint,
             "backend_fingerprint": self.backend_fingerprint,
+            "authorization_context": list(self.authorization_context),
+            "profile_facts": self.profile_facts,
+            "boundary_facts": self.boundary_facts,
             "delta": self.delta.model_dump(mode="json"),
             "crossing": {
                 "dimension": self.crossing.dimension,
@@ -138,6 +146,7 @@ class PermissionDeltaRequest(_FrozenModel):
         crossing: BoundaryViolation,
         data_sources: tuple[str, ...] = (),
         data_destinations: tuple[str, ...] = (),
+        authorization_context: tuple[str, ...] = (),
     ) -> PermissionDeltaRequest:
         if not boundary.is_verified:
             raise ValueError("permission resolution requires a verified boundary")
@@ -156,6 +165,9 @@ class PermissionDeltaRequest(_FrozenModel):
             boundary_fingerprint=boundary.fingerprint,
             backend=boundary.backend,
             backend_fingerprint=boundary.backend_fingerprint,
+            authorization_context=tuple(authorization_context),
+            profile_facts=profile.normalized(),
+            boundary_facts=boundary.normalized(),
             delta=delta,
             crossing=crossing,
             data_sources=tuple(sorted(set(data_sources))),
@@ -285,7 +297,7 @@ class PermissionRuntime:
 
     async def resolve_external(self, request: PermissionDeltaRequest) -> PermissionResolution:
         self._validate_request(request)
-        if request.delta.hard_deny:
+        if request.delta.hard_deny or request.crossing.hard_deny:
             return PermissionResolution(
                 status=PermissionResolutionStatus.DENIED,
                 reason="hard deny cannot be reviewed",

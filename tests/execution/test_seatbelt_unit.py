@@ -260,6 +260,41 @@ async def test_worker_permission_payload_becomes_typed_boundary_violation(
     )
 
 
+async def test_worker_violation_preserves_profile_hard_deny(tmp_path: Path) -> None:
+    target = tmp_path / ".git" / "config"
+    payload = {
+        "output": "denied",
+        "is_error": True,
+        "metadata": {
+            "boundary_violation": {
+                "dimension": "filesystem.write",
+                "requested": str(target),
+                "evidence": "OS sandbox denied the filesystem operation",
+                "hard_deny": False,
+            }
+        },
+    }
+    process = AsyncMock()
+    process.returncode = 0
+    process.communicate.return_value = (json.dumps(payload).encode(), b"")
+    session = SeatbeltSession(
+        executable="/usr/bin/sandbox-exec",
+        profile_text="(version 1)\n(allow default)\n",
+        environment={},
+        boundary=_boundary(),
+        boundary_root=tmp_path,
+        hard_deny_rules=((FilesystemAccess.DENY_WRITE, tmp_path / ".git"),),
+    )
+    with patch(
+        "openharness.execution.seatbelt.asyncio.create_subprocess_exec",
+        AsyncMock(return_value=process),
+    ):
+        result = await session.execute(FileWriteOperation(target, "x"))
+
+    assert isinstance(result, BoundaryViolation)
+    assert result.hard_deny is True
+
+
 async def test_command_timeout_kills_process_group(tmp_path: Path) -> None:
     process = AsyncMock()
     process.pid = 123

@@ -158,11 +158,17 @@ class SandboxExecution:
 
     async def _spawn_container(self) -> Any:
         assert self._docker is not None
+        protected_names = (".git", ".codex", ".agents")
         protected_binds = [
             f"{path}:{_CONTAINER_CWD}/{name}:ro"
-            for name in (".git", ".codex", ".agents")
+            for name in protected_names
             if (path := self._cwd_host / name).exists()
         ]
+        protected_tmpfs = {
+            f"{_CONTAINER_CWD}/{name}": "ro,noexec,nosuid,nodev,size=4096"
+            for name in protected_names
+            if not (self._cwd_host / name).exists()
+        }
         config = {
             "Image": self._image,
             "User": f"{self._uid}:{self._gid}",
@@ -184,7 +190,10 @@ class SandboxExecution:
                 "ReadonlyRootfs": True,
                 "CapDrop": ["ALL"],
                 "SecurityOpt": ["no-new-privileges:true"],
-                "Tmpfs": {"/tmp": "rw,noexec,nosuid,nodev,size=67108864"},
+                "Tmpfs": {
+                    "/tmp": "rw,noexec,nosuid,nodev,size=67108864",
+                    **protected_tmpfs,
+                },
                 # P7c: OCI runtime — "runc" default, "runsc" for gVisor.
                 "Runtime": self._runtime,
                 # Don't bind-mount any host paths beyond cwd (D18.4)

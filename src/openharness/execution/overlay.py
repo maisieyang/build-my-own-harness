@@ -142,6 +142,8 @@ class OneShotOverlaySession:
             if (
                 not overlay.boundary.is_verified
                 or overlay.boundary.profile_fingerprint != overlay_profile.fingerprint
+                or overlay.boundary.backend_fingerprint != self.boundary.backend_fingerprint
+                or not overlay.boundary.covers(operation.required_effect)
             ):
                 raise RuntimeError("overlay boundary verification failed")
             return await overlay.execute(operation)
