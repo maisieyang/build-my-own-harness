@@ -25,11 +25,14 @@
 
 ## 安全承诺
 
-对于每一个模型可控副作用，必须且只能落入以下三种结果之一：
+对于每一个模型可控副作用，最终只能有三种结果：**在边界内执行、精确扩大一次
+边界，或者不执行。**
 
-1. 已验证 active runtime boundary 能强制约束该副作用；
-2. 一个精确的 permission delta 获得一次重试授权；
-3. 该副作用被拒绝，或 park 后等待人处理。
+1. **在边界内执行**：已经验证的 active runtime boundary 能强制约束这个副作用，
+   因此可以直接执行；
+2. **精确扩大一次边界**：只为当前动作所需的最小 permission delta 授权一次精确
+   重试，重试结束后授权失效；
+3. **不执行**：拒绝这个动作，或者将任务 park，等待人回来处理。
 
 不能存在未经分类、却以 harness 进程 ambient authority 执行的第四条路径。
 
@@ -41,6 +44,10 @@ for every effect in ModelControlledEffects:
     OR ApprovedOnce(effect, exact_delta)
     OR DeniedOrParked(effect)
 ```
+
+这条不变量不是为了保证模型永远不犯错，而是为了保证：模型犯错时，每一个真实副作用
+仍然有明确且不可绕过的授权来源。允许执行的理由只能是“运行时边界已经约束住它”，
+或者“这个精确例外获得了一次性授权”；否则就不执行。
 
 需要保护的资产包括：
 
