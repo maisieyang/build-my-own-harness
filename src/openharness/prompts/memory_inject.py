@@ -75,8 +75,8 @@ def format_memory_index_section(manifest: MemoryManifest) -> str | None:
 
     The content is wrapped in a ``\\`\\`\\`md`` fence so the LLM
     can distinguish the literal memory-index content from the
-    surrounding prompt markdown — same convention as CLAUDE.md
-    rendering in :mod:`prompts.claudemd`.
+    surrounding prompt markdown — the same convention used by project
+    instruction rendering.
     """
     content = manifest.entrypoint_content
     if content is None:
@@ -95,8 +95,8 @@ def format_relevant_memories_section(
 
     Each memory becomes a ``### <name> — <description>`` subsection
     followed by its body. Bodies larger than ``max_body_chars`` get
-    the ``\\n...[truncated]...\\n`` marker — same pattern as
-    :func:`load_claude_md_prompt` truncation.
+    the ``\\n...[truncated]...\\n`` marker — the same pattern used for
+    project-instruction truncation.
 
     Returns ``None`` when ``memories`` is empty (no relevance match,
     or memory store empty). Caller omits the section.

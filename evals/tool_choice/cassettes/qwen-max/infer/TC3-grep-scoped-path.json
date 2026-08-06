@@ -2,17 +2,17 @@
   "case_id": "TC3-grep-scoped-path",
   "model": "qwen-max",
   "kind": "infer",
-  "recorded_at": "2026-07-08T13:41:39.222843+00:00",
+  "recorded_at": "2026-08-06T10:39:31.222326+00:00",
   "request_summary": "TC3-grep-scoped-path: 只在 tests/ 目录下找 assert_called 出现的位置",
   "response": {
     "tool_uses": [
       {
-        "id": "call_728d3f4ce9fb417894b8c5",
+        "id": "call_4f812750603b49838d7e05",
         "name": "Grep",
         "input": {
           "pattern": "assert_called",
           "path": "tests/",
-          "glob": "**/*.py"
+          "hidden": false
         }
       }
     ],

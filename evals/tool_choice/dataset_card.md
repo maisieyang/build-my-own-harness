@@ -15,8 +15,8 @@
 - 整体 agentic 能力评估(它只是 #2 的一个 instance)
 
 **2. Input spec**:合成对话(单条用户消息为主;TC4 为种植错误历史的三消息
-形态)。N=8,覆盖 5 个 capability(TC1 selection / TC2 discrimination /
-TC3 param / TC4 self-correction / TC5 restraint)。population 来源:D41 §四
+形态)。N=9,覆盖 5 个 capability(TC1 selection / TC2 discrimination /
+TC3 param,含项目指令驱动的命令构造 / TC4 self-correction / TC5 restraint)。population 来源:D41 §四
 验收清单枚举 + 系统 prompt 契约 E#2(TC5)。后续扩量走 D41.6 飞轮
 (dogfood / SWE-bench records 归因失败沉 case),不凭想象批量编题。
 
@@ -39,7 +39,7 @@ TC3 param / TC4 self-correction / TC5 restraint)。population 来源:D41 §四
 |---|---|---|
 | TC1 selection | TC1-read-config · TC1-bash-run-tests | 任务 → 正确工具 |
 | TC2 discrimination | TC2-grep-not-bash · TC2-edit-not-write | 近义工具辨析(含破坏性误选 Write) |
-| TC3 param | TC3-grep-scoped-path · TC3-write-new-file | 用户约束 → input 字段构造 |
+| TC3 param | TC3-grep-scoped-path · TC3-write-new-file · TC3-project-test-command | 用户或项目指令约束 → input 字段构造 |
 | TC4 self-correction | TC4-unknown-tool-recovery | 种植 "tool not found" 错误后,第二格换真实工具、不重放 |
 | TC5 restraint | TC5-greeting-no-tool | 寒暄零工具(prompt 契约 E#2) |
 
@@ -65,9 +65,16 @@ brittleness 的同款教训)。四次失败一字不差(`make test`)证明是确
 过度指定,非采样噪声。处置:撤该 case 的 input 期望(它的 capability 是
 TC1 选择,tool_selection 维度已覆盖),记入 Known gaps。
 
-### Pass bar(ratify 2026-07-08,依 D41.5)
+### Project-instruction re-ratification (2026-08-06)
 
-- **Gate:参照模型 qwen-max 上 `cases all-dims-pass = 8/8`**。
+新增 `TC3-project-test-command`:system prompt 注入合成 `AGENTS.md` 指令，明确
+全量测试命令；用户只要求“跑全量测试”。参考模型 qwen-max live record 得到
+`Bash(command='uv run pytest -m "not integration" -q')`，三个确定性 scorer
+全部通过。全数据集 **9/9 all-dims-pass**，新 cassette 已录制并可 replay。
+
+### Pass bar(ratify 2026-08-06,依 D41.5)
+
+- **Gate:参照模型 qwen-max 上 `cases all-dims-pass = 9/9`**。
   依据:修正后全部 case 在 N=4 上零方差,bar 设满格有画像支撑。
 - **红灯处置纪律**:出现红先原样重跑 1 次——复现才算回归,单次红视为
   罕见采样噪声记录在案(防"狼来了的门",不弱化断言)。
@@ -75,10 +82,6 @@ TC1 选择,tool_selection 维度已覆盖),记入 Known gaps。
 
 ## Known gaps(forward)
 
-- **带项目上下文的参数构造**未覆盖:生产中模型有 CLAUDE.md
-  (`build_system_prompt(claude_md_content=...)`)告知测试命令等项目事实,
-  "按项目上下文构造参数"是真实能力面——需要 case 级注入 claude_md 的
-  新 case 形态(Day 1 finding 的正向修复方向)
 - SpawnAgent 的委派判断(何时该派子 agent)未覆盖——它与 #6 面交界,
   等 #6 触发条件(D41 P3)
 - 多工具并发选择(一条消息合法地需要两个 tool call)未覆盖

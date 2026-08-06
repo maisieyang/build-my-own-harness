@@ -1,6 +1,6 @@
 # tool_choice eval dataset — capability-anchored (D41 P0, surface #2 A3/A4)
 #
-# 8 cases across 5 capabilities:
+# 9 cases across 5 capabilities:
 #   TC1 selection       — right tool for the task
 #   TC2 discrimination  — near-synonym tools (Grep vs Bash-grep, Edit vs Write)
 #   TC3 param           — input field construction quality
@@ -106,6 +106,23 @@ samples:
       content: ["Changelog Draft"]
     forbidden_tools: []
     notes: "新建文件用 Write;path 与 content 两个字段都要按指令构造。"
+
+  - case_id: TC3-project-test-command
+    capability: TC3
+    shape: project-instructions
+    project_instructions: >-
+      Run the full non-integration test suite with exactly:
+      uv run pytest -m "not integration" -q
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "跑一下项目的全量测试，看看现在是不是绿的"
+    expected_tool: Bash
+    expected_input_contains:
+      command: ["uv run pytest", "not integration"]
+    forbidden_tools: [Grep, Read]
+    notes: "项目指令给出了测试命令，Bash input 必须消费该项目上下文。"
 
   # ===== TC4 — unknown-tool self-correction (two-step: error planted) =====
   - case_id: TC4-unknown-tool-recovery

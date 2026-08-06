@@ -131,25 +131,25 @@ class TestWebEnabled:
         )
 
 
-class TestClaudeMdContent:
+class TestProjectInstructionsContent:
     def test_omitted_no_section(self, tools: list[ToolSpec], env: EnvironmentInfo) -> None:
         prompt = build_system_prompt(tools, env)
         assert "## Project Instructions" not in prompt
 
     def test_none_no_section(self, tools: list[ToolSpec], env: EnvironmentInfo) -> None:
-        prompt = build_system_prompt(tools, env, claude_md_content=None)
+        prompt = build_system_prompt(tools, env, project_instructions_content=None)
         assert "## Project Instructions" not in prompt
 
     def test_present_adds_section(self, tools: list[ToolSpec], env: EnvironmentInfo) -> None:
-        content = "## Project Instructions\n\n### /path/CLAUDE.md\n\n```md\nrules\n```"
-        prompt = build_system_prompt(tools, env, claude_md_content=content)
+        content = "## Project Instructions\n\n### /path/AGENTS.md\n\n```md\nrules\n```"
+        prompt = build_system_prompt(tools, env, project_instructions_content=content)
         assert content in prompt
 
     def test_section_comes_after_environment(
         self, tools: list[ToolSpec], env: EnvironmentInfo
     ) -> None:
-        content = "## Project Instructions\n\n### /p/CLAUDE.md\n\n```md\nrules\n```"
-        prompt = build_system_prompt(tools, env, claude_md_content=content)
+        content = "## Project Instructions\n\n### /p/AGENTS.md\n\n```md\nrules\n```"
+        prompt = build_system_prompt(tools, env, project_instructions_content=content)
         env_idx = prompt.index("## Environment")
         proj_idx = prompt.index("## Project Instructions")
         assert env_idx < proj_idx

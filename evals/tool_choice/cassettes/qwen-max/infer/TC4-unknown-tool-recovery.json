@@ -2,21 +2,20 @@
   "case_id": "TC4-unknown-tool-recovery",
   "model": "qwen-max",
   "kind": "infer",
-  "recorded_at": "2026-07-08T13:41:41.975883+00:00",
+  "recorded_at": "2026-08-06T10:39:36.223200+00:00",
   "request_summary": "TC4-unknown-tool-recovery: 找出仓库里所有 TODO 注释",
   "response": {
     "tool_uses": [
       {
-        "id": "call_366030f3ca1142ddbe2bae",
+        "id": "call_f4a1e3f059844145bae307",
         "name": "Grep",
         "input": {
           "pattern": "TODO",
-          "ignore_case": true,
           "hidden": false
         }
       }
     ],
-    "text": "",
+    "text": "看起来我尝试使用了一个无效的工具命令。让我改用正确的`Grep`工具来搜索包含\"TODO\"的所有文件。",
     "stop_reason": "tool_use"
   }
 }

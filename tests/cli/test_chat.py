@@ -92,6 +92,38 @@ class TestChatExit:
         result = runner.invoke(cli_module.app, ["chat"])
         assert result.exit_code == 0
 
+    def test_project_instructions_load_when_memory_is_disabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from pathlib import Path
+
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
+        (Path.cwd() / "AGENTS.md").write_text("Project-owned rules.\n", encoding="utf-8")
+        prompts: list[str] = []
+
+        async def _capture_prompt(
+            initial_messages: list[ConversationMessage], context: object
+        ) -> AsyncIterator[ApiStreamEvent]:
+            prompts.append(context.system_prompt)  # type: ignore[attr-defined]
+            assistant = ConversationMessage(role="assistant", content=[TextBlock(text="ok")])
+            yield ApiMessageCompleteEvent(
+                message=assistant,
+                usage=UsageSnapshot(input_tokens=1, output_tokens=1),
+                stop_reason="end_turn",
+            )
+            yield ConversationCompleteEvent(messages=[*initial_messages, assistant])
+
+        monkeypatch.setattr(cli_module, "run_query", _capture_prompt)
+        _stub_input_sequence(monkeypatch, ["hello", "/exit"])
+
+        result = CliRunner().invoke(cli_module.app, ["chat", "--no-enable-memory"])
+
+        assert result.exit_code == 0, result.stderr
+        assert len(prompts) == 1
+        assert "Project-owned rules." in prompts[0]
+        assert "## Memory" not in prompts[0]
+
     def test_quit_command(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_minimum_env(monkeypatch)
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())

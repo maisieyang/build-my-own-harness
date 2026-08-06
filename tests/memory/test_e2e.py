@@ -181,10 +181,15 @@ class TestMemoryE2E:
     # module-level functions.
 
     def test_disable_memory_flag_skips_injection(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # --no-enable-memory makes the prompt byte-identical to pre-
-        # Phase-10 layout. Verify the memory dir wasn't even touched.
+        # Project instructions and durable memory are independent layers.
         captured = _seed_env_and_stub(monkeypatch)
         path = _seed_stripe_memory()
+        from pathlib import Path
+
+        (Path.cwd() / "AGENTS.md").write_text(
+            "Run project tests with uv.\n",
+            encoding="utf-8",
+        )
 
         runner = CliRunner()
         result = runner.invoke(
@@ -197,7 +202,8 @@ class TestMemoryE2E:
         # No memory-related section
         assert "## Relevant Memories" not in prompt
         assert "## Memory" not in prompt
-        assert "## Project Instructions" not in prompt
+        assert "## Project Instructions" in prompt
+        assert "Run project tests with uv." in prompt
         # use_count untouched — store wasn't even scanned
         reparsed = parse_memory(path)
         assert reparsed is not None
@@ -232,6 +238,6 @@ class TestMemoryE2E:
 
         assert result.exit_code == 0
         prompt = captured.context.system_prompt  # type: ignore[attr-defined]
-        # CLAUDE.md cascade injection
+        # CLAUDE.md is one supported project-instruction format.
         assert "## Project Instructions" in prompt
         assert "Use uv, not pip" in prompt

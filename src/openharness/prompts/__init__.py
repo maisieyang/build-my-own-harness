@@ -1,7 +1,7 @@
 """System prompt assembly + environment detection.
 
 Restructured from ``prompts.py`` (module) → ``prompts/`` (package) in
-**P10-T4.4a** so additional concerns (CLAUDE.md cascade in 4b, memory
+**P10-T4.4a** so additional concerns (project instructions, memory
 injection formatters in 4c) can live as sibling modules without
 bloating a single file. The public API is unchanged: callers that
 imported ``from openharness.prompts import X`` get the exact same
@@ -12,8 +12,10 @@ Modules:
 - :mod:`openharness.prompts.system` — :func:`build_system_prompt` +
   :class:`EnvironmentInfo` + :func:`detect_environment` (the original
   ``prompts.py`` content, byte-exact behavior).
-- :mod:`openharness.prompts.claudemd` (P10-T4.4b) — CLAUDE.md cascade
-  discovery + loading.
+- :mod:`openharness.prompts.project_instructions` — bounded AGENTS.md and
+  CLAUDE.md discovery for the target workspace.
+- :mod:`openharness.prompts.claudemd` — compatibility wrappers for the former
+  CLAUDE.md-only API.
 - :mod:`openharness.prompts.memory_inject` (P10-T4.4c) — memory
   manifest + relevant-memories section formatters.
 
@@ -34,6 +36,10 @@ from openharness.prompts.memory_inject import (
     format_memory_index_section,
     format_relevant_memories_section,
 )
+from openharness.prompts.project_instructions import (
+    discover_project_instruction_files,
+    load_project_instructions,
+)
 from openharness.prompts.system import (
     PLAN_MODE_PROMPT_SECTION,
     EnvironmentInfo,
@@ -48,7 +54,9 @@ __all__ = [
     "build_system_prompt",
     "detect_environment",
     "discover_claude_md_files",
+    "discover_project_instruction_files",
     "format_memory_index_section",
     "format_relevant_memories_section",
     "load_claude_md_prompt",
+    "load_project_instructions",
 ]

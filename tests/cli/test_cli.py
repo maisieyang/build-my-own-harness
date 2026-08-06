@@ -1424,6 +1424,10 @@ class TestBundles:
             deny_paths=["secrets/**"],
             hooks=["audit_log", "deny_writes"],
         )
+        (project / "AGENTS.md").write_text(
+            "Follow the target project's review policy.\n",
+            encoding="utf-8",
+        )
 
         stub = _RecordingStubClient(_hello_world_events())
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
@@ -1434,9 +1438,11 @@ class TestBundles:
         result = runner.invoke(cli_module.app, ["ask", "/review the diff"])
         assert result.exit_code == 0, result.stderr
         ctx = captured.context
-        # Layer 1: system_prompt replaced. YAML ``|`` block scalar
-        # preserves a trailing newline — strip for the assertion.
-        assert ctx.system_prompt.rstrip() == "You are a code reviewer. Read-only."  # type: ignore[attr-defined]
+        # Layer 1: the bundle replaces the harness-owned base prompt while the
+        # target-project instruction layer remains present.
+        assert ctx.system_prompt.startswith("You are a code reviewer. Read-only.")  # type: ignore[attr-defined]
+        assert "## Project Instructions" in ctx.system_prompt  # type: ignore[attr-defined]
+        assert "Follow the target project's review policy." in ctx.system_prompt  # type: ignore[attr-defined]
         # Layer 2: tool_registry is the whitelist wrapper; only Read+Grep visible.
         assert isinstance(ctx.tool_registry, WhitelistRegistry)  # type: ignore[attr-defined]
         names = sorted(t.name for t in ctx.tool_registry.list_tools())  # type: ignore[attr-defined]

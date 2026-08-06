@@ -46,6 +46,7 @@ def make_sample(
     expected_tool: str | None = "Grep",
     expected_input_contains: dict[str, list[str]] | None = None,
     forbidden_tools: tuple[str, ...] = (),
+    project_instructions: str | None = None,
 ) -> ToolChoiceSample:
     return ToolChoiceSample(
         case_id="synthetic",
@@ -57,6 +58,7 @@ def make_sample(
         expected_tool=expected_tool,
         expected_input_contains=expected_input_contains or {},
         forbidden_tools=forbidden_tools,
+        project_instructions=project_instructions,
         notes="",
     )
 
@@ -70,11 +72,14 @@ def grep_call(pattern: str = "summarize", **extra: str) -> ToolUseBlock:
 
 
 class TestLoadDataset:
-    def test_loads_eight_samples_with_planted_error_case(self) -> None:
+    def test_loads_nine_samples_with_project_context_and_planted_error(self) -> None:
         samples = load_tool_choice_dataset(DATASET_PATH)
 
-        assert len(samples) == 8
+        assert len(samples) == 9
         by_id = {s.case_id: s for s in samples}
+        project_context = by_id["TC3-project-test-command"]
+        assert project_context.expected_tool == "Bash"
+        assert "uv run pytest" in (project_context.project_instructions or "")
         planted = by_id["TC4-unknown-tool-recovery"]
         assert planted.expected_tool == "Grep"
         assert "Search" in planted.forbidden_tools
@@ -195,6 +200,22 @@ class TestInferToolChoice:
         # no local-machine leakage in the eval system prompt (D40.3 hygiene)
         assert "/Users/" not in request.system
         assert output.tool_uses[0].name == "Grep"
+
+    async def test_project_instructions_are_injected_for_the_case(self) -> None:
+        client = FakeApiClient(
+            [ToolUseBlock(id="c1", name="Bash", input={"command": "uv run pytest -q"})]
+        )
+        sample = make_sample(
+            expected_tool="Bash",
+            project_instructions="Run tests with uv run pytest -q.",
+        )
+
+        await infer_tool_choice(sample=sample, api_client=client, model="qwen-max")
+
+        system = client.requests[0].system
+        assert system is not None
+        assert "## Project Instructions" in system
+        assert "Run tests with uv run pytest -q." in system
 
     async def test_planted_history_passed_through_verbatim(self) -> None:
         client = FakeApiClient([grep_call("TODO")])

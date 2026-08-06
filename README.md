@@ -299,6 +299,16 @@ already running under Seatbelt: macOS does not allow nested `sandbox-exec`
 boundaries. Inside the REPL, use `/permissions` to confirm that the installed
 boundary reports `macos-seatbelt sandbox-exec (verified)`.
 
+### Project instructions
+
+OpenHarness owns the loading mechanism; the project where `oh` is started owns
+the instructions. At session startup, the harness reads `AGENTS.md`,
+`CLAUDE.md`, `.claude/CLAUDE.md`, and sorted `.claude/rules/*.md` files inside
+that workspace and injects them under `## Project Instructions`. It never reads
+instruction files from the OpenHarness installation directory, filesystem
+ancestors, or a user-global fallback. Project instructions remain enabled when
+durable memory is disabled.
+
 ## Command map
 
 | Command | Purpose |

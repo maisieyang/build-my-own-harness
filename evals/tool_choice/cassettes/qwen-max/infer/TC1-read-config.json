@@ -2,12 +2,12 @@
   "case_id": "TC1-read-config",
   "model": "qwen-max",
   "kind": "infer",
-  "recorded_at": "2026-07-08T13:41:34.994085+00:00",
+  "recorded_at": "2026-08-06T10:39:24.924834+00:00",
   "request_summary": "TC1-read-config: 帮我看一下 pyproject.toml 里要求的 Python 最低版本是多少",
   "response": {
     "tool_uses": [
       {
-        "id": "call_e171c98d76584dae8073cd",
+        "id": "call_b738228dc6794f959c2eb3",
         "name": "Read",
         "input": {
           "path": "pyproject.toml"

@@ -6,7 +6,7 @@ this module exposes one public function with a stable signature that later
 phases extend without renaming. Phase 3 injected personalization; Phase 5c
 added the Skills catalog; **Phase 10 (P10-T4.4d) adds two new keyword
 arguments — ``claude_md_content`` and ``memory_manifest`` — for the
-CLAUDE.md cascade and durable-memory injection**. All extensions land as
+project instructions and durable-memory injection**. All extensions land as
 additional optional kwargs that default to ``None``, preserving
 byte-identical output for callers that don't opt in.
 
@@ -113,6 +113,7 @@ def build_system_prompt(
     env: EnvironmentInfo,
     *,
     skill_store: SkillStore | None = None,
+    project_instructions_content: str | None = None,
     claude_md_content: str | None = None,
     memory_manifest: MemoryManifest | None = None,
     memory_dir: Path | None = None,
@@ -126,10 +127,8 @@ def build_system_prompt(
     by changing the call surface. P5c-T3 added ``skill_store`` keyword-
     only. **P10-T4.4d (D28.6)** adds two more, **P14-T4 (D29.6)** adds one:
 
-    - ``claude_md_content``: pre-rendered output of
-      :func:`openharness.prompts.claudemd.load_claude_md_prompt`. When
-      ``None`` (or empty after the load returns ``None``), no
-      ``## Project Instructions`` section is emitted.
+    - ``project_instructions_content``: pre-rendered target-project
+      instructions. ``claude_md_content`` remains as a compatibility alias.
     - ``memory_manifest``: a :class:`MemoryManifest` carrying the
       MEMORY.md entrypoint + relevance-scored bodies. Each contributes
       its own section (``## Memory`` and ``## Relevant Memories``); both
@@ -169,7 +168,7 @@ def build_system_prompt(
     2. ``## Tools``
     3. ``## Available Skills`` (if skill_store present + non-empty)
     4. ``## Environment``
-    5. ``## Project Instructions`` (if claude_md_content present)
+    5. ``## Project Instructions`` (if project instructions are present)
     6. ``## Memory`` — NEW combined (D36.10) when ``memory_dir`` set,
        LEGACY ``## Memory`` + ``## Relevant Memories`` (D28.6) otherwise
     7. ``## Web Access`` or ``## No Internet Access``
@@ -184,7 +183,7 @@ def build_system_prompt(
     The new memory sections come AFTER Environment because the
     LLM's attention-recency bias should land on the most query-specific
     context (memory) closer to the user message, while project-stable
-    context (CLAUDE.md) sits between Environment and Memory for the
+    project context sits between Environment and Memory for the
     same reason.
     """
     sections = [
@@ -196,8 +195,13 @@ def build_system_prompt(
         if skills_section is not None:
             sections.append(skills_section)
     sections.append(_format_environment_section(env))
-    if claude_md_content is not None:
-        sections.append(claude_md_content)
+    if project_instructions_content is not None and claude_md_content is not None:
+        raise ValueError(
+            "project_instructions_content and claude_md_content are mutually exclusive"
+        )
+    instruction_content = project_instructions_content or claude_md_content
+    if instruction_content is not None:
+        sections.append(instruction_content)
     if memory_dir is not None:
         # P16-T1 (D36.10/D36.11): CC-style combined ## Memory section
         # (rules + index). When memory_dir is set, memory_manifest is
