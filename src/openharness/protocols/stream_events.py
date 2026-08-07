@@ -118,13 +118,14 @@ class PermissionParkedEvent(StrictModel):
     delta_kind: str
     delta_value: str
     profile_fingerprint: str
-    boundary_fingerprint: str
-    backend: str
-    backend_fingerprint: str
+    enforcement: dict[str, Any] = Field(default_factory=dict)
+    boundary_fingerprint: str | None = None
+    backend: str | None = None
+    backend_fingerprint: str | None = None
     final_arguments: dict[str, Any]
     data_sources: tuple[str, ...]
     data_destinations: tuple[str, ...]
-    boundary_facts: dict[str, Any]
+    boundary_facts: dict[str, Any] | None = None
     reason: str
     messages: list[ConversationMessage]
 

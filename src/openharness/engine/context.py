@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from openharness.api import SupportsStreamingMessages
     from openharness.execution import EnforcedBoundary, ExecutionEnvironment, SandboxSession
     from openharness.permissions import (
+        ActionDenyPolicy,
         PermissionChecker,
         PermissionRuntime,
         RuntimePermissionProfile,
@@ -62,6 +63,9 @@ class QueryContext:
     model: str
     max_tokens: int = 8192
     max_turns: int = 20
+    # G1/S1 deny-only semantic guard. While this remains a shadow, the legacy
+    # checker remains the production authority.
+    action_deny_policy: ActionDenyPolicy | None = None
     permission_mode: PermissionMode = field(default=PermissionMode.DEFAULT)
     # Independent from the local filesystem/process boundary. External calls
     # remain governed even when the session intentionally has no sandbox.
@@ -160,6 +164,7 @@ class QueryContext:
         tool_registry: ToolRegistry,
         permission_checker: PermissionChecker,
         cwd: Path,
+        action_deny_policy: ActionDenyPolicy | None = None,
         hook_registry: HookRegistry | None = None,
         execution_env: ExecutionEnvironment | None = None,
         sandbox_session: SandboxSession | None = None,
@@ -234,7 +239,7 @@ class QueryContext:
         if runtime_state is not None:
             if permission_runtime is None:
                 raise ValueError(
-                    "snapshot contains permission runtime state but no verified runtime was provided"
+                    "snapshot contains permission runtime state but no current runtime was provided"
                 )
             from openharness.permissions import PermissionRuntime as _PermissionRuntime
 
@@ -250,6 +255,7 @@ class QueryContext:
             api_client=api_client,
             tool_registry=tool_registry,
             permission_checker=permission_checker,
+            action_deny_policy=action_deny_policy,
             system_prompt=system_prompt,
             cwd=cwd,
             model=model,

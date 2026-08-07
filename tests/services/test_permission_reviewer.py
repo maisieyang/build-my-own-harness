@@ -9,6 +9,7 @@ from openharness.execution import (
     ExecutionEffect,
 )
 from openharness.permissions import (
+    ExternalToolPolicy,
     PermissionDelta,
     PermissionDeltaRequest,
     PermissionReviewDecision,
@@ -85,11 +86,47 @@ async def test_reviewer_receives_exact_structured_envelope() -> None:
     assert "https://example.com/private" in sent
     assert _request().arguments_fingerprint in sent
     assert _request().boundary_fingerprint in sent
+    assert '"kind":"local_boundary"' in sent
     assert "Inspect the public example.com page, but do not publish." in sent
     assert '"filesystem_rules":["deny_write:/workspace/.git","write:/workspace"]' in sent
     assert '"network_rules":["deny-all"]' in sent
     assert '"name":"workspace"' in sent
     assert client.last_request.tools == []
+
+
+async def test_reviewer_receives_external_policy_evidence_without_fake_boundary() -> None:
+    profile = workspace_runtime_profile().model_copy(
+        update={"external_tools": ExternalToolPolicy(mcp="ask")}
+    )
+    request = PermissionDeltaRequest.create_external(
+        tool_use_id="tool-external",
+        tool_name="Github.create_issue",
+        final_arguments={"title": "exact issue"},
+        profile=profile,
+        policy=profile.external_tools,
+        surface="mcp",
+        effect_kind="mutating",
+        trust_source="trusted-server",
+        tool_identity="Github.create_issue",
+        server_identity="Github",
+        delta=PermissionDelta.external_tool("mcp"),
+        crossing=BoundaryViolation(
+            dimension="external.mcp",
+            requested="Github.create_issue",
+            evidence="mutating external effect",
+        ),
+    )
+    client = _Client('{"decision":"defer","reason":"needs owner"}')
+
+    await LlmPermissionReviewer(api_client=client, model="qwen-plus").review(request)
+
+    assert client.last_request is not None
+    sent = client.last_request.messages[0].content[0].text
+    assert '"kind":"external_policy"' in sent
+    assert '"surface":"mcp"' in sent
+    assert '"effect_kind":"mutating"' in sent
+    assert '"server_identity":"Github"' in sent
+    assert "boundary_fingerprint" not in sent
 
 
 async def test_invalid_or_failed_review_defers_fail_closed() -> None:

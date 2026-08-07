@@ -127,6 +127,7 @@ from openharness.observability.logging import (
     get_logger,
 )
 from openharness.permissions import (
+    ConfiguredActionDenyPolicy,
     ExternalToolPolicy,
     NetworkPolicy,
     PermissionMode,
@@ -969,7 +970,7 @@ async def _run_ask(
         # local core tools prefer ``sandbox_session``; the legacy execution
         # environment remains host only as an inactive compatibility field.
         execution_env: ExecutionEnvironment = _HOST_EXECUTION
-        active_profile: RuntimePermissionProfile | None = None
+        active_profile = _sandbox_profile(sandbox_config)
         sandbox_session: SandboxSession | None = None
         if sandbox_enabled:
             active_profile, sandbox_session = await _open_sandbox_session(
@@ -986,14 +987,10 @@ async def _run_ask(
             if permission_mode is PermissionMode.AUTO and settings.permission_auto_review
             else None
         )
-        permission_runtime = (
-            PermissionRuntime(
-                profile=active_profile,
-                boundary=sandbox_session.boundary,
-                reviewer=permission_reviewer,
-            )
-            if active_profile is not None and sandbox_session is not None
-            else None
+        permission_runtime = PermissionRuntime(
+            profile=active_profile,
+            boundary=sandbox_session.boundary if sandbox_session is not None else None,
+            reviewer=permission_reviewer,
         )
 
         context = QueryContext(
@@ -1012,6 +1009,7 @@ async def _run_ask(
             permission_checker=TierBasedPermissionChecker(
                 effective_registry, effective_settings, headless=print_mode
             ),
+            action_deny_policy=ConfiguredActionDenyPolicy(effective_settings),
             hook_registry=effective_hook_registry,
             system_prompt=system_prompt,
             cwd=env.cwd,
@@ -1087,6 +1085,7 @@ async def _run_ask(
                     api_client=client,
                     tool_registry=effective_registry,
                     permission_checker=context.permission_checker,
+                    action_deny_policy=context.action_deny_policy,
                     cwd=env.cwd,
                     hook_registry=effective_hook_registry,
                     execution_env=execution_env,
@@ -1490,7 +1489,7 @@ async def _run_chat(
             )
 
         execution_env: ExecutionEnvironment = _HOST_EXECUTION
-        active_profile: RuntimePermissionProfile | None = None
+        active_profile = _sandbox_profile(sandbox_config)
         sandbox_session: SandboxSession | None = None
         if sandbox_config.enabled:
             active_profile, sandbox_session = await _open_sandbox_session(
@@ -1507,14 +1506,10 @@ async def _run_chat(
             if permission_mode is PermissionMode.AUTO and settings.permission_auto_review
             else None
         )
-        permission_runtime = (
-            PermissionRuntime(
-                profile=active_profile,
-                boundary=sandbox_session.boundary,
-                reviewer=permission_reviewer,
-            )
-            if active_profile is not None and sandbox_session is not None
-            else None
+        permission_runtime = PermissionRuntime(
+            profile=active_profile,
+            boundary=sandbox_session.boundary if sandbox_session is not None else None,
+            reviewer=permission_reviewer,
         )
 
         # ``command_store`` is reused per-turn for user-authored
@@ -1588,13 +1583,6 @@ async def _run_chat(
                 extra = snapshot.get("extra", {})
                 runtime_state = extra.get("permission_runtime") if isinstance(extra, dict) else None
                 if runtime_state is not None:
-                    if permission_runtime is None:
-                        typer.echo(
-                            "Cannot resume: snapshot has permission state but no verified "
-                            "sandbox boundary is active.",
-                            err=True,
-                        )
-                        raise typer.Exit(code=1)
                     try:
                         permission_runtime = PermissionRuntime.from_state(
                             profile=permission_runtime.profile,
@@ -1797,16 +1785,12 @@ async def _run_chat(
                             ),
                         },
                         legacy_mode=permission_mode.value,
-                        parked_request=(
-                            permission_runtime.parked_request
-                            if permission_runtime is not None
-                            else None
-                        ),
+                        parked_request=permission_runtime.parked_request,
                     )
                 )
                 continue
             if user_input == "/approve" or user_input.startswith("/approve "):
-                if permission_runtime is None or permission_runtime.parked_request is None:
+                if permission_runtime.parked_request is None:
                     typer.echo("(no parked permission request)")
                     continue
                 supplied_id = user_input.removeprefix("/approve").strip()
@@ -1821,7 +1805,7 @@ async def _run_chat(
                 typer.echo(f"(approved exact request {request_id[:12]}; use /resume)")
                 continue
             if user_input == "/deny" or user_input.startswith("/deny "):
-                if permission_runtime is None or permission_runtime.parked_request is None:
+                if permission_runtime.parked_request is None:
                     typer.echo("(no parked permission request)")
                     continue
                 supplied_id = user_input.removeprefix("/deny").strip()
@@ -1836,9 +1820,6 @@ async def _run_chat(
                 typer.echo(f"(denied exact request {request_id[:12]}; use /resume)")
                 continue
             if user_input == "/resume":
-                if permission_runtime is None:
-                    typer.echo("(no permission decision to resume)")
-                    continue
                 try:
                     transition = permission_runtime.resume_decided()
                 except ValueError:
@@ -2137,6 +2118,7 @@ async def _run_chat(
                 api_client=client,
                 tool_registry=effective_registry,
                 permission_checker=TierBasedPermissionChecker(effective_registry, turn_settings),
+                action_deny_policy=ConfiguredActionDenyPolicy(turn_settings),
                 hook_registry=effective_hook_registry,
                 system_prompt=turn_system_prompt,
                 cwd=env.cwd,

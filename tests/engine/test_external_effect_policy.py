@@ -17,9 +17,11 @@ from openharness.execution import (
 )
 from openharness.hooks import HookContext, HookRegistry, HookResult
 from openharness.permissions import (
+    ExternalPolicyEvidence,
     ExternalToolMode,
     ExternalToolPolicy,
     PermissionDeltaRequest,
+    PermissionMode,
     PermissionReviewVerdict,
     PermissionRuntime,
     RuntimePermissionProfile,
@@ -305,6 +307,118 @@ async def test_ask_uses_reviewer_for_exact_call_and_executes_once() -> None:
     assert tool.executed is True
     assert len(reviewer.calls) == 1
     assert reviewer.calls[0].final_arguments == {"value": "x"}
+
+
+async def test_no_sandbox_external_ask_uses_same_exact_runtime() -> None:
+    tool = _ExternalTool()
+    registry = ToolRegistry()
+    registry.register(tool)
+    reviewer = _Reviewer(PermissionReviewVerdict.approve("allow exact external call"))
+    profile = workspace_runtime_profile().model_copy(
+        update={"external_tools": ExternalToolPolicy(mcp="ask")}
+    )
+    runtime = PermissionRuntime(profile=profile, boundary=None, reviewer=reviewer)
+    context = QueryContext(
+        api_client=cast(
+            "OpenAICompatibleApiClient",
+            _StubApiClient(events_per_turn=[[_tool_turn()], [_end_turn()]]),
+        ),
+        tool_registry=registry,
+        permission_checker=_AllowAllChecker(),
+        system_prompt="test",
+        cwd=Path("/tmp"),
+        model="qwen-plus",
+        external_tool_policy=profile.external_tools,
+        runtime_permission_profile=profile,
+        permission_runtime=runtime,
+    )
+
+    events = [event async for event in run_query([], context)]
+
+    completed = next(event for event in events if isinstance(event, ToolExecutionCompletedEvent))
+    assert completed.is_error is False
+    assert tool.executed is True
+    assert len(reviewer.calls) == 1
+    assert isinstance(reviewer.calls[0].enforcement, ExternalPolicyEvidence)
+
+
+async def test_no_sandbox_external_defer_emits_typed_park() -> None:
+    tool = _ExternalTool()
+    registry = ToolRegistry()
+    registry.register(tool)
+    reviewer = _Reviewer(PermissionReviewVerdict.defer("human must decide"))
+    profile = workspace_runtime_profile().model_copy(
+        update={"external_tools": ExternalToolPolicy(mcp="ask")}
+    )
+    runtime = PermissionRuntime(profile=profile, boundary=None, reviewer=reviewer)
+    context = QueryContext(
+        api_client=cast(
+            "OpenAICompatibleApiClient",
+            _StubApiClient(events_per_turn=[[_tool_turn()], [_end_turn()]]),
+        ),
+        tool_registry=registry,
+        permission_checker=_AllowAllChecker(),
+        system_prompt="test",
+        cwd=Path("/tmp"),
+        model="qwen-plus",
+        external_tool_policy=profile.external_tools,
+        runtime_permission_profile=profile,
+        permission_runtime=runtime,
+    )
+
+    events = [event async for event in run_query([], context)]
+
+    parked = next(event for event in events if isinstance(event, PermissionParkedEvent))
+    assert parked.enforcement["kind"] == "external_policy"
+    assert parked.boundary_fingerprint is None
+    assert parked.backend is None
+    assert tool.executed is False
+
+
+async def test_manual_and_auto_review_receive_byte_equivalent_external_request() -> None:
+    profile = workspace_runtime_profile().model_copy(
+        update={"external_tools": ExternalToolPolicy(mcp="ask")}
+    )
+
+    async def run_once(
+        *,
+        mode: PermissionMode,
+        runtime: PermissionRuntime,
+    ) -> None:
+        registry = ToolRegistry()
+        registry.register(_ExternalTool())
+        context = QueryContext(
+            api_client=cast(
+                "OpenAICompatibleApiClient",
+                _StubApiClient(events_per_turn=[[_tool_turn()], [_end_turn()]]),
+            ),
+            tool_registry=registry,
+            permission_checker=_AllowAllChecker(),
+            system_prompt="test",
+            cwd=Path("/tmp"),
+            model="qwen-plus",
+            permission_mode=mode,
+            external_tool_policy=profile.external_tools,
+            runtime_permission_profile=profile,
+            permission_runtime=runtime,
+            authorization_context=("Create the one requested issue.",),
+        )
+        async for _ in run_query([], context):
+            pass
+
+    manual = PermissionRuntime(profile=profile, boundary=None)
+    reviewer = _Reviewer(PermissionReviewVerdict.defer("human must decide"))
+    automatic = PermissionRuntime(profile=profile, boundary=None, reviewer=reviewer)
+
+    await run_once(mode=PermissionMode.DEFAULT, runtime=manual)
+    await run_once(mode=PermissionMode.AUTO, runtime=automatic)
+
+    assert manual.parked_request is not None
+    assert reviewer.calls == [automatic.parked_request]
+    assert automatic.parked_request is not None
+    assert manual.parked_request.model_dump(mode="json") == automatic.parked_request.model_dump(
+        mode="json"
+    )
 
 
 async def test_hook_modified_final_arguments_are_what_external_reviewer_authorizes() -> None:

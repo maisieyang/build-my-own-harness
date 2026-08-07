@@ -23,6 +23,12 @@ Public API:
 
 from __future__ import annotations
 
+from openharness.permissions.action_policy import (
+    ActionDenyKind,
+    ActionDenyPolicy,
+    ConfiguredActionDenyPolicy,
+    DenyResult,
+)
 from openharness.permissions.checker import (
     Decision,
     DecisionResult,
@@ -52,9 +58,13 @@ from openharness.permissions.rules import (
     plan_mode_preset,
 )
 from openharness.permissions.runtime import (
+    ExternalPolicyEvidence,
+    LocalBoundaryEvidence,
     PermissionDelta,
     PermissionDeltaKind,
     PermissionDeltaRequest,
+    PermissionEnforcementEvidence,
+    PermissionEvidenceKind,
     PermissionFilesystemAccess,
     PermissionResolution,
     PermissionResolutionStatus,
@@ -68,21 +78,29 @@ from openharness.permissions.runtime import (
 from openharness.permissions.tier_based import TierBasedPermissionChecker
 
 __all__ = [
+    "ActionDenyKind",
+    "ActionDenyPolicy",
+    "ConfiguredActionDenyPolicy",
     "Decision",
     "DecisionResult",
     "DenyListChecker",
+    "DenyResult",
     "EnvironmentInheritance",
     "EnvironmentPolicy",
+    "ExternalPolicyEvidence",
     "ExternalToolMode",
     "ExternalToolPolicy",
     "FilesystemAccess",
     "FilesystemPolicy",
     "FilesystemRule",
+    "LocalBoundaryEvidence",
     "NetworkPolicy",
     "PermissionChecker",
     "PermissionDelta",
     "PermissionDeltaKind",
     "PermissionDeltaRequest",
+    "PermissionEnforcementEvidence",
+    "PermissionEvidenceKind",
     "PermissionFilesystemAccess",
     "PermissionMode",
     "PermissionResolution",

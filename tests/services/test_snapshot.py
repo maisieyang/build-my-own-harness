@@ -321,24 +321,23 @@ class TestSerializeSnapshot:
 
         state = out["extra"]["permission_runtime"]
         assert set(state) == {
+            "schema_version",
             "profile_fingerprint",
-            "boundary_fingerprint",
-            "backend_fingerprint",
             "parked_request",
             "parked_reason",
             "grants",
             "denials",
+            "request_id_aliases",
             "last_human_decision",
             "last_decided_request",
             "last_decision_resumed",
         }
+        assert state["schema_version"] == 2
         assert state["profile_fingerprint"] == profile.fingerprint
-        assert state["boundary_fingerprint"] == boundary.fingerprint
-        assert state["backend_fingerprint"] == boundary.backend_fingerprint
         assert state["parked_request"]["request_id"] == request.request_id
         assert state["parked_request"]["request_fingerprint"] == request.request_fingerprint
         assert state["parked_request"]["grant_fingerprint"] == request.grant_fingerprint
-        assert state["parked_request"]["backend"] == "test"
+        assert state["parked_request"]["enforcement"]["backend"] == "test"
 
 
 def test_permission_decision_amends_current_snapshot_without_rotating(
@@ -386,7 +385,8 @@ def test_permission_decision_amends_current_snapshot_without_rotating(
     runtime.approve_parked(request.request_id)
     assert update_permission_runtime_snapshot(cwd=tmp_path, runtime=runtime) is not None
     loaded = load_snapshot(tmp_path)
-    assert request.grant_fingerprint in loaded["extra"]["permission_runtime"]["grants"]
+    grants = loaded["extra"]["permission_runtime"]["grants"]
+    assert [grant["grant_fingerprint"] for grant in grants] == [request.grant_fingerprint]
 
 
 class TestPermissionRuntimeSnapshotAmendmentFailures:

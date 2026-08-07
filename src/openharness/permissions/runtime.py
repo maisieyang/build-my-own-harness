@@ -5,9 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openharness.execution.boundary import (
     BoundaryViolation,
@@ -18,7 +18,7 @@ from openharness.execution.boundary import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from openharness.permissions.profile import RuntimePermissionProfile
+    from openharness.permissions.profile import ExternalToolPolicy, RuntimePermissionProfile
 
 
 class _FrozenModel(BaseModel):
@@ -77,7 +77,123 @@ class PermissionDelta(_FrozenModel):
         )
 
 
+class PermissionEvidenceKind(str, Enum):
+    LOCAL_BOUNDARY = "local_boundary"
+    EXTERNAL_POLICY = "external_policy"
+
+
+class LocalBoundaryEvidence(_FrozenModel):
+    """Verified local enforcement facts bound to one requested operation."""
+
+    kind: Literal[PermissionEvidenceKind.LOCAL_BOUNDARY] = PermissionEvidenceKind.LOCAL_BOUNDARY
+    profile_fingerprint: str = Field(min_length=1)
+    profile_facts: dict[str, Any]
+    boundary_fingerprint: str = Field(min_length=1)
+    boundary_facts: dict[str, Any]
+    backend: str = Field(min_length=1)
+    backend_fingerprint: str = Field(min_length=1)
+    operation_fingerprint: str = Field(min_length=1)
+
+
+class ExternalPolicyEvidence(_FrozenModel):
+    """Active external-policy facts; it makes no local sandbox claim."""
+
+    kind: Literal[PermissionEvidenceKind.EXTERNAL_POLICY] = PermissionEvidenceKind.EXTERNAL_POLICY
+    profile_fingerprint: str = Field(min_length=1)
+    profile_facts: dict[str, Any]
+    surface: str = Field(min_length=1)
+    effect_kind: str = Field(min_length=1)
+    trust_source: str = Field(min_length=1)
+    tool_identity: str = Field(min_length=1)
+    server_identity: str | None = None
+    policy_mode: str = Field(min_length=1)
+    policy_facts: dict[str, Any]
+    policy_fingerprint: str = Field(min_length=1)
+
+
+PermissionEnforcementEvidence = Annotated[
+    LocalBoundaryEvidence | ExternalPolicyEvidence,
+    Field(discriminator="kind"),
+]
+
+
+def _operation_fingerprint(tool_name: str, final_arguments: dict[str, Any]) -> str:
+    return _fingerprint(
+        {
+            "tool_name": tool_name,
+            "final_arguments": final_arguments,
+        }
+    )
+
+
+def _crossing_facts(crossing: BoundaryViolation) -> dict[str, Any]:
+    return {
+        "dimension": crossing.dimension,
+        "requested": crossing.requested,
+        "evidence": crossing.evidence,
+        "hard_deny": crossing.hard_deny,
+    }
+
+
+def _parse_crossing(value: Any) -> BoundaryViolation:
+    if isinstance(value, BoundaryViolation):
+        return value
+    if not isinstance(value, dict):
+        raise ValueError("permission crossing must be a structured boundary violation")
+    return BoundaryViolation(
+        dimension=value["dimension"],
+        requested=value["requested"],
+        evidence=value["evidence"],
+        hard_deny=value.get("hard_deny", False),
+    )
+
+
+def _exact_request_facts(
+    *,
+    tool_name: str,
+    arguments_fingerprint: str,
+    enforcement: LocalBoundaryEvidence | ExternalPolicyEvidence,
+    authorization_context: tuple[str, ...],
+    delta: PermissionDelta,
+    crossing: BoundaryViolation,
+    data_sources: tuple[str, ...],
+    data_destinations: tuple[str, ...],
+) -> dict[str, Any]:
+    return {
+        "tool_name": tool_name,
+        "arguments_fingerprint": arguments_fingerprint,
+        "enforcement": enforcement.model_dump(mode="json"),
+        "authorization_context": list(authorization_context),
+        "delta": delta.model_dump(mode="json"),
+        "crossing": _crossing_facts(crossing),
+        "data_sources": sorted(set(data_sources)),
+        "data_destinations": sorted(set(data_destinations)),
+    }
+
+
+def _legacy_request_fingerprint(value: dict[str, Any]) -> str:
+    """Recompute the v1 flat-local fingerprint before accepting migration."""
+    crossing = _parse_crossing(value["crossing"])
+    delta = PermissionDelta.model_validate(value["delta"])
+    exact_request = {
+        "tool_name": value["tool_name"],
+        "arguments_fingerprint": value["arguments_fingerprint"],
+        "profile_fingerprint": value["profile_fingerprint"],
+        "boundary_fingerprint": value["boundary_fingerprint"],
+        "backend_fingerprint": value["backend_fingerprint"],
+        "authorization_context": list(value.get("authorization_context", ())),
+        "profile_facts": value["profile_facts"],
+        "boundary_facts": value["boundary_facts"],
+        "delta": delta.model_dump(mode="json"),
+        "crossing": _crossing_facts(crossing),
+        "data_sources": sorted(set(value.get("data_sources", ()))),
+        "data_destinations": sorted(set(value.get("data_destinations", ()))),
+    }
+    return _fingerprint(exact_request)
+
+
 class PermissionDeltaRequest(_FrozenModel):
+    schema_version: Literal[2] = 2
     request_id: str
     request_fingerprint: str
     grant_fingerprint: str
@@ -85,39 +201,132 @@ class PermissionDeltaRequest(_FrozenModel):
     tool_name: str
     final_arguments: dict[str, Any]
     arguments_fingerprint: str
-    profile_fingerprint: str
-    boundary_fingerprint: str
-    backend: str
-    backend_fingerprint: str
-    profile_facts: dict[str, Any]
-    boundary_facts: dict[str, Any]
+    enforcement: PermissionEnforcementEvidence
     delta: PermissionDelta
     crossing: BoundaryViolation
     authorization_context: tuple[str, ...] = ()
     data_sources: tuple[str, ...] = ()
     data_destinations: tuple[str, ...] = ()
 
-    def _expected_request_fingerprint(self) -> str:
-        exact_request = {
-            "tool_name": self.tool_name,
-            "arguments_fingerprint": self.arguments_fingerprint,
-            "profile_fingerprint": self.profile_fingerprint,
-            "boundary_fingerprint": self.boundary_fingerprint,
-            "backend_fingerprint": self.backend_fingerprint,
-            "authorization_context": list(self.authorization_context),
-            "profile_facts": self.profile_facts,
-            "boundary_facts": self.boundary_facts,
-            "delta": self.delta.model_dump(mode="json"),
-            "crossing": {
-                "dimension": self.crossing.dimension,
-                "requested": self.crossing.requested,
-                "evidence": self.crossing.evidence,
-                "hard_deny": self.crossing.hard_deny,
-            },
-            "data_sources": sorted(set(self.data_sources)),
-            "data_destinations": sorted(set(self.data_destinations)),
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_flat_local_v1(cls, value: Any) -> Any:
+        if not isinstance(value, dict) or "enforcement" in value:
+            return value
+
+        required = {
+            "profile_fingerprint",
+            "boundary_fingerprint",
+            "backend",
+            "backend_fingerprint",
+            "profile_facts",
+            "boundary_facts",
         }
-        return _fingerprint(exact_request)
+        if not required.issubset(value):
+            return value
+
+        migrated = dict(value)
+        expected_arguments = _fingerprint(migrated["final_arguments"])
+        expected_request = _legacy_request_fingerprint(migrated)
+        expected_id = _fingerprint(
+            {
+                "tool_use_id": migrated["tool_use_id"],
+                "request_fingerprint": expected_request,
+            }
+        )
+        if (
+            migrated.get("arguments_fingerprint") != expected_arguments
+            or migrated.get("request_fingerprint") != expected_request
+            or migrated.get("grant_fingerprint") != expected_request
+            or migrated.get("request_id") != expected_id
+        ):
+            raise ValueError("legacy permission request fingerprint integrity failure")
+
+        enforcement = LocalBoundaryEvidence(
+            profile_fingerprint=migrated.pop("profile_fingerprint"),
+            profile_facts=migrated.pop("profile_facts"),
+            boundary_fingerprint=migrated.pop("boundary_fingerprint"),
+            boundary_facts=migrated.pop("boundary_facts"),
+            backend=migrated.pop("backend"),
+            backend_fingerprint=migrated.pop("backend_fingerprint"),
+            operation_fingerprint=_operation_fingerprint(
+                migrated["tool_name"], migrated["final_arguments"]
+            ),
+        )
+        delta = PermissionDelta.model_validate(migrated["delta"])
+        crossing = _parse_crossing(migrated["crossing"])
+        request_fingerprint = _fingerprint(
+            _exact_request_facts(
+                tool_name=migrated["tool_name"],
+                arguments_fingerprint=expected_arguments,
+                enforcement=enforcement,
+                authorization_context=tuple(migrated.get("authorization_context", ())),
+                delta=delta,
+                crossing=crossing,
+                data_sources=tuple(migrated.get("data_sources", ())),
+                data_destinations=tuple(migrated.get("data_destinations", ())),
+            )
+        )
+        migrated.update(
+            {
+                "schema_version": 2,
+                "arguments_fingerprint": expected_arguments,
+                "enforcement": enforcement.model_dump(mode="json"),
+                "request_fingerprint": request_fingerprint,
+                "grant_fingerprint": request_fingerprint,
+                "request_id": _fingerprint(
+                    {
+                        "tool_use_id": migrated["tool_use_id"],
+                        "request_fingerprint": request_fingerprint,
+                    }
+                ),
+            }
+        )
+        return migrated
+
+    @property
+    def profile_fingerprint(self) -> str:
+        return self.enforcement.profile_fingerprint
+
+    @property
+    def profile_facts(self) -> dict[str, Any]:
+        return self.enforcement.profile_facts
+
+    def require_local_evidence(self) -> LocalBoundaryEvidence:
+        evidence = self.enforcement
+        if not isinstance(evidence, LocalBoundaryEvidence):
+            raise ValueError("external permission request has no local boundary evidence")
+        return evidence
+
+    @property
+    def boundary_fingerprint(self) -> str:
+        return self.require_local_evidence().boundary_fingerprint
+
+    @property
+    def boundary_facts(self) -> dict[str, Any]:
+        return self.require_local_evidence().boundary_facts
+
+    @property
+    def backend(self) -> str:
+        return self.require_local_evidence().backend
+
+    @property
+    def backend_fingerprint(self) -> str:
+        return self.require_local_evidence().backend_fingerprint
+
+    def _expected_request_fingerprint(self) -> str:
+        return _fingerprint(
+            _exact_request_facts(
+                tool_name=self.tool_name,
+                arguments_fingerprint=self.arguments_fingerprint,
+                enforcement=self.enforcement,
+                authorization_context=self.authorization_context,
+                delta=self.delta,
+                crossing=self.crossing,
+                data_sources=self.data_sources,
+                data_destinations=self.data_destinations,
+            )
+        )
 
     def validate_integrity(self) -> None:
         expected_arguments = _fingerprint(self.final_arguments)
@@ -152,6 +361,98 @@ class PermissionDeltaRequest(_FrozenModel):
             raise ValueError("permission resolution requires a verified boundary")
         if boundary.profile_fingerprint != profile.fingerprint:
             raise ValueError("boundary profile fingerprint does not match active profile")
+        enforcement = LocalBoundaryEvidence(
+            profile_fingerprint=profile.fingerprint,
+            profile_facts=profile.normalized(),
+            boundary_fingerprint=boundary.fingerprint,
+            boundary_facts=boundary.normalized(),
+            backend=boundary.backend,
+            backend_fingerprint=boundary.backend_fingerprint,
+            operation_fingerprint=_operation_fingerprint(tool_name, final_arguments),
+        )
+        return cls._create(
+            tool_use_id=tool_use_id,
+            tool_name=tool_name,
+            final_arguments=final_arguments,
+            enforcement=enforcement,
+            delta=delta,
+            crossing=crossing,
+            data_sources=data_sources,
+            data_destinations=data_destinations,
+            authorization_context=authorization_context,
+        )
+
+    @classmethod
+    def create_external(
+        cls,
+        *,
+        tool_use_id: str,
+        tool_name: str,
+        final_arguments: dict[str, Any],
+        profile: RuntimePermissionProfile,
+        policy: ExternalToolPolicy,
+        surface: str,
+        effect_kind: str,
+        trust_source: str,
+        tool_identity: str,
+        server_identity: str | None,
+        delta: PermissionDelta,
+        crossing: BoundaryViolation,
+        data_sources: tuple[str, ...] = (),
+        data_destinations: tuple[str, ...] = (),
+        authorization_context: tuple[str, ...] = (),
+    ) -> PermissionDeltaRequest:
+        policy_facts = policy.model_dump(mode="json")
+        if policy_facts != profile.external_tools.model_dump(mode="json"):
+            raise ValueError("external policy does not match active permission profile")
+        try:
+            policy_mode = policy_facts[surface]
+        except KeyError as exc:
+            raise ValueError(f"unknown external policy surface: {surface}") from exc
+        if delta.kind is not PermissionDeltaKind.EXTERNAL_TOOL or delta.value != surface:
+            raise ValueError("external request delta does not match its policy surface")
+        if tool_identity != tool_name:
+            raise ValueError("external tool identity does not match dispatched tool")
+        if crossing.dimension != f"external.{surface}" or crossing.requested != tool_identity:
+            raise ValueError("external crossing does not match its surface and tool identity")
+        enforcement = ExternalPolicyEvidence(
+            profile_fingerprint=profile.fingerprint,
+            profile_facts=profile.normalized(),
+            surface=surface,
+            effect_kind=effect_kind,
+            trust_source=trust_source,
+            tool_identity=tool_identity,
+            server_identity=server_identity,
+            policy_mode=policy_mode,
+            policy_facts=policy_facts,
+            policy_fingerprint=_fingerprint(policy_facts),
+        )
+        return cls._create(
+            tool_use_id=tool_use_id,
+            tool_name=tool_name,
+            final_arguments=final_arguments,
+            enforcement=enforcement,
+            delta=delta,
+            crossing=crossing,
+            data_sources=data_sources,
+            data_destinations=data_destinations,
+            authorization_context=authorization_context,
+        )
+
+    @classmethod
+    def _create(
+        cls,
+        *,
+        tool_use_id: str,
+        tool_name: str,
+        final_arguments: dict[str, Any],
+        enforcement: LocalBoundaryEvidence | ExternalPolicyEvidence,
+        delta: PermissionDelta,
+        crossing: BoundaryViolation,
+        data_sources: tuple[str, ...],
+        data_destinations: tuple[str, ...],
+        authorization_context: tuple[str, ...],
+    ) -> PermissionDeltaRequest:
         arguments_fingerprint = _fingerprint(final_arguments)
         provisional = cls(
             request_id="pending",
@@ -161,13 +462,8 @@ class PermissionDeltaRequest(_FrozenModel):
             tool_name=tool_name,
             final_arguments=final_arguments,
             arguments_fingerprint=arguments_fingerprint,
-            profile_fingerprint=profile.fingerprint,
-            boundary_fingerprint=boundary.fingerprint,
-            backend=boundary.backend,
-            backend_fingerprint=boundary.backend_fingerprint,
+            enforcement=enforcement,
             authorization_context=tuple(authorization_context),
-            profile_facts=profile.normalized(),
-            boundary_facts=boundary.normalized(),
             delta=delta,
             crossing=crossing,
             data_sources=tuple(sorted(set(data_sources))),
@@ -240,34 +536,108 @@ class PermissionResumeTransition(_FrozenModel):
     decision: PermissionReviewDecision
 
 
+class PermissionDenialRecord(_FrozenModel):
+    request: PermissionDeltaRequest
+    count: int = Field(ge=1)
+
+
 class PermissionRuntimeState(_FrozenModel):
+    schema_version: Literal[2] = 2
     profile_fingerprint: str
-    boundary_fingerprint: str
-    backend_fingerprint: str
     parked_request: PermissionDeltaRequest | None = None
     parked_reason: str | None = None
-    grants: tuple[str, ...] = ()
-    denials: dict[str, int] = Field(default_factory=dict)
+    grants: tuple[PermissionDeltaRequest, ...] = ()
+    denials: tuple[PermissionDenialRecord, ...] = ()
+    request_id_aliases: dict[str, str] = Field(default_factory=dict)
     last_human_decision: PermissionReviewDecision | None = None
     last_decided_request: PermissionDeltaRequest | None = None
     last_decision_resumed: bool = False
+    # Migration-only v1 facts. They are checked by ``from_state`` but never
+    # emitted by the v2 writer.
+    legacy_boundary_fingerprint: str | None = Field(default=None, exclude=True)
+    legacy_backend_fingerprint: str | None = Field(default=None, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_local_v1(cls, value: Any) -> Any:
+        if not isinstance(value, dict) or value.get("schema_version") == 2:
+            return value
+        if "boundary_fingerprint" not in value or "backend_fingerprint" not in value:
+            return value
+
+        migrated = dict(value)
+        request_by_legacy_fingerprint: dict[str, PermissionDeltaRequest] = {}
+        request_id_aliases: dict[str, str] = {}
+
+        def migrate_request(raw: Any) -> Any:
+            if raw is None or isinstance(raw, PermissionDeltaRequest):
+                return raw
+            if not isinstance(raw, dict):
+                return raw
+            legacy_fingerprint = raw.get("request_fingerprint")
+            legacy_request_id = raw.get("request_id")
+            request = PermissionDeltaRequest.model_validate(raw)
+            if isinstance(legacy_fingerprint, str):
+                request_by_legacy_fingerprint[legacy_fingerprint] = request
+            if isinstance(legacy_request_id, str) and legacy_request_id != request.request_id:
+                request_id_aliases[legacy_request_id] = request.request_id
+            return request.model_dump(mode="json")
+
+        migrated["parked_request"] = migrate_request(migrated.get("parked_request"))
+        migrated["last_decided_request"] = migrate_request(migrated.get("last_decided_request"))
+
+        migrated_grants: list[dict[str, Any]] = []
+        for fingerprint in migrated.get("grants", ()):
+            request = request_by_legacy_fingerprint.get(fingerprint)
+            if request is not None:
+                migrated_grants.append(request.model_dump(mode="json"))
+
+        migrated_denials: list[dict[str, Any]] = []
+        raw_denials = migrated.get("denials", {})
+        if isinstance(raw_denials, dict):
+            for fingerprint, count in raw_denials.items():
+                request = request_by_legacy_fingerprint.get(fingerprint)
+                if request is not None and isinstance(count, int) and count > 0:
+                    migrated_denials.append(
+                        {
+                            "request": request.model_dump(mode="json"),
+                            "count": count,
+                        }
+                    )
+
+        migrated.update(
+            {
+                "schema_version": 2,
+                "legacy_boundary_fingerprint": migrated.pop("boundary_fingerprint"),
+                "legacy_backend_fingerprint": migrated.pop("backend_fingerprint"),
+                "grants": migrated_grants,
+                "denials": migrated_denials,
+                "request_id_aliases": request_id_aliases,
+            }
+        )
+        return migrated
 
 
 class PermissionRuntime:
-    """Session-scoped resolver. It cannot operate without verified facts."""
+    """Session-scoped exact authorization ledger.
+
+    A local request requires a verified boundary. External requests bind to
+    active policy evidence and deliberately work without a local sandbox.
+    """
 
     def __init__(
         self,
         *,
         profile: RuntimePermissionProfile,
-        boundary: EnforcedBoundary,
+        boundary: EnforcedBoundary | None,
         reviewer: PermissionReviewer | None = None,
         denial_limit: int = 2,
     ) -> None:
-        if not boundary.is_verified:
-            raise ValueError("permission runtime requires a verified boundary")
-        if boundary.profile_fingerprint != profile.fingerprint:
-            raise ValueError("boundary profile fingerprint does not match active profile")
+        if boundary is not None:
+            if not boundary.is_verified:
+                raise ValueError("permission runtime requires a verified boundary")
+            if boundary.profile_fingerprint != profile.fingerprint:
+                raise ValueError("boundary profile fingerprint does not match active profile")
         if denial_limit < 1:
             raise ValueError("denial_limit must be positive")
         self.profile = profile
@@ -279,8 +649,15 @@ class PermissionRuntime:
         self.last_human_decision: PermissionReviewDecision | None = None
         self.last_decided_request: PermissionDeltaRequest | None = None
         self._last_decision_resumed = False
-        self._grants: set[str] = set()
-        self._denials: dict[str, int] = {}
+        self._grants: dict[str, PermissionDeltaRequest] = {}
+        self._denials: dict[str, PermissionDenialRecord] = {}
+        self._request_id_aliases: dict[str, str] = {}
+
+    def require_local_boundary(self) -> EnforcedBoundary:
+        boundary = self.boundary
+        if boundary is None:
+            raise ValueError("local permission request requires a verified local boundary")
+        return boundary
 
     async def resolve_boundary_result(
         self,
@@ -297,13 +674,23 @@ class PermissionRuntime:
 
     async def resolve_external(self, request: PermissionDeltaRequest) -> PermissionResolution:
         self._validate_request(request)
+        if (
+            isinstance(request.enforcement, ExternalPolicyEvidence)
+            and request.enforcement.policy_mode == "deny"
+        ):
+            return PermissionResolution(
+                status=PermissionResolutionStatus.DENIED,
+                reason="external surface policy denies this request",
+                request=request,
+            )
         if request.delta.hard_deny or request.crossing.hard_deny:
             return PermissionResolution(
                 status=PermissionResolutionStatus.DENIED,
                 reason="hard deny cannot be reviewed",
                 request=request,
             )
-        if self._denials.get(request.request_fingerprint, 0) >= self.denial_limit:
+        denial = self._denials.get(request.request_fingerprint)
+        if denial is not None and denial.count >= self.denial_limit:
             return PermissionResolution(
                 status=PermissionResolutionStatus.DENIED,
                 reason="denial circuit open",
@@ -326,15 +713,17 @@ class PermissionRuntime:
                 request=request,
             )
         if verdict.decision is PermissionReviewDecision.APPROVE:
-            self._grants.add(request.grant_fingerprint)
+            self._grants[request.grant_fingerprint] = request
             return PermissionResolution(
                 status=PermissionResolutionStatus.RETRY_ONCE,
                 reason=verdict.reason,
                 request=request,
             )
         if verdict.decision is PermissionReviewDecision.DENY:
-            self._denials[request.request_fingerprint] = (
-                self._denials.get(request.request_fingerprint, 0) + 1
+            count = denial.count + 1 if denial is not None else 1
+            self._denials[request.request_fingerprint] = PermissionDenialRecord(
+                request=request,
+                count=count,
             )
             return PermissionResolution(
                 status=PermissionResolutionStatus.DENIED,
@@ -350,9 +739,11 @@ class PermissionRuntime:
 
     def consume_grant(self, request: PermissionDeltaRequest) -> bool:
         self._validate_request(request)
-        if request.grant_fingerprint not in self._grants:
+        grant = self._grants.get(request.grant_fingerprint)
+        if grant is None:
             return False
-        self._grants.remove(request.grant_fingerprint)
+        self._validate_request(grant)
+        del self._grants[request.grant_fingerprint]
         return True
 
     def park(self, request: PermissionDeltaRequest, *, reason: str) -> None:
@@ -365,7 +756,7 @@ class PermissionRuntime:
 
     def approve_parked(self, request_id: str) -> None:
         request = self._require_parked(request_id)
-        self._grants.add(request.grant_fingerprint)
+        self._grants[request.grant_fingerprint] = request
         self.parked_request = None
         self.parked_reason = None
         self.last_human_decision = PermissionReviewDecision.APPROVE
@@ -374,7 +765,10 @@ class PermissionRuntime:
 
     def deny_parked(self, request_id: str, *, reason: str) -> None:
         request = self._require_parked(request_id)
-        self._denials[request.request_fingerprint] = self.denial_limit
+        self._denials[request.request_fingerprint] = PermissionDenialRecord(
+            request=request,
+            count=self.denial_limit,
+        )
         self.parked_request = None
         self.parked_reason = reason
         self.last_human_decision = PermissionReviewDecision.DENY
@@ -397,28 +791,61 @@ class PermissionRuntime:
 
     def _require_parked(self, request_id: str) -> PermissionDeltaRequest:
         request = self.parked_request
-        if request is None or len(request_id) < 8 or not request.request_id.startswith(request_id):
+        if request is None or len(request_id) < 8:
+            raise ValueError("no matching parked permission request")
+        if request.request_id.startswith(request_id):
+            return request
+        alias_targets = (
+            target
+            for alias, target in self._request_id_aliases.items()
+            if alias.startswith(request_id)
+        )
+        if request.request_id not in alias_targets:
             raise ValueError("no matching parked permission request")
         return request
 
     def _validate_request(self, request: PermissionDeltaRequest) -> None:
         if request.profile_fingerprint != self.profile.fingerprint:
             raise ValueError("permission request profile drift")
-        if request.backend_fingerprint != self.boundary.backend_fingerprint:
-            raise ValueError("permission request backend drift")
-        if request.boundary_fingerprint != self.boundary.fingerprint:
-            raise ValueError("permission request boundary drift")
+        if request.profile_facts != self.profile.normalized():
+            raise ValueError("permission request profile facts drift")
+        evidence = request.enforcement
+        if isinstance(evidence, LocalBoundaryEvidence):
+            boundary = self.require_local_boundary()
+            if evidence.backend_fingerprint != boundary.backend_fingerprint:
+                raise ValueError("permission request backend drift")
+            if evidence.boundary_fingerprint != boundary.fingerprint:
+                raise ValueError("permission request boundary drift")
+            if evidence.boundary_facts != boundary.normalized():
+                raise ValueError("permission request boundary facts drift")
+            expected_operation = _operation_fingerprint(request.tool_name, request.final_arguments)
+            if evidence.operation_fingerprint != expected_operation:
+                raise ValueError("permission request operation drift")
+        else:
+            policy_facts = self.profile.external_tools.model_dump(mode="json")
+            if evidence.policy_facts != policy_facts:
+                raise ValueError("permission request external policy drift")
+            if evidence.policy_fingerprint != _fingerprint(policy_facts):
+                raise ValueError("permission request external policy fingerprint drift")
+            if evidence.policy_mode != policy_facts.get(evidence.surface):
+                raise ValueError("permission request external surface policy drift")
+            if evidence.tool_identity != request.tool_name:
+                raise ValueError("permission request external tool identity drift")
+            if (
+                request.delta.kind is not PermissionDeltaKind.EXTERNAL_TOOL
+                or request.delta.value != evidence.surface
+            ):
+                raise ValueError("permission request external surface drift")
         request.validate_integrity()
 
     def export_state(self) -> PermissionRuntimeState:
         return PermissionRuntimeState(
             profile_fingerprint=self.profile.fingerprint,
-            boundary_fingerprint=self.boundary.fingerprint,
-            backend_fingerprint=self.boundary.backend_fingerprint,
             parked_request=self.parked_request,
             parked_reason=self.parked_reason,
-            grants=tuple(sorted(self._grants)),
-            denials=dict(sorted(self._denials.items())),
+            grants=tuple(self._grants[key] for key in sorted(self._grants)),
+            denials=tuple(self._denials[key] for key in sorted(self._denials)),
+            request_id_aliases=dict(sorted(self._request_id_aliases.items())),
             last_human_decision=self.last_human_decision,
             last_decided_request=self.last_decided_request,
             last_decision_resumed=self._last_decision_resumed,
@@ -429,7 +856,7 @@ class PermissionRuntime:
         cls,
         *,
         profile: RuntimePermissionProfile,
-        boundary: EnforcedBoundary,
+        boundary: EnforcedBoundary | None,
         state: PermissionRuntimeState | dict[str, Any],
         reviewer: PermissionReviewer | None = None,
         denial_limit: int = 2,
@@ -441,21 +868,46 @@ class PermissionRuntime:
         )
         if parsed.profile_fingerprint != profile.fingerprint:
             raise ValueError("permission profile drift while resuming")
-        if parsed.boundary_fingerprint != boundary.fingerprint:
-            raise ValueError("permission boundary drift while resuming")
-        if parsed.backend_fingerprint != boundary.backend_fingerprint:
-            raise ValueError("permission backend drift while resuming")
+        if parsed.legacy_boundary_fingerprint is not None:
+            if boundary is None:
+                raise ValueError("legacy permission state requires a local boundary")
+            if parsed.legacy_boundary_fingerprint != boundary.fingerprint:
+                raise ValueError("permission boundary drift while resuming")
+            if parsed.legacy_backend_fingerprint != boundary.backend_fingerprint:
+                raise ValueError("permission backend drift while resuming")
         runtime = cls(
             profile=profile,
             boundary=boundary,
             reviewer=reviewer,
             denial_limit=denial_limit,
         )
+        for request in (
+            parsed.parked_request,
+            parsed.last_decided_request,
+            *parsed.grants,
+            *(record.request for record in parsed.denials),
+        ):
+            if request is not None:
+                runtime._validate_request(request)
+        known_request_ids = {
+            request.request_id
+            for request in (
+                parsed.parked_request,
+                parsed.last_decided_request,
+                *parsed.grants,
+                *(record.request for record in parsed.denials),
+            )
+            if request is not None
+        }
+        for alias, target in parsed.request_id_aliases.items():
+            if len(alias) < 8 or target not in known_request_ids:
+                raise ValueError("permission request id alias integrity failure")
         runtime.parked_request = parsed.parked_request
         runtime.parked_reason = parsed.parked_reason
         runtime.last_human_decision = parsed.last_human_decision
         runtime.last_decided_request = parsed.last_decided_request
         runtime._last_decision_resumed = parsed.last_decision_resumed
-        runtime._grants = set(parsed.grants)
-        runtime._denials = dict(parsed.denials)
+        runtime._grants = {request.grant_fingerprint: request for request in parsed.grants}
+        runtime._denials = {record.request.request_fingerprint: record for record in parsed.denials}
+        runtime._request_id_aliases = dict(parsed.request_id_aliases)
         return runtime

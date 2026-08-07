@@ -13,8 +13,20 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from openharness.engine.context import QueryContext
-from openharness.execution import BoundaryVerification, EnforcedBoundary, ExecutionEffect
-from openharness.permissions import PermissionMode, PermissionRuntime, workspace_runtime_profile
+from openharness.execution import (
+    BoundaryVerification,
+    BoundaryViolation,
+    EnforcedBoundary,
+    ExecutionEffect,
+)
+from openharness.permissions import (
+    ExternalToolPolicy,
+    PermissionDelta,
+    PermissionDeltaRequest,
+    PermissionMode,
+    PermissionRuntime,
+    workspace_runtime_profile,
+)
 from openharness.protocols import (
     ConversationMessage,
     TextBlock,
@@ -267,8 +279,50 @@ class TestFromSnapshotPermissionRuntime:
         snap = _synthesize_snapshot(cwd=tmp_path)
         snap["extra"] = {"permission_runtime": runtime.export_state().model_dump(mode="json")}
 
-        with pytest.raises(ValueError, match="no verified runtime"):
+        with pytest.raises(ValueError, match="no current runtime"):
             QueryContext.from_snapshot(
                 snap,
                 **_runtime_kwargs(tmp_path),  # type: ignore[arg-type]
             )
+
+    def test_restores_external_permission_state_without_local_boundary(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        profile = workspace_runtime_profile().model_copy(
+            update={"external_tools": ExternalToolPolicy(mcp="ask")}
+        )
+        runtime = PermissionRuntime(profile=profile, boundary=None)
+        request = PermissionDeltaRequest.create_external(
+            tool_use_id="tool-external",
+            tool_name="Github.create_issue",
+            final_arguments={"title": "exact issue"},
+            profile=profile,
+            policy=profile.external_tools,
+            surface="mcp",
+            effect_kind="mutating",
+            trust_source="trusted-server",
+            tool_identity="Github.create_issue",
+            server_identity="Github",
+            delta=PermissionDelta.external_tool("mcp"),
+            crossing=BoundaryViolation(
+                dimension="external.mcp",
+                requested="Github.create_issue",
+                evidence="mutating external effect",
+            ),
+        )
+        runtime.park(request, reason="needs a person")
+        snap = _synthesize_snapshot(cwd=tmp_path)
+        snap["extra"] = {"permission_runtime": runtime.export_state().model_dump(mode="json")}
+
+        context, _ = QueryContext.from_snapshot(
+            snap,
+            permission_runtime=runtime,
+            runtime_permission_profile=profile,
+            external_tool_policy=profile.external_tools,
+            **_runtime_kwargs(tmp_path),  # type: ignore[arg-type]
+        )
+
+        assert context.permission_runtime is not None
+        assert context.permission_runtime.boundary is None
+        assert context.permission_runtime.parked_request == request

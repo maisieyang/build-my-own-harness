@@ -225,6 +225,7 @@ class BaseTool(ABC, Generic[InputT]):
     external_effect_surface: ExternalEffectSurface | None = None
     external_effect_kind: ExternalEffectKind | None = None
     external_effect_trusted: bool = False
+    external_server_identity: str | None = None
 
     @abstractmethod
     async def execute(

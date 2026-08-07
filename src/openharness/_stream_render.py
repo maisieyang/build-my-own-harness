@@ -170,14 +170,19 @@ async def render_stream(
                 )
                 sources = ", ".join(event.data_sources) or "none"
                 destinations = ", ".join(event.data_destinations) or "none"
+                if event.backend is not None and event.boundary_fingerprint is not None:
+                    enforcement = f"boundary: {event.backend} {event.boundary_fingerprint[:12]}"
+                else:
+                    kind = str(event.enforcement.get("kind", "external_policy"))
+                    surface = str(event.enforcement.get("surface", "unknown"))
+                    enforcement = f"enforcement: {kind} {surface}"
                 err.write(
                     f"[permission parked {event.request_id[:12]}: {event.reason}]\n"
                     f"  tool: {event.tool_name} ({event.tool_use_id})\n"
                     f"  final arguments: {arguments}\n"
                     f"  delta: {event.delta_kind}={event.delta_value}\n"
                     f"  data flow: {sources} -> {destinations}\n"
-                    f"  boundary: {event.backend} "
-                    f"{event.boundary_fingerprint[:12]}\n"
+                    f"  {enforcement}\n"
                     f"  review: /approve {event.request_id[:12]} or "
                     f"/deny {event.request_id[:12]}\n"
                 )

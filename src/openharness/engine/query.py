@@ -62,7 +62,9 @@ from openharness.observability import (
 from openharness.permissions import (
     Decision,
     DecisionResult,
+    DenyResult,
     ExternalToolMode,
+    LocalBoundaryEvidence,
     PermissionDelta,
     PermissionDeltaKind,
     PermissionDeltaRequest,
@@ -584,6 +586,11 @@ async def run_query(
                     and context.permission_runtime.parked_request is not None
                 ):
                     parked = context.permission_runtime.parked_request
+                    local_evidence = (
+                        parked.enforcement
+                        if isinstance(parked.enforcement, LocalBoundaryEvidence)
+                        else None
+                    )
                     await _maybe_write_turn_end_metadata(context, messages)
                     yield PermissionParkedEvent(
                         request_id=parked.request_id,
@@ -592,13 +599,24 @@ async def run_query(
                         delta_kind=parked.delta.kind.value,
                         delta_value=parked.delta.value,
                         profile_fingerprint=parked.profile_fingerprint,
-                        boundary_fingerprint=parked.boundary_fingerprint,
-                        backend=parked.backend,
-                        backend_fingerprint=parked.backend_fingerprint,
+                        enforcement=parked.enforcement.model_dump(mode="json"),
+                        boundary_fingerprint=(
+                            local_evidence.boundary_fingerprint
+                            if local_evidence is not None
+                            else None
+                        ),
+                        backend=local_evidence.backend if local_evidence is not None else None,
+                        backend_fingerprint=(
+                            local_evidence.backend_fingerprint
+                            if local_evidence is not None
+                            else None
+                        ),
                         final_arguments=parked.final_arguments,
                         data_sources=parked.data_sources,
                         data_destinations=parked.data_destinations,
-                        boundary_facts=parked.boundary_facts,
+                        boundary_facts=(
+                            local_evidence.boundary_facts if local_evidence is not None else None
+                        ),
                         reason=context.permission_runtime.parked_reason or "human review required",
                         messages=messages,
                     )
@@ -639,7 +657,14 @@ async def _dispatch_one(
     except ValidationError as exc:
         return _outcome((f"invalid input for {tool_use.name}: {exc}", True))
 
+    shadow_deny = _evaluate_action_deny_shadow(
+        context,
+        tool_name=tool_use.name,
+        args=args,
+        exec_context=exec_context,
+    )
     permission = context.permission_checker.evaluate(tool_use.name, args, exec_context)
+    _record_action_deny_shadow(tool_use.name, shadow_deny, permission)
     permission_failure = _permission_failure(permission, tool_use.name, context.permission_mode)
     if permission_failure is not None:
         return _outcome(permission_failure)
@@ -668,7 +693,14 @@ async def _dispatch_one(
             # first check above protects hooks from seeing calls already denied
             # by the framework; this second check makes the final arguments the
             # ones that are actually authorized immediately before execution.
+            shadow_deny = _evaluate_action_deny_shadow(
+                context,
+                tool_name=tool_use.name,
+                args=args,
+                exec_context=exec_context,
+            )
             permission = context.permission_checker.evaluate(tool_use.name, args, exec_context)
+            _record_action_deny_shadow(tool_use.name, shadow_deny, permission)
             permission_failure = _permission_failure(
                 permission, tool_use.name, context.permission_mode
             )
@@ -817,7 +849,7 @@ async def _resolve_local_boundary_violation(
         tool_name=tool.name,
         final_arguments=args.model_dump(mode="json"),
         profile=runtime.profile,
-        boundary=runtime.boundary,
+        boundary=runtime.require_local_boundary(),
         delta=delta,
         crossing=violation,
         data_sources=data_sources,
@@ -925,12 +957,17 @@ async def _external_effect_failure(
                 f"({kind.value}, trust={tool.trust_source}): {tool.name}",
                 True,
             )
-        request = PermissionDeltaRequest.create(
+        request = PermissionDeltaRequest.create_external(
             tool_use_id=tool_use.id,
             tool_name=tool.name,
             final_arguments=args.model_dump(mode="json"),
             profile=runtime.profile,
-            boundary=runtime.boundary,
+            policy=context.external_tool_policy,
+            surface=surface.value,
+            effect_kind=kind.value,
+            trust_source=tool.trust_source,
+            tool_identity=tool.name,
+            server_identity=tool.external_server_identity,
             delta=PermissionDelta.external_tool(surface.value),
             crossing=BoundaryViolation(
                 dimension=f"external.{surface.value}",
@@ -955,6 +992,48 @@ async def _external_effect_failure(
             return f"permission parked: {resolution.reason}", True
         return f"external effect denied: {resolution.reason}", True
     return None
+
+
+def _evaluate_action_deny_shadow(
+    context: QueryContext,
+    *,
+    tool_name: str,
+    args: BaseModel,
+    exec_context: ToolExecutionContext,
+) -> DenyResult | None:
+    """Evaluate the deny-only shadow without giving it production authority."""
+    policy = context.action_deny_policy
+    if policy is None:
+        return None
+    try:
+        return policy.evaluate(tool_name, args, exec_context)
+    except Exception as exc:
+        # Shadow instrumentation must not change legacy dispatch. Do not log the
+        # exception message: a third-party implementation may embed arguments.
+        logger.warning(
+            "action_deny_shadow_failed",
+            tool=tool_name,
+            error_type=type(exc).__name__,
+        )
+        return None
+
+
+def _record_action_deny_shadow(
+    tool_name: str,
+    shadow_deny: DenyResult | None,
+    legacy: DecisionResult,
+) -> None:
+    """Record only safe categorical shadow evidence, never action payloads."""
+    if shadow_deny is None:
+        return
+    legacy_denied = legacy.decision is Decision.DENY
+    log = logger.info if legacy_denied else logger.warning
+    log(
+        "action_deny_shadow_match" if legacy_denied else "action_deny_shadow_mismatch",
+        tool=tool_name,
+        kind=shadow_deny.kind.value,
+        legacy_denied=legacy_denied,
+    )
 
 
 def _permission_failure(

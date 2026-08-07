@@ -45,7 +45,9 @@ from openharness.tools import ExecutionDomain, ToolRegistry
 
 if TYPE_CHECKING:
     from openharness.api import SupportsStreamingMessages
-    from openharness.permissions import PermissionChecker
+    from openharness.permissions import ActionDenyPolicy, DenyResult, PermissionChecker
+    from openharness.tools.base import ToolExecutionContext
+    from tools.conftest import FakeInput
 
 
 # --------------------------------------------------------------------------- #
@@ -69,6 +71,7 @@ def _end_turn_event(text: str = "ok") -> ApiMessageCompleteEvent:
 def _tool_use_event(
     *,
     tool_use_id: str = "toolu_01",
+    tool_name: str = "Fake",
     tool_input: dict[str, object] | None = None,
 ) -> ApiMessageCompleteEvent:
     return ApiMessageCompleteEvent.model_validate(
@@ -79,7 +82,7 @@ def _tool_use_event(
                     {
                         "type": "tool_use",
                         "id": tool_use_id,
-                        "name": "Fake",
+                        "name": tool_name,
                         "input": tool_input if tool_input is not None else {"value": "hi"},
                     }
                 ],
@@ -96,6 +99,7 @@ def _make_context(
     hook_registry: HookRegistry,
     tool_registry: ToolRegistry | None = None,
     permission_checker: PermissionChecker | None = None,
+    action_deny_policy: ActionDenyPolicy | None = None,
 ) -> QueryContext:
     from tools.conftest import _FakeTool
 
@@ -113,6 +117,7 @@ def _make_context(
         model="qwen-plus",
         max_tokens=512,
         hook_registry=hook_registry,
+        action_deny_policy=action_deny_policy,
     )
 
 
@@ -265,6 +270,92 @@ class TestModifyHooksReachDownstream:
         assert completed.is_error is True
         assert "rewritten input is outside the grant" in completed.output
         assert checker.values == ["original", "REWRITTEN"]
+
+    async def test_hook_rewrite_to_git_commit_hits_deny_shadow_and_legacy_redline(
+        self,
+    ) -> None:
+        from openharness.config import Settings
+        from openharness.permissions import (
+            ConfiguredActionDenyPolicy,
+            TierBasedPermissionChecker,
+        )
+        from openharness.tools import BaseTool, ExecutionDomain, ToolResult
+        from openharness.tools.bash import BashInput
+
+        class _BashTool(BaseTool[BashInput]):
+            name = "Bash"
+            description = "test bash"
+            input_model = BashInput
+            execution_domain = ExecutionDomain.LOCAL_DATA
+            executed = False
+
+            async def execute(
+                self,
+                args: BashInput,
+                context: ToolExecutionContext,
+            ) -> ToolResult:
+                del args, context
+                self.executed = True
+                return ToolResult(output="must not execute")
+
+        class _RecordingPolicy:
+            def __init__(self, delegate: ConfiguredActionDenyPolicy) -> None:
+                self.delegate = delegate
+                self.results: list[DenyResult | None] = []
+
+            def evaluate(
+                self,
+                tool_name: str,
+                args: BashInput,
+                context: ToolExecutionContext,
+            ) -> DenyResult | None:
+                result = self.delegate.evaluate(tool_name, args, context)
+                self.results.append(result)
+                return result
+
+        async def rewrite(ctx: HookContext) -> HookResult | None:
+            del ctx
+            return HookResult.modify_input({"command": "git commit -m bypass"})
+
+        settings = Settings(
+            api_key="x",
+            base_url="https://example.invalid",
+            permissions={"allow": ("Bash(git status)",)},
+        )
+        tool = _BashTool()
+        tools = ToolRegistry()
+        tools.register(tool)
+        policy = _RecordingPolicy(ConfiguredActionDenyPolicy(settings))
+        hooks = HookRegistry()
+        hooks.register("PreToolUse", rewrite)
+        client = _StubApiClient(
+            events_per_turn=[
+                [_tool_use_event(tool_name="Bash", tool_input={"command": "git status"})],
+                [_end_turn_event()],
+            ]
+        )
+        context = _make_context(
+            api_client=client,
+            hook_registry=hooks,
+            tool_registry=tools,
+            permission_checker=TierBasedPermissionChecker(tools, settings),
+            action_deny_policy=policy,
+        )
+
+        events = [
+            event
+            async for event in run_query(
+                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+                context,
+            )
+        ]
+
+        completed = next(e for e in events if isinstance(e, ToolExecutionCompletedEvent))
+        assert completed.is_error is True
+        assert "irreversible git action" in completed.output
+        assert tool.executed is False
+        assert policy.results[0] is None
+        assert policy.results[1] is not None
 
     async def test_post_tool_use_modify_output_reaches_next_turn_message(self) -> None:
         """Sanitize hook redacts output; LLM's next turn sees the redacted text."""
@@ -461,6 +552,47 @@ class TestDispatchOrder:
         # PreToolUse hook never fired — AuthZ short-circuited first.
         assert observed == []
 
+    async def test_deny_shadow_sees_original_and_hook_modified_arguments(self) -> None:
+        """Shadow evaluation follows both legacy authorization checkpoints."""
+        observed: list[str] = []
+
+        class _RecordingPolicy:
+            def evaluate(
+                self,
+                tool_name: str,
+                args: FakeInput,
+                context: ToolExecutionContext,
+            ) -> DenyResult | None:
+                del tool_name, context
+                observed.append(args.value)
+                return None
+
+        async def rewrite(ctx: HookContext) -> HookResult | None:
+            del ctx
+            return HookResult.modify_input({"value": "ROUTED"})
+
+        registry = HookRegistry()
+        registry.register("PreToolUse", rewrite)
+        client = _StubApiClient(
+            events_per_turn=[
+                [_tool_use_event(tool_input={"value": "ORIGINAL"})],
+                [_end_turn_event()],
+            ]
+        )
+        context = _make_context(
+            api_client=client,
+            hook_registry=registry,
+            action_deny_policy=_RecordingPolicy(),
+        )
+
+        async for _ in run_query(
+            [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+            context,
+        ):
+            pass
+
+        assert observed == ["ORIGINAL", "ROUTED"]
+
 
 # --------------------------------------------------------------------------- #
 # OnError — hook crash and tool crash both fire OnError                       #
@@ -507,7 +639,7 @@ class TestOnErrorChain:
 
     async def test_tool_crash_fires_on_error_and_wraps_as_tool_error(self) -> None:
         """Tool's ``execute`` raises → OnError fires (where='tool') → ToolError."""
-        from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+        from openharness.tools.base import BaseTool, ToolResult
         from tools.conftest import FakeInput
 
         class _CrashingFake(BaseTool[FakeInput]):

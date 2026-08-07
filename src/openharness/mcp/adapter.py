@@ -163,6 +163,7 @@ class McpToolAdapter(BaseTool[BaseModel]):
         # SDK's Tool type has: name, description, inputSchema, annotations.
         tool_name = raw_tool_def.name
         self.name = f"{server_name}.{tool_name}"
+        self.external_server_identity = server_name
         self.description = raw_tool_def.description or f"MCP tool {tool_name}"
         # Synthesize the input model from inputSchema.
         schema = getattr(raw_tool_def, "inputSchema", None)
