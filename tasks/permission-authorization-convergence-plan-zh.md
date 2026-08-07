@@ -484,11 +484,15 @@ Dogfood 场景：
 - 一次正常 goal 的 reviewer call 数远小于 tool call 数；
 - 不存在依赖 legacy checker 才能守住的 production safety invariant。
 
-## 可执行 `/goal` 切分
+## 可执行 `/goal` 切分（G0 后修订）
 
-上面的 S0–S8 描述架构迁移顺序，但仍不适合作为单次 `/goal` 的边界。实际执行拆成
-下面 12 个串行 goal。一个 goal 只跨一个主要架构接缝；前一个 goal 的完成证据是后一个
-goal 的输入，不能并行切流。
+G0 完成后重新 review，原 G1–G11 的粒度过细。它们主要是技术接缝、TDD 阶段与建议提交
+边界，不是 11 个独立的业务结果。`/goal` 是可跨 turn 持续执行的工作单元，没有必要在
+每次类型变更、单类 tool 切流或 snapshot 调整处停下来等待人继续分配注意力；那反而违背
+本项目从 sync 走向 async 的初衷。
+
+剩余工作收敛为 3 个串行大 goal。S1–S8 继续作为 goal 内部的实施顺序与安全 checkpoint，
+不再作为用户需要逐个启动的任务。
 
 ### 所有 goal 共用的执行合同
 
@@ -507,29 +511,33 @@ goal 的输入，不能并行切流。
 
 4. 只有改变 tool catalog、prompt、review envelope 或 judge 输入的 goal 才触发对应 live
    eval；一旦触发，replay 不能替代 dataset card 要求的 live re-ratification。
-5. 不在同一个 goal 中同时“安装替代物”和“删除被替代物”。除 G10 外，legacy public API
-   可以保留；除明确写出的 production path 外，不提前切流。
+5. 同一个大 goal 可以包含“安装替代物 → 证明 GREEN → 切流 → 删除局部旧 wiring”，但顺序
+   不可颠倒。每次切流前必须有替代路径的定向 GREEN 证据；public legacy API/config 的批量
+   删除只允许发生在 G3。
 6. 如果发现前置不变量不成立，先把 request durable park 或记录为当前 goal 的 blocker；
    不得用扩大 profile、恢复 `AUTO → ASK allow`、解析 stderr、跳过 verified boundary 等
    方式绕过。
 7. 每个 goal 的交付说明必须列出：RED 证据、GREEN 证据、完整验证结果、仍在使用的 legacy
    path、下一 goal 的真实前置条件。除非用户另行要求，不创建 commit 或进入下一 goal。
 
+### 为什么是三个，而不是十一个或两个
+
+- **不是十一个：** deny policy、typed evidence、structured/Bash/delegate 分批切流、posture
+  与 snapshot 拆分，都是同一业务结果的内部实施步骤。把它们做成独立 `/goal` 会制造九次
+  额外的人类验收与续派，不增加安全性。
+- **不建议两个：** 若把“建立新授权内核”和“所有 autonomous path 切流”合在一起，一个
+  goal 会同时修改 permission models、ledger、engine dispatch、tool catalog、CLI、snapshot、
+  Goal continuation 与 SpawnAgent。替代物尚未稳定时就进入切流，回归定位和回滚范围过大。
+- **保留三个真实边界：** 新内核完整可表达所有请求之后才能切流；verified async path 全部
+  GREEN 之后才能删除旧产品面。这两个先后关系是安全和发布需要，而不是代码组织偏好。
+
 ### 依赖图
 
 ```text
-G0 baseline
-  → G1 deny-only shadow
-  → G2 plan capability shaping
-  → G3 typed exact-request evidence
-  → G4 external authorization runtime
-  → G5 structured local cutover
-  → G6 Bash local cutover
-  → G7 delegated-runtime inheritance
-  → G8 posture + snapshot split
-  → G9 autonomous startup gate
-  → G10 canonical profile
-  → G11 legacy removal + final ratification
+G0 当前事实基线（已完成）
+  → G1 统一授权内核
+  → G2 verified async execution 全面切流
+  → G3 canonical product surface 与 legacy removal
 ```
 
 ### G0 — 固定事实基线与删除门
@@ -559,289 +567,141 @@ coverage 和 settings/snapshot compatibility matrix；结束时报告 RED/GREEN 
 完整验证结果、仍存 legacy path，然后停止。
 ```
 
-### G1 — 安装 deny-only policy，但只做 shadow
+### G1 — 建立统一授权内核
 
-**对应阶段：** S1。
+**业务结果：** 系统用一套 exact authorization lifecycle 表达 local boundary delta 与
+external effect；无 local sandbox 时 external request 仍可 approve-once、deny、defer、durable
+park/resume。执行前 policy 只负责拒绝，不能产生正向授权。
 
-**依赖：** G0 coverage 与兼容矩阵 GREEN。
+**对应内部阶段：** S1 + S3。先以 shadow 安装 deny-only policy，再建立 typed evidence，最后
+把 external ledger/review/park/resume 从 local overlay 安装职责中解耦。
 
-**目标结果：** 建立只能返回 `DenyResult | None` 的 action policy，迁入 protected action、
-git handoff 与灾难命令 tripwire，并在 hook 前和 hook 改写后的 final arguments 上保持两次
-检查；production 正向授权仍由旧 checker 负责。
+**包含工作：**
 
-**边界：** policy 不能产生 ALLOW、ASK、grant 或 overlay；不删除 checker，不改变 AUTO，
-不把 semantic guard 报告成 installed boundary fact。
+- `ActionDenyPolicy: DenyResult | None`，保留 hook 前 original 与 hook 后 final 两次检查；
+- local/external closed evidence union、fingerprints、serialization 与旧 snapshot migration；
+- grant ledger、denial circuit、review 与 park/resume 独立于 local boundary；
+- local overlay resolver 继续强制 verified boundary、same backend 与 exact operation；
+- 若 reviewer envelope/prompt 改变，同 goal 建立或更新 permission-review dataset card 并按
+  reference policy live ratify，不能把 eval 债务留到 G3。
 
-**完成证据：** shadow comparison 证明计划迁出的拒绝集合未缩小；original deny 不进入 hook；
-hook 改写无法绕过；no-match 不被误解释为 allow；全套质量门 GREEN。
+**本 goal 不做：** 不切 local tool dispatch，不改变 AUTO/DRY_RUN，不修改 plan catalog，不
+删除 checker 或 legacy settings。deny-only policy 在 production 只做 shadow/拒绝等价验证。
+
+**完成证据：**
+
+- policy API 无 ALLOW/ASK/grant；shadow deny 集合不缩小，hook 无法绕过；
+- local 缺 verified evidence 构造失败，external 不含伪 local fingerprints；
+- no-sandbox external mutation 完成 exact review 与 durable park/resume；
+- manual/auto reviewer 收到 byte-equivalent request，安全相关 drift 全部 fail closed；
+- snapshot 新旧 schema round-trip 与完整质量门 GREEN。
 
 **可直接执行：**
 
 ```text
-/goal 执行 Permission 收敛计划 G1：以 TDD 安装 deny-only ActionDenyPolicy 并保持 shadow，
-保留 legacy checker 的 production authority。严格遵守 hook 前后复查、不授予能力、不切流；
-跑定向测试和共同质量门，交付证据后停止。
+/goal 执行 Permission 收敛计划 G1“建立统一授权内核”。按 S1→S3 的内部顺序和共同执行
+合同，以 TDD 完成 deny-only shadow、local/external typed evidence、独立 exact ledger/review/
+park/resume 与 snapshot migration。保持 local dispatch、AUTO/DRY_RUN、plan catalog 和 legacy
+public API 不变；若 reviewer envelope 变化，同 goal 完成 permission-review live ratification。
+交付 RED/GREEN、完整质量门、仍存 legacy path 后停止。
 ```
 
-### G2 — Plan mode capability shaping
+### G2 — 将 verified autonomous execution 全面切到新语义
 
-**对应阶段：** S2。
+**业务结果：** `--auto` 与 `/goal` 可以在预授权 verified boundary 内持续工作，不再逐工具
+消耗人的注意力；只有真正的 exact boundary/external crossing 才 review 或 park。AUTO 只替换
+reviewer，DRY_RUN 只控制执行，没有 sandbox coverage 时 autonomous run 在模型调用前失败。
 
-**依赖：** G1 policy 可在 dispatch 处提供 mode-scoped deny defense。
+**对应内部阶段：** S2 + S4 + S5。内部仍按 plan shaping → structured tools → Bash →
+delegated runtime → posture/snapshot → autonomous gate 的顺序切流；这些是同一 goal 内的
+checkpoints，不再要求用户逐段续派。
 
-**目标结果：** plan turn 的 registry、prompt 和 API schema 不再暴露 mutating 或
-`DELEGATED_RUNTIME` 工具；伪造/cached tool call 仍被 dispatch policy 拒绝；批准 plan 只恢复
-默认 capability view。
+**包含工作：**
 
-**边界：** 不生成 permission grant，不执行被批准的旧 plan，不修改通用 exact approval；
-新路径 GREEN 后才移除 plan overlay 的 production wiring。
+- plan capability-shaped registry 与 dispatch deny defense，移除 production plan rule overlay；
+- Read/Grep/Write/Edit、Bash 与 deterministic violation 的 verified dispatch；
+- SpawnAgent/delegated runtime 的 profile/sandbox/policy/ledger 安全继承与 coverage；
+- review/execution/runtime 三轴拆分，新 snapshot 不恢复 reviewer/DRY_RUN authority；
+- `--auto`、active Goal、headless 的 pre-model verified coverage gate；
+- permission defer 在 Goal judge 前 park，不消耗 auto-turn；
+- tool catalog/schema 变化按 tool-choice dataset card replay + qwen-max live ratification。
 
-**完成证据：** SpawnAgent 与所有 `is_read_only=False` 工具从 plan schema 消失；伪造调用被
-拒绝；tool-choice replay 接线正确且 qwen-max live 达到 dataset card 的 9/9 pass bar。
+**本 goal 不做：** 不删除 legacy public types/settings/config parser；legacy host interactive
+compatibility 可以暂留，但不得出现在 async security claim 中。Bash typed capability
+declaration 仍是证据驱动的可选项，绝不为完成 goal 强行加入。
+
+**完成证据：**
+
+- verified path 不调用 legacy checker，contained local action 零 reviewer；
+- plan schema 无 mutating/delegated tools，伪造调用仍拒绝，tool-choice live 达标；
+- Bash/child process、structured tools 与 delegate 均不能越过或扩大 boundary；
+- AUTO/MANUAL request 相同，DRY_RUN 零 effect/reviewer/grant；
+- no-sandbox AUTO/Goal/headless local run 在模型调用前失败，无 silent fallback；
+- Goal defer/approve/resume 的 judge 顺序与 turn accounting 正确；
+- 平台 filesystem/network/child-process 负向 integration 与完整质量门 GREEN。
 
 **可直接执行：**
 
 ```text
-/goal 执行 Permission 收敛计划 G2：把 plan mode 改成 metadata-driven capability-shaped
-registry，并保留 dispatch deny defense。使用 TDD，按 tool_choice dataset card 完成 replay
-和 qwen-max live re-ratification；全绿并提交行为证据后停止。
+/goal 执行 Permission 收敛计划 G2“verified autonomous execution 全面切流”。按
+S2→S4→S5 的内部 checkpoints 以 TDD 完成 plan capability shaping、structured/Bash/delegated
+verified dispatch、posture/snapshot 拆分和 autonomous pre-model gate。替代路径定向 GREEN 后
+才切对应 wiring；保留 legacy public config/types，不为 Bash 强加未经证明的 declaration。
+完成必要 tool-choice live eval、平台负向 integration、Goal park/resume 与完整质量门后停止。
 ```
 
-### G3 — 建立 execution-domain-specific exact evidence 合同
+### G3 — 收敛 canonical product surface 并删除 legacy layer
 
-**对应阶段：** S3 的数据合同部分。
+**业务结果：** 用户只面对一个 canonical RuntimePermissionProfile 和一套授权心智模型；
+backend config 只选择实施机制。旧 config/snapshot 要么确定性迁移，要么给出明确错误；代码、
+文档与 dogfood 能证明 legacy checker 已无存在必要。
 
-**依赖：** G2 全绿；G0 已枚举所有 execution domains。
+**对应内部阶段：** S6 + S7 + S8。先完成 canonical profile 双读单写和 migration warning，
+再通过删除门，最后移除 public legacy surface 并做最终 ratification。
 
-**目标结果：** exact request 使用 closed evidence union：local request 必须携带 verified
-boundary/backend/operation facts，external request 必须携带 surface/effect/trust/tool-server/
-policy facts；fingerprint、序列化和旧 schema migration 均能区分两类 evidence。
+**包含工作：**
 
-**边界：** 本 goal 只建立类型、fingerprint、serialization 与 validation 合同，不把 external
-runtime 从 local boundary 上切开，不改变 reviewer 或 dispatch 行为。
+- filesystem/network/environment/process/external 的唯一 profile settings 入口；
+- backend selection/image/runtime 与授权 intent 分离；
+- 只翻译语义等价且 backend 可表示的 legacy rules，不迁移 ASK/command-prefix allow/
+  不可强制 glob allow；
+- `/permissions` 区分 intent、installed facts、semantic guards、unsupported 与 parked request；
+- 删除 `PermissionChecker`、`Decision.ASK`、混合 `PermissionMode`、旧 settings/snapshot wiring；
+- migration errors、README/中文 README、`.env.example`、CLI/status 更新；
+- 全部平台负向 integration、所触发的 live eval 和七个 dogfood 场景。
 
-**完成证据：** local 缺 boundary 构造失败；external 不含伪造 local fingerprints；evidence
-任一安全相关字段漂移都会使 request/grant 失效；新旧 snapshot round-trip GREEN。
+**发布边界：** 若仓库已有需要跨版本迁移的外部用户，G3 内部保留 Release A（双读单写）与
+Release B（删除旧面）两个发布 checkpoint；若没有外部兼容承诺，可在同一 goal/branch 内按
+相同先后顺序完成，不需要人为拆成两个 `/goal`。
 
-**可直接执行：**
+**完成证据：**
 
-```text
-/goal 执行 Permission 收敛计划 G3：以 TDD 建立 local/external exact-request evidence 的
-closed union、fingerprint、serialization 和 schema migration。只改数据合同，不切运行时；
-全套质量门 GREEN 后报告兼容性证据并停止。
-```
-
-### G4 — External authorization runtime 与 local sandbox 解耦
-
-**对应阶段：** S3 的运行时部分。
-
-**依赖：** G3 typed evidence 已稳定并 GREEN。
-
-**目标结果：** 无 local sandbox 时，external effect 仍能形成同一 exact envelope，进入
-manual/auto reviewer，approve-once、deny 或 durable defer/park/resume；local overlay resolver
-仍严格要求 verified boundary。
-
-**边界：** 不放宽 external proactive review，不允许 external grant 安装 local overlay，
-不切 structured local dispatch，不改变 AUTO 的 legacy local 语义。
-
-**完成证据：** no-sandbox external mutation 能 park/resume；manual/auto reviewer 收到
-byte-equivalent request；policy/tool/trust/arguments drift fail closed；local request 无 boundary
-仍失败。
+- 同 intent 得到同 profile fingerprint，strict profile 对冲突/不可表示项 fail closed；
+- snapshot/reviewer/runtime/status 使用同一 profile，legacy 输入不被静默忽略或扩大；
+- `src/` 无 `Decision.ASK`、AUTO-to-ALLOW、`TierBasedPermissionChecker`、
+  `permission_checker` production wiring；
+- permission-review/tool-choice/goal-judge 的适用 live gates、完整质量门、平台 integration 与
+  dogfood 全部通过；
+- 不存在依赖 legacy checker 才能守住的 production safety invariant。
 
 **可直接执行：**
 
 ```text
-/goal 执行 Permission 收敛计划 G4：把 external exact approval ledger、review、park/resume
-从 EnforcedBoundary 生命周期解耦，同时保持 local overlay 必须 verified。按 TDD 验证
-no-sandbox external 全生命周期与 drift fail-closed；全绿后停止。
-```
-
-### G5 — 结构化本地工具切到 verified dispatch
-
-**对应阶段：** S4 的 Read/Grep/Write/Edit 部分。
-
-**依赖：** G1 deny policy 与 G3/G4 authorization runtime GREEN。
-
-**目标结果：** Read、Grep、Write、Edit 的 final validated operation 在 deny policy 后直接
-交给 active SandboxSession；contained 零 review，deterministic violation 才形成最小 local
-delta，一次批准只重试一次。
-
-**边界：** Bash 和 SpawnAgent 暂不切流；legacy host interactive path 仍保留 checker；禁止
-预测 cwd 内外授权或从文本错误推导 delta。
-
-**完成证据：** verified structured path 不调用 legacy checker；读与写都受 boundary；参数、
-profile、backend 或 operation 漂移不能消费旧 grant；unsupported overlay deny/park；平台负向
-filesystem integration GREEN。
-
-**可直接执行：**
-
-```text
-/goal 执行 Permission 收敛计划 G5：仅将 Read/Grep/Write/Edit 切到 deny-policy + verified
-SandboxSession + exact one-shot overlay。不要切 Bash/SpawnAgent，也不要删除 legacy API；以
-TDD 和 filesystem 负向 integration 证明 contained/violation/drift 行为，全绿后停止。
-```
-
-### G6 — Bash 切到 verified base boundary
-
-**对应阶段：** S4 的 Bash 部分。
-
-**依赖：** G5 证明 structured local cutover 模式可靠。
-
-**目标结果：** verified posture 的 Bash 不再通过 legacy ASK 获得正向授权，所有 child
-process 继承 base boundary；managed network 等 deterministic violation 可以形成 exact delta，
-opaque filesystem denial 保持普通 command failure。
-
-**边界：** 绝不解析 stderr；不把模型声明当授权。typed Bash capability declaration 只有在
-有独立 schema、最小性与 fingerprint 测试且确有产品需求时才加入；否则记录为明确不支持，
-不阻塞本 goal。
-
-**完成证据：** Bash 与 child process 无法越界；contained command 零 review；可确定 network
-violation 的 one-shot overlay 正确；不同 command/args 不能共享 grant；若改 schema，完成
-tool-choice live re-ratification。
-
-**可直接执行：**
-
-```text
-/goal 执行 Permission 收敛计划 G6：将 verified Bash 切到 base boundary，保留 deterministic
-violation 的 exact lifecycle，对 opaque denial fail closed，禁止 stderr 推断。把 typed
-capability declaration 视为需证据的可选项；按 TDD、child-process/network integration 及
-必要的 tool-choice live eval 验证，全绿后停止。
-```
-
-### G7 — 收紧 delegated-runtime 继承与 coverage
-
-**对应阶段：** S4/S5 的 SpawnAgent 接缝。
-
-**依赖：** G5/G6 已覆盖所有直接 local data-plane effects。
-
-**目标结果：** SpawnAgent 及未来 `DELEGATED_RUNTIME` tool 必须继承同一 canonical profile、
-SandboxSession、deny policy、authorization runtime 与 execution facts；coverage gate 能追踪
-delegate 最终可达的 local/external effects。
-
-**边界：** delegate 不复制 grant、不扩大 profile、不自行选择 reviewer；不在本 goal 改
-snapshot authority 或 CLI posture。
-
-**完成证据：** child 无法取得 parent 未授权能力；one-shot grant 不能被复制或重复消费；
-park 状态与 denial circuit 一致；缺继承事实时 SpawnAgent 在 dispatch 前 fail closed。
-
-**可直接执行：**
-
-```text
-/goal 执行 Permission 收敛计划 G7：以 TDD 固定 SpawnAgent/DELEGATED_RUNTIME 对 profile、
-sandbox、deny policy、authorization runtime 和 one-shot ledger 的安全继承；任何 coverage
-缺口在 dispatch 前 fail closed。不要修改 CLI posture；全绿后停止。
-```
-
-### G8 — 拆分 execution/review posture 与 snapshot authority
-
-**对应阶段：** S5 的状态模型部分。
-
-**依赖：** G4 exact lifecycle 与 G7 runtime inheritance GREEN。
-
-**目标结果：** AUTO/MANUAL 只选择当前 reviewer，DRY_RUN 只控制本次执行；新 snapshot 不
-持久化 reviewer/execution authority，旧 `permission_mode` 只作为 schema migration 输入。
-
-**边界：** 本 goal 不建立最终 autonomous coverage gate，不删除 legacy checker 类型；不得
-让 resume 静默恢复 AUTO/DRY_RUN，也不得让 DRY_RUN 调 reviewer 或生成 grant。
-
-**完成证据：** manual/auto 生成相同 request；AUTO 不改变 policy 结果；DRY_RUN 零副作用、
-零 reviewer、零 grant；旧 snapshot 可读但当前 CLI/config 始终胜出。
-
-**可直接执行：**
-
-```text
-/goal 执行 Permission 收敛计划 G8：拆开 review posture、execution posture 与 verified
-runtime fact，并迁移 snapshot 使其不恢复 reviewer/DRY_RUN authority。以 TDD 覆盖 AUTO
-同请求、DRY_RUN 零 effect、旧 snapshot migration；保留 legacy API，全部 GREEN 后停止。
-```
-
-### G9 — 建立 autonomous startup/continuation gate
-
-**对应阶段：** S5 的 gate 部分。
-
-**依赖：** G7 coverage 可证明 delegate 继承；G8 posture 已拆分。
-
-**目标结果：** `--auto`、active `/goal` continuation、headless local/delegated runtime 在任何
-模型调用前验证 boundary coverage；sandbox open/preflight/coverage failure 直接失败，不
-回退 host。Goal 遇 defer 必须在 judge 前 park 且不消耗 auto-turn。
-
-**边界：** 只有 registry 完全不含 local data-plane/delegated-runtime 的纯 control-plane 或
-external-only run 可无 local boundary；这不豁免 external policy。只读 local tool 也不豁免。
-
-**完成证据：** no-sandbox AUTO、Goal、headless local run 均在模型调用前失败；pure external
-run 可启动但 mutation 仍 exact review；defer/approve/resume 的 Goal turn accounting 正确；
-startup 失败无静默 fallback。
-
-**可直接执行：**
-
-```text
-/goal 执行 Permission 收敛计划 G9：实现所有 autonomous posture 的 pre-model verified
-coverage gate，包含 --auto、/goal、headless 与 delegated runtime；只允许纯 external/control
-plane 例外，external policy 仍独立。以 TDD 和 startup/Goal park-resume integration 验证，
-全绿后停止。
-```
-
-### G10 — 建立 canonical profile 唯一配置入口
-
-**对应阶段：** S6。
-
-**依赖：** G9 已用 runtime facts 执行 gate，G3 fingerprint 合同稳定。
-
-**目标结果：** filesystem/network/environment/process/external intent 只来自一个
-RuntimePermissionProfile settings source；backend config 只选择实施机制。可等价 legacy
-配置确定性翻译，不可表示 allow 明确拒绝或收窄。
-
-**边界：** 先完成双读单写与 warnings，不在本 goal 删除 legacy public types/config parser；
-不自动迁移 command-prefix allow、ASK 或不可强制 glob allow。
-
-**完成证据：** 等价配置得到同 fingerprint；strict profile 在 backend open 前拒绝冲突/
-不可表示项；snapshot/reviewer/runtime/status 使用同 profile；`/permissions` 区分 intent、
-installed fact、semantic guard、unsupported 与 parked request。
-
-**可直接执行：**
-
-```text
-/goal 执行 Permission 收敛计划 G10：建立 canonical RuntimePermissionProfile 的唯一用户
-配置入口和安全 legacy translator，backend config 不得携带授权意图。完成双读单写、状态
-可观测性与 fail-closed tests；保留 legacy parser/public types，全部 GREEN 后停止。
-```
-
-### G11 — 删除 legacy 层并完成最终 ratification
-
-**对应阶段：** S7 + S8。
-
-**依赖：** G0–G10 全部完成，coverage、migration 与 dogfood 前置场景可证明无需旧 checker。
-
-**目标结果：** 删除 production `PermissionChecker`/`Decision.ASK`/混合 `PermissionMode`、旧
-settings 与 snapshot wiring；完成明确 migration error、README/CLI/status 更新、全部平台
-负向 integration、所触发的 live eval 与七个 dogfood 场景。
-
-**边界：** 删除前先用 `rg`、coverage tests 与负向 integration 证明没有 safety invariant
-依赖旧层；若任一 invariant 仍依赖它，本 goal 不删除并报告 blocker，不能用兼容分支静默
-放行。
-
-**完成证据：** `src/` 无旧生产符号和 `AUTO → ASK allow`；新旧 snapshot/config 行为有明确
-结果；permission-review envelope 若改变则已有 dataset card 与 live pass；完整质量门、平台
-integration、tool-choice/goal-judge（若触发）和 dogfood 全部通过。
-
-**可直接执行：**
-
-```text
-/goal 执行 Permission 收敛计划 G11：只在 G0–G10 的删除门全部满足后删除 legacy
-permission production layer，并完成 migration errors、文档、平台负向 integration、必要 live
-eval 和七个 dogfood。发现仍依赖旧层的 safety invariant 时 durable 记录 blocker，不得删后
-放宽。交付最终 rg/测试/eval/dogfood 证据后停止。
+/goal 执行 Permission 收敛计划 G3“canonical product surface 与 legacy removal”。按
+S6→S7→S8 先建立 canonical profile 双读单写和安全 translator，证明所有删除门后再移除
+legacy API/config/snapshot wiring；不可表示规则明确报错或收窄，禁止静默扩大。完成文档、
+适用 live eval、平台负向 integration、七个 dogfood、最终 rg 与完整质量门后停止。
 ```
 
 ### 执行节奏
 
-- 默认一次只启动一个 goal；完成后先人工检查交付证据，再启动下一个。
-- G3→G4、G5→G6、G8→G9、G10→G11 是明确的“先建合同/替代物，再切流/删除”边界，
-  不合并执行。
-- G6 的 typed Bash capability declaration 是条件项，不是完成统一授权链的必要条件；没有
-  足够证据时，选择 base-boundary fail-closed 比新增模型自述协议更可靠。
-- G11 是唯一允许批量删除 legacy surface 的 goal；在它之前出现的“unused”旧代码也先保留，
-  除非删除与安全切流完全无关且有独立证明。
+- 用户只需依次启动 G1、G2、G3；goal 内部按对应 S 阶段自主持续执行。
+- goal 内每个危险切流点仍需“目标测试 RED → 替代路径 GREEN → 切流 → 回归 GREEN”，但
+  不要求用户重新创建 goal。
+- G1 结束时新 authorization core 可用但 local dispatch 未切；G2 结束时 verified async path
+  已完全切换但 legacy product surface 未删；G3 才允许批量删除 public legacy layer。
+- typed Bash capability declaration 是条件项；没有足够证据时，base-boundary fail-closed 比
+  新增模型自述协议更可靠。
 
 ## 兼容与发布策略
 
@@ -916,13 +776,15 @@ operation fingerprint；遗漏 declaration 由 base boundary fail closed，过�
 
 1. decision + characterization/RED tests；
 2. deny-only action policy（shadow，旧防线仍在）；
-3. plan capability shaping + tool-choice re-ratification；
-4. execution-domain evidence union + external authorization runtime；
+3. execution-domain evidence union + external authorization runtime + permission-review eval；
+4. plan capability shaping + tool-choice re-ratification；
 5. verified local dispatch cutover + optional Bash typed declarations；
 6. split postures + autonomous startup gate + snapshot migration；
 7. canonical profile settings + legacy translator；
 8. remove legacy APIs/config；
-9. docs + permission-review eval + dogfood evidence。
+9. docs + final applicable evals + dogfood evidence。
+
+这些是 G0–G3 内部的建议 commit/checkpoint，不是需要用户逐个启动的 `/goal`。
 
 任一提交不得同时删除旧防线并引入其替代物；替代物必须先以测试证明生效，下一提交
 才能删除旧路径。
