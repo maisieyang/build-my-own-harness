@@ -698,6 +698,93 @@ class TestRunQueryDryRunMode:
         assert completed.is_error is False
 
 
+class TestLegacyAskCharacterization:
+    """G0 deletion-gate baseline for the checker-era ASK semantics."""
+
+    async def test_legacy_ask_is_allowed_in_auto_mode(self) -> None:
+        """G0 characterization: pin the unsafe legacy branch before removal.
+
+        This is deliberately a CURRENT-behavior test, not the target contract.
+        G8 must replace it with the invariant that AUTO selects a reviewer and
+        never converts an authorization result into ALLOW.
+        """
+        from openharness.permissions import DecisionResult, PermissionMode
+
+        class _AskChecker:
+            def evaluate(self, *_args: object, **_kwargs: object) -> DecisionResult:
+                return DecisionResult.ask("legacy confirmation required")
+
+        client = _StubApiClient(
+            events_per_turn=[
+                [_fake_tool_use_event(tool_input={"value": "legacy-auto"})],
+                [_end_turn_event()],
+            ],
+        )
+        ctx = _make_context(
+            api_client=client,
+            tool_registry=_registry_with_fake_tool(),
+        )
+        ctx = dataclasses.replace(
+            ctx,
+            permission_checker=_AskChecker(),  # type: ignore[arg-type]
+            permission_mode=PermissionMode.AUTO,
+        )
+
+        events = [
+            event
+            async for event in run_query(
+                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+                ctx,
+            )
+        ]
+
+        completed = next(
+            event for event in events if isinstance(event, ToolExecutionCompletedEvent)
+        )
+        assert completed.output == "value=legacy-auto"
+        assert completed.is_error is False
+
+    async def test_legacy_ask_is_denied_in_default_mode(self) -> None:
+        """G0 characterization companion: DEFAULT has no durable approval."""
+        from openharness.permissions import DecisionResult
+
+        class _AskChecker:
+            def evaluate(self, *_args: object, **_kwargs: object) -> DecisionResult:
+                return DecisionResult.ask("legacy confirmation required")
+
+        client = _StubApiClient(
+            events_per_turn=[
+                [_fake_tool_use_event(tool_input={"value": "legacy-default"})],
+                [_end_turn_event()],
+            ],
+        )
+        ctx = _make_context(
+            api_client=client,
+            tool_registry=_registry_with_fake_tool(),
+        )
+        ctx = dataclasses.replace(
+            ctx,
+            permission_checker=_AskChecker(),  # type: ignore[arg-type]
+        )
+
+        events = [
+            event
+            async for event in run_query(
+                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+                ctx,
+            )
+        ]
+
+        completed = next(
+            event for event in events if isinstance(event, ToolExecutionCompletedEvent)
+        )
+        assert completed.output == (
+            "permission denied (requires confirmation): legacy confirmation required; "
+            "rerun with --auto to allow"
+        )
+        assert completed.is_error is True
+
+
 class TestRunQueryParallelToolUsesInOneTurn:
     """LLM may emit multiple tool_use blocks in one assistant message.
     D6.3 says serial within a turn -- order must be preserved."""

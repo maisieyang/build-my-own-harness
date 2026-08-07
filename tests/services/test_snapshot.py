@@ -257,7 +257,7 @@ class TestSerializeSnapshot:
             messages=_sample_messages(),
             context=_StubContext(),  # type: ignore[arg-type]
         )
-        for field in (
+        assert set(out) == {
             "version",
             "schema",
             "created_at",
@@ -270,8 +270,7 @@ class TestSerializeSnapshot:
             "messages",
             "tool_metadata",
             "extra",
-        ):
-            assert field in out, f"missing field {field!r}"
+        }
 
     def test_permission_mode_serialized_as_string(self, tmp_path: Path) -> None:
         out = _serialize_snapshot(
@@ -321,6 +320,18 @@ class TestSerializeSnapshot:
         )
 
         state = out["extra"]["permission_runtime"]
+        assert set(state) == {
+            "profile_fingerprint",
+            "boundary_fingerprint",
+            "backend_fingerprint",
+            "parked_request",
+            "parked_reason",
+            "grants",
+            "denials",
+            "last_human_decision",
+            "last_decided_request",
+            "last_decision_resumed",
+        }
         assert state["profile_fingerprint"] == profile.fingerprint
         assert state["boundary_fingerprint"] == boundary.fingerprint
         assert state["backend_fingerprint"] == boundary.backend_fingerprint

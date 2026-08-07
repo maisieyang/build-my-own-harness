@@ -77,6 +77,50 @@ class TestDefaults:
         assert settings.permission_mode is PermissionMode.DEFAULT
 
 
+class TestPermissionConvergenceG0Baseline:
+    """Deletion-gate matrix for the currently fragmented permission inputs."""
+
+    def test_legacy_and_sandbox_permission_settings_coexist(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from openharness.permissions import ExternalToolMode, PermissionMode
+
+        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")
+        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://example.com/v1")
+
+        settings = Settings()
+
+        assert settings.permission_mode is PermissionMode.DEFAULT
+        assert settings.permission_auto_review is True
+        assert settings.permission_reviewer_model is None
+        assert settings.deny_paths == ()
+        assert settings.permissions.model_dump() == {
+            "allow": (),
+            "deny": (),
+            "ask": (),
+        }
+        assert settings.sandbox_enabled is False
+        assert settings.sandbox_backend == "seatbelt"
+        assert settings.sandbox_network == "none"
+        assert settings.sandbox_network_policy.enabled is False
+        assert settings.sandbox_external_tool_policy.model_dump() == {
+            "mcp": ExternalToolMode.ASK,
+            "web": ExternalToolMode.ASK,
+            "browser": ExternalToolMode.ASK,
+            "computer_use": ExternalToolMode.ASK,
+        }
+        assert settings.sandbox_memory == "1g"
+        assert settings.sandbox_cpus == 1.0
+        assert settings.sandbox_pids == 256
+
+    def test_no_formal_canonical_profile_settings_field_exists_yet(self) -> None:
+        fields = Settings.model_fields
+
+        assert "runtime_permission_profile" not in fields
+        assert "permission_profile" not in fields
+
+
 class TestPermissionModeFromEnv:
     """OPENHARNESS_PERMISSION_MODE env var sets the permission policy."""
 
