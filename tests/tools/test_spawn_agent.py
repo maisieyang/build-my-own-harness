@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from engine.conftest import _AllowAllChecker, _StubApiClient
+from engine.conftest import _StubApiClient
 from openharness.engine.context import QueryContext
 from openharness.execution import BoundaryVerification, EnforcedBoundary, ExecutionEffect
 from openharness.permissions import PermissionRuntime, workspace_runtime_profile
@@ -100,7 +100,6 @@ def _make_parent_context(
     return QueryContext(
         api_client=_StubApiClient(events_per_turn),
         tool_registry=ToolRegistry(),  # no need to register tools for these tests
-        permission_checker=_AllowAllChecker(),
         system_prompt="parent prompt",
         cwd=tmp_path,
         model="qwen-plus",
@@ -200,7 +199,7 @@ class TestSpawnAgentHappyPath:
 
     async def test_sub_agent_inherits_parent_fields(self, tmp_path: Path) -> None:
         # Sub-agent's QueryContext must inherit api_client / tool_registry /
-        # permission_checker / cwd / model from parent. We verify the
+        # canonical profile/boundary / cwd / model from parent. We verify the
         # captured request's model matches the parent's.
         parent_ctx = _make_parent_context(
             events_per_turn=[[_end_turn_with_text("ok")]],
@@ -273,7 +272,6 @@ class TestSpawnAgentHappyPath:
         assert len(captured) == 1
         child = captured[0]
         assert child.tool_registry is parent_ctx.tool_registry
-        assert child.permission_checker is parent_ctx.permission_checker
         assert child.sandbox_session is sandbox_session
         assert child.runtime_permission_profile is profile
         assert child.enforced_boundary is boundary
@@ -393,7 +391,6 @@ class TestSpawnAgentLoopLimit:
                 ],
             ),
             tool_registry=registry,
-            permission_checker=_AllowAllChecker(),
             system_prompt="",
             cwd=tmp_path,
             model="qwen-plus",

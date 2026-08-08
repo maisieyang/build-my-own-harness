@@ -39,6 +39,7 @@ from openharness.permissions import (
     FilesystemAccess,
     FilesystemPolicy,
     FilesystemRule,
+    FilesystemScope,
     NetworkPolicy,
     ProcessPolicy,
     RuntimePermissionProfile,
@@ -285,7 +286,9 @@ async def test_worker_violation_preserves_profile_hard_deny(tmp_path: Path) -> N
         environment={},
         boundary=_boundary(),
         boundary_root=tmp_path,
-        hard_deny_rules=((FilesystemAccess.DENY_WRITE, tmp_path / ".git"),),
+        hard_deny_rules=(
+            (FilesystemAccess.DENY_WRITE, tmp_path / ".git", FilesystemScope.SUBTREE),
+        ),
     )
     with patch(
         "openharness.execution.seatbelt.asyncio.create_subprocess_exec",

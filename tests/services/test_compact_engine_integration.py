@@ -4,7 +4,7 @@ Verifies the engine actually calls compact before each LLM request when
 ``QueryContext.compact_enabled=True``, and that ``compact_enabled=False``
 preserves pre-Phase-11 behavior (no compact in the loop).
 
-We use a stub API client + stub permission checker + minimal tool
+We use a stub API client + minimal tool
 registry so the loop runs end-to-end without touching real providers
 or the filesystem.
 """
@@ -18,7 +18,6 @@ import pytest
 from openharness.engine.context import QueryContext
 from openharness.engine.query import run_query
 from openharness.hooks import HookRegistry
-from openharness.permissions import PermissionMode
 from openharness.protocols import ConversationMessage, TextBlock
 from openharness.protocols.stream_events import (
     ApiMessageCompleteEvent,
@@ -91,15 +90,6 @@ class _SummarizingStubClient:
         )
 
 
-class _NoOpPermissionChecker:
-    """Approves everything — engine tests don't need real perms."""
-
-    def check(self, tool_name: str, tool_input: dict, **_: object) -> object:
-        from openharness.permissions import Decision
-
-        return Decision.allow()
-
-
 def _build_context(
     client: object,
     *,
@@ -109,14 +99,12 @@ def _build_context(
     return QueryContext(
         api_client=client,  # type: ignore[arg-type]
         tool_registry=create_default_tool_registry(),
-        permission_checker=_NoOpPermissionChecker(),  # type: ignore[arg-type]
         hook_registry=HookRegistry(),
         system_prompt="test prompt",
         cwd=__import__("pathlib").Path("/tmp"),
         model="qwen-plus",
         max_tokens=512,
         max_turns=3,
-        permission_mode=PermissionMode.DEFAULT,
         compact_enabled=compact_enabled,
         compact_threshold_ratio=threshold_ratio,
     )
@@ -190,7 +178,6 @@ class TestCompactEngineIntegration:
         context = QueryContext(
             api_client=client,  # type: ignore[arg-type]
             tool_registry=create_default_tool_registry(),
-            permission_checker=_NoOpPermissionChecker(),  # type: ignore[arg-type]
             hook_registry=HookRegistry(),
             system_prompt="x",
             cwd=__import__("pathlib").Path("/tmp"),

@@ -5,12 +5,11 @@ frontmatter that declares:
 
 - ``system_prompt`` (Layer 1 override)
 - ``tools.whitelist`` (Layer 2 catalog filter)
-- ``deny_paths`` (Layer 3 permission overlay)
 - ``hooks`` (Layer 3 hook injection by name from BUILTIN_HOOKS)
 
 Per ``decisions/17-phase-5d-boundary.md`` D19.x:
 
-- D19.1: 4-layer composition (all 4 fields optional)
+- D19.1: 3-layer composition (all 3 fields optional)
 - D19.2: ``~/.openharness/bundles/<name>.md`` global + ``<project>/
   .openharness/bundles/<name>.md`` project; project wins
 - D19.3: slash command ``mode: <bundle_name>`` frontmatter triggers
@@ -24,7 +23,7 @@ Per ``decisions/17-phase-5d-boundary.md`` D19.x:
 
 Cross-cutting invariant — Phase 5d is the FIRST cross-layer tenant.
 It composes existing layer primitives (system_prompt / hook_registry /
-deny_paths / wrapped ToolRegistry) WITHOUT modifying any of them.
+wrapped ToolRegistry) WITHOUT modifying any of them.
 ``permissions/``,``hooks/``,``engine/``,``observability/`` all stay
 zero-diff vs Phase 7b close.
 

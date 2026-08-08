@@ -218,6 +218,12 @@ class TestVerifiedSandboxStatus:
             def __init__(self, **kwargs: object) -> None:
                 pass
 
+            def preflight(self, profile: object) -> object:
+                del profile
+                from openharness.execution import BackendSupport
+
+                return BackendSupport.available(backend="macos-seatbelt")
+
             async def open(self, profile: object) -> object:
                 class _Session:
                     boundary = EnforcedBoundary(
@@ -260,6 +266,12 @@ class TestVerifiedSandboxStatus:
         class _Backend:
             def __init__(self, **kwargs: object) -> None:
                 pass
+
+            def preflight(self, profile: object) -> object:
+                del profile
+                from openharness.execution import BackendSupport
+
+                return BackendSupport.available(backend="macos-seatbelt")
 
             async def open(self, profile: object) -> object:
                 nonlocal opened
@@ -461,11 +473,8 @@ class TestReplRecoveryPaths:
 
 
 class TestChatFlagValidation:
-    def test_auto_and_dry_run_mutually_exclusive(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """``--auto`` and ``--dry-run`` together fails fast with exit 2."""
+    def test_auto_and_dry_run_are_orthogonal(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_minimum_env(monkeypatch)
         runner = CliRunner()
         result = runner.invoke(cli_module.app, ["chat", "--auto", "--dry-run"])
-        assert result.exit_code == 2
-        combined = result.stdout + (result.stderr or "")
-        assert "mutually exclusive" in combined
+        assert result.exit_code == 0

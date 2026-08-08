@@ -1,8 +1,5 @@
 """Shared fixtures for engine tests.
 
-- ``_AllowAllChecker`` / ``_DenyChecker``: minimal :class:`PermissionChecker`
-  satisfiers used by every ``run_query`` test (P2-T4.4d-4f) plus the
-  ``QueryContext`` construction tests in 4c.
 - ``_StubApiClient``: structurally satisfies the ``stream_message`` shape
   and emits a pre-recorded sequence of events per turn. Captures the
   ``ApiMessageRequest`` instances ``run_query`` builds so tests can assert
@@ -16,50 +13,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from openharness.permissions import DecisionResult
-
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from pydantic import BaseModel
-
     from openharness.protocols import ApiMessageRequest, ApiStreamEvent
-    from openharness.tools.base import ToolExecutionContext
-
-
-class _AllowAllChecker:
-    """Permission checker that always returns ``DecisionResult.allow()``.
-
-    Used by tests that exercise the happy-path tool-dispatch flow.
-    Structurally satisfies :class:`PermissionChecker` -- no inheritance needed.
-    P3-T3.3d:upgraded from bare ``Decision`` to ``DecisionResult``.
-    """
-
-    def evaluate(
-        self,
-        tool_name: str,
-        args: BaseModel,
-        context: ToolExecutionContext,
-    ) -> DecisionResult:
-        del tool_name, args, context
-        return DecisionResult.allow()
-
-
-class _DenyChecker:
-    """Permission checker that always returns ``DecisionResult.deny(...)``.
-
-    Used by tests that exercise the permission-denial recovery path.
-    P3-T3.3d:upgraded from bare ``Decision`` to ``DecisionResult``.
-    """
-
-    def evaluate(
-        self,
-        tool_name: str,
-        args: BaseModel,
-        context: ToolExecutionContext,
-    ) -> DecisionResult:
-        del tool_name, args, context
-        return DecisionResult.deny("stub denial for test")
 
 
 class _StubApiClient:

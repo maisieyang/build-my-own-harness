@@ -26,19 +26,71 @@ relies on:
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
+from dotenv import dotenv_values
 from pydantic import BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from openharness.errors import OpenHarnessError
 from openharness.mcp import McpServerConfig
 from openharness.observability.logging import LogFormat, LogLevel
 from openharness.permissions import (
-    ExternalToolPolicy,
-    NetworkPolicy,
-    PermissionMode,
-    PermissionRules,
+    ExecutionPosture,
+    ReviewerPosture,
+    RuntimePermissionProfile,
+    workspace_runtime_profile,
 )
+
+
+class LegacyPermissionConfigError(OpenHarnessError, ValueError):
+    """A removed permission setting was supplied instead of the canonical profile."""
+
+
+_LEGACY_PERMISSION_FIELDS = frozenset(
+    {
+        "permission_mode",
+        "deny_paths",
+        "permissions",
+        "sandbox_network",
+        "sandbox_network_policy",
+        "sandbox_external_tool_policy",
+    }
+)
+_LEGACY_PERMISSION_ENV_PREFIXES = (
+    "OPENHARNESS_PERMISSION_MODE",
+    "OPENHARNESS_DENY_PATHS",
+    "OPENHARNESS_PERMISSIONS",
+    "OPENHARNESS_SANDBOX_NETWORK",
+    "OPENHARNESS_SANDBOX_NETWORK_POLICY",
+    "OPENHARNESS_SANDBOX_EXTERNAL_TOOL_POLICY",
+)
+
+
+def _legacy_permission_env_names(names: set[str]) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            name
+            for name in names
+            if any(
+                name == prefix or name.startswith(prefix + "__")
+                for prefix in _LEGACY_PERMISSION_ENV_PREFIXES
+            )
+        )
+    )
+
+
+def _configured_env_files(value: Any) -> tuple[Path, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, (str, os.PathLike)):
+        return (Path(value),)
+    if isinstance(value, (list, tuple)):
+        return tuple(Path(item) for item in value)
+    return ()
+
 
 # ---------------------------------------------------------------------------
 # Nested sub-models — P10-T4.4e (D28.10)
@@ -372,7 +424,29 @@ class Settings(BaseSettings):
         # pydantic-settings convention; ``_`` would collide with field
         # names that contain underscores (``max_files``).
         env_nested_delimiter="__",
+        nested_model_default_partial_update=True,
     )
+
+    def __init__(self, **values: Any) -> None:
+        legacy_inputs = sorted(_LEGACY_PERMISSION_FIELDS & values.keys())
+        legacy_env = _legacy_permission_env_names(set(os.environ))
+        env_file_value = values.get("_env_file", self.model_config.get("env_file"))
+        legacy_dotenv: list[str] = []
+        for env_file in _configured_env_files(env_file_value):
+            if not env_file.is_file():
+                continue
+            legacy_dotenv.extend(_legacy_permission_env_names(set(dotenv_values(env_file))))
+        found = tuple(sorted({*legacy_inputs, *legacy_env, *legacy_dotenv}))
+        if found:
+            joined = ", ".join(found)
+            raise LegacyPermissionConfigError(
+                "legacy permission configuration was removed in OpenHarness 0.4.0: "
+                f"{joined}. Replace authorization intent with "
+                "OPENHARNESS_PERMISSION_PROFILE or nested "
+                "OPENHARNESS_PERMISSION_PROFILE__* settings; use --auto and "
+                "--dry-run for per-invocation postures."
+            )
+        super().__init__(**values)
 
     api_key: str = Field(
         ...,
@@ -432,38 +506,27 @@ class Settings(BaseSettings):
             "per-provider branches."
         ),
     )
-    permission_mode: PermissionMode = Field(
-        default=PermissionMode.DEFAULT,
+    permission_profile: RuntimePermissionProfile = Field(
+        default=workspace_runtime_profile(),
         description=(
-            "Legacy CLI compatibility enum. DEFAULT selects manual review + "
-            "execution; AUTO selects the exact-request auto reviewer; DRY_RUN "
-            "selects manual review + non-executing 'would call X' events. "
-            "Reviewer and execution postures are independent after bootstrap."
+            "Canonical session authorization intent. Configure filesystem, network, "
+            "environment, process, and external_tools here; sandbox settings only "
+            "select the enforcement mechanism. Nested env prefix: "
+            "OPENHARNESS_PERMISSION_PROFILE__."
         ),
     )
-    # ``Annotated[..., NoDecode]`` tells pydantic-settings:do NOT try to
-    # JSON-decode this env value;hand the raw string to our validator.
-    # Without NoDecode, ``OPENHARNESS_DENY_PATHS='secrets/**'`` triggers a
-    # JSON parse error before our ``_parse_deny_paths`` runs.
-    deny_paths: Annotated[tuple[str, ...], NoDecode] = Field(
-        default=(),
+    reviewer_posture: ReviewerPosture = Field(
+        default=ReviewerPosture.MANUAL,
         description=(
-            "User-configured Tier 2 deny patterns for the AuthZ subsystem "
-            "(P3-T3.3b). Comma-separated in env var: "
-            "OPENHARNESS_DENY_PATHS='secrets/**,*.env'. Matches via "
-            "openharness.permissions.tier_based._glob_match (fnmatch + "
-            "`dir/**` recursive suffix). Empty tuple = no user rules."
+            "Who reviews exact requests for this invocation. --auto overrides "
+            "this to AUTO without changing authorization intent."
         ),
     )
-    permissions: PermissionRules = Field(
-        default_factory=PermissionRules,
+    execution_posture: ExecutionPosture = Field(
+        default=ExecutionPosture.EXECUTE,
         description=(
-            "loop-runtime L2: declarative permission rules aligned with Claude "
-            "Code (``permissions.allow/deny/ask``, precedence deny>ask>allow). "
-            "Nested env: ``OPENHARNESS_PERMISSIONS__ALLOW`` etc. Coexists with "
-            "the legacy ``permission_mode`` config edge + ``deny_paths``; the "
-            "Tier 1 sensitive-path red line sits above every rule and cannot be "
-            "overridden by an allow rule. See :class:`PermissionRules`."
+            "Whether effects execute or are simulated. --dry-run overrides this "
+            "to DRY_RUN and never creates a permission grant."
         ),
     )
 
@@ -533,9 +596,8 @@ class Settings(BaseSettings):
             "(D15.6). Comma-separated env var: "
             "OPENHARNESS_TRUSTED_MCP_SERVERS='github,filesystem'. "
             "Servers not in this set get ``is_read_only=False`` forced "
-            "regardless of what they self-report, ensuring AuthZ Tier 3 "
-            "evaluates them as if they could mutate state. Same shape as "
-            "``deny_paths`` (P3-T3.3b)."
+            "regardless of what they self-report, so mutating external effects "
+            "remain subject to exact review."
         ),
     )
 
@@ -590,34 +652,6 @@ class Settings(BaseSettings):
             "for most coding workflows. Override via "
             "``OPENHARNESS_SANDBOX_IMAGE=ubuntu:latest`` (image must "
             "provide POSIX sh; pure-binary images don't work)."
-        ),
-    )
-    sandbox_network: str = Field(
-        default="none",
-        pattern=r"^(none|bridge)$",
-        description=(
-            "Container network mode (D18.5). ``none`` (default) blocks "
-            "all external network — strongest default, defeats "
-            "exfiltration. ``bridge`` enables NAT'd internet (needed for "
-            "npm install / git clone etc.). Other modes (``host`` /"
-            " custom networks) intentionally not supported."
-        ),
-    )
-    sandbox_network_policy: NetworkPolicy = Field(
-        default_factory=NetworkPolicy,
-        description=(
-            "Canonical proxy policy for a sandboxed session. When enabled, "
-            "it supersedes the legacy none/bridge mode unless an explicit "
-            "--sandbox-network flag is supplied. Nested env prefix: "
-            "OPENHARNESS_SANDBOX_NETWORK_POLICY__."
-        ),
-    )
-    sandbox_external_tool_policy: ExternalToolPolicy = Field(
-        default_factory=ExternalToolPolicy,
-        description=(
-            "Canonical policy for execution surfaces outside the local "
-            "filesystem/process sandbox, such as web and MCP tools. Nested "
-            "env prefix: OPENHARNESS_SANDBOX_EXTERNAL_TOOL_POLICY__."
         ),
     )
     sandbox_memory: str = Field(
@@ -784,25 +818,10 @@ class Settings(BaseSettings):
         ),
     )
 
-    @field_validator("deny_paths", mode="before")
-    @classmethod
-    def _parse_deny_paths(cls, value: Any) -> Any:
-        """Parse comma-separated env strings into a tuple of patterns.
-
-        - ``"a,b,c"`` -> ``("a", "b", "c")``
-        - ``"a, b ,c"`` -> ``("a", "b", "c")`` (whitespace stripped)
-        - ``"a,,b,"`` -> ``("a", "b")`` (empty segments dropped)
-        - already-tuple input passes through (programmatic construction)
-        """
-        if isinstance(value, str):
-            return tuple(p.strip() for p in value.split(",") if p.strip())
-        return value
-
     @field_validator("trusted_mcp_servers", mode="before")
     @classmethod
     def _parse_trusted_mcp_servers(cls, value: Any) -> Any:
-        """Same shape as :meth:`_parse_deny_paths` — comma-separated env →
-        tuple of names. Mirrors P3-T3.3b precedent."""
+        """Parse a comma-separated environment value into server names."""
         if isinstance(value, str):
             return tuple(p.strip() for p in value.split(",") if p.strip())
         return value

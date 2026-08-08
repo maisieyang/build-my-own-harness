@@ -11,7 +11,11 @@ from pydantic import BaseModel
 from engine.conftest import _StubApiClient
 from openharness.engine import QueryContext
 from openharness.engine.errors import AutonomousBoundaryError
-from openharness.engine.query import _dispatch_one, run_query
+from openharness.engine.query import (
+    _dispatch_one,
+    _verified_dispatch_authorization,
+    run_query,
+)
 from openharness.execution import (
     BoundaryVerification,
     EnforcedBoundary,
@@ -19,7 +23,7 @@ from openharness.execution import (
     OperationCompleted,
     ProcessCompleted,
 )
-from openharness.permissions import ExternalToolMode, ExternalToolPolicy, workspace_runtime_profile
+from openharness.permissions import ExternalToolPolicy, workspace_runtime_profile
 from openharness.protocols import (
     ApiMessageCompleteEvent,
     ConversationMessage,
@@ -126,7 +130,6 @@ def _context(
             client if client is not None else _StubApiClient(events_per_turn=[]),
         ),
         tool_registry=registry,
-        permission_checker=_ExplodingChecker(),  # type: ignore[arg-type]
         system_prompt="test",
         cwd=tmp_path,
         model="test",
@@ -294,7 +297,6 @@ async def test_autonomous_local_catalog_requires_verified_boundary_before_model_
     context = QueryContext(
         api_client=cast("OpenAICompatibleApiClient", client),
         tool_registry=registry,
-        permission_checker=_ExplodingChecker(),  # type: ignore[arg-type]
         system_prompt="test",
         cwd=tmp_path,
         model="test",
@@ -309,6 +311,27 @@ async def test_autonomous_local_catalog_requires_verified_boundary_before_model_
             pass
 
     assert client.captured_requests == []
+
+
+def test_local_dispatch_without_verified_boundary_fails_closed(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    tool = Read()
+    registry.register(tool)
+    context = QueryContext(
+        api_client=cast("OpenAICompatibleApiClient", _StubApiClient(events_per_turn=[])),
+        tool_registry=registry,
+        system_prompt="test",
+        cwd=tmp_path,
+        model="test",
+    )
+
+    handled, failure = _verified_dispatch_authorization(tool, context)
+
+    assert handled is True
+    assert failure == (
+        "verified dispatch denied: local execution requires a verified sandbox boundary",
+        True,
+    )
 
 
 async def test_autonomous_verified_catalog_passes_gate(
@@ -345,14 +368,16 @@ async def test_external_and_trusted_control_domains_never_call_legacy_checker(
     registry = ToolRegistry()
     registry.register(tool)
     client = _StubApiClient(events_per_turn=[])
+    profile = workspace_runtime_profile().model_copy(
+        update={"external_tools": ExternalToolPolicy(web="allow")}
+    )
     context = QueryContext(
         api_client=cast("OpenAICompatibleApiClient", client),
         tool_registry=registry,
-        permission_checker=_ExplodingChecker(),  # type: ignore[arg-type]
         system_prompt="test",
         cwd=tmp_path,
         model="test",
-        external_tool_policy=ExternalToolPolicy(web=ExternalToolMode.ALLOW),
+        runtime_permission_profile=profile,
     )
 
     outcome = await _dispatch_one(

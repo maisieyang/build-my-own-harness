@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, cast
 
 from pydantic import BaseModel
 
-from engine.conftest import _AllowAllChecker, _StubApiClient
+from engine.conftest import _StubApiClient
 from openharness.engine import QueryContext, run_query
 from openharness.execution import (
     BoundaryVerification,
@@ -21,7 +21,6 @@ from openharness.permissions import (
     ExternalToolMode,
     ExternalToolPolicy,
     PermissionDeltaRequest,
-    PermissionMode,
     PermissionReviewVerdict,
     PermissionRuntime,
     RuntimePermissionProfile,
@@ -48,6 +47,7 @@ from openharness.tools import (
 
 if TYPE_CHECKING:
     from openharness.api import OpenAICompatibleApiClient
+    from openharness.execution import SandboxSession
     from openharness.protocols import ApiStreamEvent
 
 
@@ -76,6 +76,7 @@ class _ExternalTool(BaseTool[_Input]):
 class _BoundaryTool(_ExternalTool):
     name = "BoundaryTool"
     execution_domain = ExecutionDomain.LOCAL_DATA
+    required_execution_effect = ExecutionEffect.FILE_WRITE
     external_effect_surface = None
     external_effect_kind = None
 
@@ -108,6 +109,21 @@ class _Reviewer:
     async def review(self, request: PermissionDeltaRequest) -> PermissionReviewVerdict:
         self.calls.append(request)
         return self.verdict
+
+
+class _BoundarySession:
+    def __init__(self, profile: RuntimePermissionProfile) -> None:
+        self._boundary = EnforcedBoundary(
+            profile_fingerprint=profile.fingerprint,
+            backend="test",
+            backend_version="1",
+            covered_effects=(ExecutionEffect.FILE_WRITE,),
+            verification=BoundaryVerification.VERIFIED,
+        )
+
+    @property
+    def boundary(self) -> EnforcedBoundary:
+        return self._boundary
 
 
 def _runtime(reviewer: _Reviewer) -> tuple[RuntimePermissionProfile, PermissionRuntime]:
@@ -157,15 +173,17 @@ async def _run(mode: ExternalToolMode) -> tuple[_ExternalTool, list[ApiStreamEve
     registry = ToolRegistry()
     registry.register(tool)
     client = _StubApiClient(events_per_turn=[[_tool_turn()], [_end_turn()]])
+    profile = workspace_runtime_profile().model_copy(
+        update={"external_tools": ExternalToolPolicy(mcp=mode)}
+    )
     context = QueryContext(
         api_client=cast("OpenAICompatibleApiClient", client),
         tool_registry=registry,
-        permission_checker=_AllowAllChecker(),
         system_prompt="test",
         cwd=Path("/tmp"),
         model="qwen-plus",
         max_tokens=32,
-        external_tool_policy=ExternalToolPolicy(mcp=mode),
+        runtime_permission_profile=profile,
     )
     events = [event async for event in run_query([], context)]
     return tool, events
@@ -205,17 +223,19 @@ async def test_trusted_read_only_external_call_can_use_explicit_surface_allow() 
     tool = _TrustedRead()
     registry = ToolRegistry()
     registry.register(tool)
+    profile = workspace_runtime_profile().model_copy(
+        update={"external_tools": ExternalToolPolicy(mcp="allow")}
+    )
     context = QueryContext(
         api_client=cast(
             "OpenAICompatibleApiClient",
             _StubApiClient(events_per_turn=[[_tool_turn()], [_end_turn()]]),
         ),
         tool_registry=registry,
-        permission_checker=_AllowAllChecker(),
         system_prompt="test",
         cwd=Path("/tmp"),
         model="qwen-plus",
-        external_tool_policy=ExternalToolPolicy(mcp="allow"),
+        runtime_permission_profile=profile,
     )
 
     events = [event async for event in run_query([], context)]
@@ -239,11 +259,9 @@ async def test_untrusted_external_call_cannot_use_broad_surface_allow() -> None:
             _StubApiClient(events_per_turn=[[_tool_turn()], [_end_turn()]]),
         ),
         tool_registry=registry,
-        permission_checker=_AllowAllChecker(),
         system_prompt="test",
         cwd=Path("/tmp"),
         model="qwen-plus",
-        external_tool_policy=ExternalToolPolicy(mcp="allow"),
     )
 
     events = [event async for event in run_query([], context)]
@@ -258,17 +276,19 @@ async def test_web_network_policy_applies_without_a_local_sandbox_profile() -> N
     tool = _WebReadTool()
     registry = ToolRegistry()
     registry.register(tool)
+    profile = workspace_runtime_profile().model_copy(
+        update={"external_tools": ExternalToolPolicy(web="deny")}
+    )
     context = QueryContext(
         api_client=cast(
             "OpenAICompatibleApiClient",
             _StubApiClient(events_per_turn=[[_tool_turn("WebRead")], [_end_turn()]]),
         ),
         tool_registry=registry,
-        permission_checker=_AllowAllChecker(),
         system_prompt="test",
         cwd=Path("/tmp"),
         model="qwen-plus",
-        external_tool_policy=ExternalToolPolicy(web="deny"),
+        runtime_permission_profile=profile,
     )
 
     events = [event async for event in run_query([], context)]
@@ -291,7 +311,6 @@ async def test_ask_uses_reviewer_for_exact_call_and_executes_once() -> None:
             _StubApiClient(events_per_turn=[[_tool_turn()], [_end_turn()]]),
         ),
         tool_registry=registry,
-        permission_checker=_AllowAllChecker(),
         system_prompt="test",
         cwd=Path("/tmp"),
         model="qwen-plus",
@@ -324,11 +343,9 @@ async def test_no_sandbox_external_ask_uses_same_exact_runtime() -> None:
             _StubApiClient(events_per_turn=[[_tool_turn()], [_end_turn()]]),
         ),
         tool_registry=registry,
-        permission_checker=_AllowAllChecker(),
         system_prompt="test",
         cwd=Path("/tmp"),
         model="qwen-plus",
-        external_tool_policy=profile.external_tools,
         runtime_permission_profile=profile,
         permission_runtime=runtime,
     )
@@ -357,11 +374,9 @@ async def test_no_sandbox_external_defer_emits_typed_park() -> None:
             _StubApiClient(events_per_turn=[[_tool_turn()], [_end_turn()]]),
         ),
         tool_registry=registry,
-        permission_checker=_AllowAllChecker(),
         system_prompt="test",
         cwd=Path("/tmp"),
         model="qwen-plus",
-        external_tool_policy=profile.external_tools,
         runtime_permission_profile=profile,
         permission_runtime=runtime,
     )
@@ -382,7 +397,6 @@ async def test_manual_and_auto_review_receive_byte_equivalent_external_request()
 
     async def run_once(
         *,
-        mode: PermissionMode,
         runtime: PermissionRuntime,
     ) -> None:
         registry = ToolRegistry()
@@ -393,12 +407,9 @@ async def test_manual_and_auto_review_receive_byte_equivalent_external_request()
                 _StubApiClient(events_per_turn=[[_tool_turn()], [_end_turn()]]),
             ),
             tool_registry=registry,
-            permission_checker=_AllowAllChecker(),
             system_prompt="test",
             cwd=Path("/tmp"),
             model="qwen-plus",
-            permission_mode=mode,
-            external_tool_policy=profile.external_tools,
             runtime_permission_profile=profile,
             permission_runtime=runtime,
             authorization_context=("Create the one requested issue.",),
@@ -410,8 +421,8 @@ async def test_manual_and_auto_review_receive_byte_equivalent_external_request()
     reviewer = _Reviewer(PermissionReviewVerdict.defer("human must decide"))
     automatic = PermissionRuntime(profile=profile, boundary=None, reviewer=reviewer)
 
-    await run_once(mode=PermissionMode.DEFAULT, runtime=manual)
-    await run_once(mode=PermissionMode.AUTO, runtime=automatic)
+    await run_once(runtime=manual)
+    await run_once(runtime=automatic)
 
     assert manual.parked_request is not None
     assert reviewer.calls == [automatic.parked_request]
@@ -439,12 +450,10 @@ async def test_hook_modified_final_arguments_are_what_external_reviewer_authoriz
             _StubApiClient(events_per_turn=[[_tool_turn()], [_end_turn()]]),
         ),
         tool_registry=registry,
-        permission_checker=_AllowAllChecker(),
         hook_registry=hooks,
         system_prompt="test",
         cwd=Path("/tmp"),
         model="qwen-plus",
-        external_tool_policy=profile.external_tools,
         runtime_permission_profile=profile,
         enforced_boundary=runtime.boundary,
         permission_runtime=runtime,
@@ -467,7 +476,6 @@ async def test_reviewer_defer_emits_typed_park_and_stops_before_next_model_turn(
     context = QueryContext(
         api_client=cast("OpenAICompatibleApiClient", client),
         tool_registry=registry,
-        permission_checker=_AllowAllChecker(),
         system_prompt="test",
         cwd=Path("/tmp"),
         model="qwen-plus",
@@ -506,16 +514,20 @@ async def test_local_boundary_violation_emits_structured_event() -> None:
             )
         }
     )
+    profile = workspace_runtime_profile()
+    session = _BoundarySession(profile)
     context = QueryContext(
         api_client=cast(
             "OpenAICompatibleApiClient",
             _StubApiClient(events_per_turn=[[turn], [_end_turn()]]),
         ),
         tool_registry=registry,
-        permission_checker=_AllowAllChecker(),
         system_prompt="test",
         cwd=Path("/tmp"),
         model="qwen-plus",
+        sandbox_session=cast("SandboxSession", session),
+        runtime_permission_profile=profile,
+        enforced_boundary=session.boundary,
     )
 
     events = [event async for event in run_query([], context)]

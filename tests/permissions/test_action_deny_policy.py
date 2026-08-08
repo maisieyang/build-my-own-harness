@@ -1,4 +1,4 @@
-"""Contracts for the deny-only action policy installed during G1/S1."""
+"""Contracts for the canonical negative-only semantic guard."""
 
 from __future__ import annotations
 
@@ -9,11 +9,8 @@ from pydantic import BaseModel
 from openharness.permissions import (
     ActionDenyPolicy,
     ConfiguredActionDenyPolicy,
-    Decision,
     DenyResult,
-    PermissionRules,
     PlanActionDenyPolicy,
-    TierBasedPermissionChecker,
 )
 from openharness.tools import (
     BaseTool,
@@ -42,7 +39,6 @@ class _WriteTool(BaseTool[_PathInput]):
     name = "Write"
     description = "test write tool"
     input_model = _PathInput
-    is_read_only = False
 
     async def execute(self, args: _PathInput, context: ToolExecutionContext) -> ToolResult:
         del args, context
@@ -54,22 +50,10 @@ class _BashTool(BaseTool[_CommandInput]):
     name = "Bash"
     description = "test command tool"
     input_model = _CommandInput
-    is_read_only = False
 
     async def execute(self, args: _CommandInput, context: ToolExecutionContext) -> ToolResult:
         del args, context
         return ToolResult(output="ok")
-
-
-class _StubSettings:
-    def __init__(
-        self,
-        *,
-        deny_paths: tuple[str, ...] = (),
-        permissions: PermissionRules | None = None,
-    ) -> None:
-        self.deny_paths = deny_paths
-        self.permissions = permissions if permissions is not None else PermissionRules()
 
 
 def _registry() -> ToolRegistry:
@@ -79,144 +63,68 @@ def _registry() -> ToolRegistry:
     return registry
 
 
-def _policies(
-    *,
-    deny_paths: tuple[str, ...] = (),
-    permissions: PermissionRules | None = None,
-    headless: bool = False,
-) -> tuple[ConfiguredActionDenyPolicy, TierBasedPermissionChecker]:
-    settings = _StubSettings(deny_paths=deny_paths, permissions=permissions)
-    return (
-        ConfiguredActionDenyPolicy(settings),  # type: ignore[arg-type]
-        TierBasedPermissionChecker(
-            _registry(),
-            settings,  # type: ignore[arg-type]
-            headless=headless,
-        ),
-    )
-
-
-def _assert_equivalent_deny(
-    policy: ConfiguredActionDenyPolicy,
-    checker: TierBasedPermissionChecker,
-    *,
-    tool_name: str,
-    args: BaseModel,
-    cwd: Path,
-) -> None:
-    context = ToolExecutionContext(cwd=cwd)
-    deny = policy.evaluate(tool_name, args, context)
-    legacy = checker.evaluate(tool_name, args, context)
-    assert isinstance(deny, DenyResult)
-    assert legacy.decision is Decision.DENY
-    assert deny.reason == legacy.reason
+def _deny(policy: ActionDenyPolicy, tool: str, args: BaseModel, cwd: Path) -> DenyResult:
+    result = policy.evaluate(tool, args, ToolExecutionContext(cwd=cwd))
+    assert isinstance(result, DenyResult)
+    return result
 
 
 def test_protocol_can_only_return_deny_or_no_match(tmp_path: Path) -> None:
-    policy, _ = _policies()
-    structural: ActionDenyPolicy = policy
-
-    result = structural.evaluate(
-        "Write",
-        _PathInput(path=str(tmp_path / "ok.txt")),
-        ToolExecutionContext(cwd=tmp_path),
+    structural: ActionDenyPolicy = ConfiguredActionDenyPolicy()
+    assert (
+        structural.evaluate(
+            "Write",
+            _PathInput(path=str(tmp_path / "ok.txt")),
+            ToolExecutionContext(cwd=tmp_path),
+        )
+        is None
     )
-
-    assert result is None
     assert not hasattr(DenyResult, "allow")
     assert not hasattr(DenyResult, "ask")
 
 
-def test_catastrophic_bash_deny_matches_legacy(tmp_path: Path) -> None:
-    policy, checker = _policies()
-    _assert_equivalent_deny(
-        policy,
-        checker,
-        tool_name="Bash",
-        args=_CommandInput(command="rm -rf /"),
-        cwd=tmp_path,
+def test_catastrophic_bash_is_a_framework_hard_deny(tmp_path: Path) -> None:
+    result = _deny(
+        ConfiguredActionDenyPolicy(),
+        "Bash",
+        _CommandInput(command="rm -rf /"),
+        tmp_path,
     )
+    assert "catastrophic" in result.reason
 
 
-def test_irreversible_git_deny_matches_legacy(tmp_path: Path) -> None:
-    policy, checker = _policies(
-        permissions=PermissionRules(allow=("Bash(*)",)),
+def test_irreversible_git_is_a_framework_hard_deny(tmp_path: Path) -> None:
+    result = _deny(
+        ConfiguredActionDenyPolicy(),
+        "Bash",
+        _CommandInput(command="git -C . commit -m safe-looking"),
+        tmp_path,
     )
-    _assert_equivalent_deny(
-        policy,
-        checker,
-        tool_name="Bash",
-        args=_CommandInput(command="git -C . commit -m safe-looking"),
-        cwd=tmp_path,
-    )
+    assert "irreversible git action" in result.reason
 
 
-def test_tier1_deny_matches_legacy(
+def test_sensitive_identity_path_is_a_framework_hard_deny(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("HOME", "/fake-home")
-    policy, checker = _policies()
-    _assert_equivalent_deny(
-        policy,
-        checker,
-        tool_name="Write",
-        args=_PathInput(path="/fake-home/.ssh/id_ed25519"),
-        cwd=tmp_path,
+    result = _deny(
+        ConfiguredActionDenyPolicy(),
+        "Write",
+        _PathInput(path="/fake-home/.ssh/id_ed25519"),
+        tmp_path,
     )
+    assert "sensitive system path" in result.reason
 
 
-def test_legacy_deny_path_matches_legacy(tmp_path: Path) -> None:
-    policy, checker = _policies(deny_paths=("secrets/**",))
-    _assert_equivalent_deny(
-        policy,
-        checker,
-        tool_name="Write",
-        args=_PathInput(path=str(tmp_path / "secrets" / "token")),
-        cwd=tmp_path,
-    )
-
-
-def test_declarative_deny_matches_legacy(tmp_path: Path) -> None:
-    policy, checker = _policies(
-        permissions=PermissionRules(deny=("Bash(curl:*)",)),
-    )
-    _assert_equivalent_deny(
-        policy,
-        checker,
-        tool_name="Bash",
-        args=_CommandInput(command="env curl https://example.invalid"),
-        cwd=tmp_path,
-    )
-
-
-def test_ask_allow_and_headless_failclosed_are_not_deny_policy(tmp_path: Path) -> None:
-    outside = tmp_path.parent / "outside.txt"
+def test_user_scope_is_not_duplicated_in_negative_semantic_guard(tmp_path: Path) -> None:
+    policy = ConfiguredActionDenyPolicy()
     context = ToolExecutionContext(cwd=tmp_path)
-
-    policy, checker = _policies()
-    args = _PathInput(path=str(outside))
-    assert policy.evaluate("Write", args, context) is None
-    assert checker.evaluate("Write", args, context).decision is Decision.ASK
-
-    policy, checker = _policies(
-        permissions=PermissionRules(ask=("Bash(curl:*)",)),
+    assert policy.evaluate("Write", _PathInput(path="outside.txt"), context) is None
+    assert (
+        policy.evaluate("Bash", _CommandInput(command="curl https://example.invalid"), context)
+        is None
     )
-    args = _CommandInput(command="curl https://example.invalid")
-    assert policy.evaluate("Bash", args, context) is None
-    assert checker.evaluate("Bash", args, context).decision is Decision.ASK
-
-    policy, checker = _policies(
-        permissions=PermissionRules(allow=("Write(*)",)),
-    )
-    args = _PathInput(path=str(tmp_path / "allowed.txt"))
-    assert policy.evaluate("Write", args, context) is None
-    assert checker.evaluate("Write", args, context).decision is Decision.ALLOW
-
-    policy, checker = _policies(headless=True)
-    args = _PathInput(path=str(tmp_path / "not-preauthorized.txt"))
-    assert policy.evaluate("Write", args, context) is None
-    assert checker.evaluate("Write", args, context).decision is Decision.DENY
 
 
 def test_plan_policy_denies_mutating_and_delegated_capabilities(tmp_path: Path) -> None:
@@ -226,8 +134,7 @@ def test_plan_policy_denies_mutating_and_delegated_capabilities(tmp_path: Path) 
     delegate = SpawnAgent()
     delegate.is_read_only = True
     registry.register(delegate)
-    base, _ = _policies()
-    policy = PlanActionDenyPolicy(registry=registry, base=base)
+    policy = PlanActionDenyPolicy(registry=registry, base=ConfiguredActionDenyPolicy())
     context = ToolExecutionContext(cwd=tmp_path)
 
     write = policy.evaluate("Write", _PathInput(path="notes.md"), context)
@@ -237,24 +144,21 @@ def test_plan_policy_denies_mutating_and_delegated_capabilities(tmp_path: Path) 
         context,
     )
 
-    assert write is not None
-    assert write.kind.value == "plan_capability"
-    assert delegated is not None
-    assert delegated.kind.value == "plan_capability"
+    assert write is not None and write.kind.value == "plan_capability"
+    assert delegated is not None and delegated.kind.value == "plan_capability"
 
 
-def test_plan_policy_preserves_base_deny_and_allows_read_only_no_match(tmp_path: Path) -> None:
+def test_plan_policy_preserves_base_deny_and_allows_read_only_no_match(
+    tmp_path: Path,
+) -> None:
     from openharness.tools import Read
 
     registry = _registry()
     registry.register(Read())
-    configured, _ = _policies(deny_paths=("secrets/**",))
-    policy = PlanActionDenyPolicy(registry=registry, base=configured)
+    policy = PlanActionDenyPolicy(registry=registry, base=ConfiguredActionDenyPolicy())
     context = ToolExecutionContext(cwd=tmp_path)
 
-    assert (
-        policy.evaluate("Read", _PathInput(path=str(tmp_path / "secrets" / "key")), context)
-        is not None
-    )
-    assert policy.evaluate("Read", _PathInput(path=str(tmp_path / "README.md")), context) is None
+    denied = policy.evaluate("Bash", _CommandInput(command="rm -rf /"), context)
+    assert denied is not None and denied.kind.value == "catastrophic_command"
+    assert policy.evaluate("Read", _PathInput(path="README.md"), context) is None
     assert policy.evaluate("Unknown", _PathInput(path="ignored"), context) is None

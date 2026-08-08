@@ -28,7 +28,6 @@ import openharness.cli as cli_module
 from openharness.engine.context import QueryContext
 from openharness.engine.query import run_query
 from openharness.hooks import HookRegistry
-from openharness.permissions import PermissionMode
 from openharness.protocols import (
     ApiMessageCompleteEvent,
     ConversationMessage,
@@ -48,13 +47,6 @@ if TYPE_CHECKING:
 
     from openharness.api import SupportsStreamingMessages
     from openharness.protocols import ApiMessageRequest, ApiStreamEvent
-
-
-class _AllowAllChecker:
-    def evaluate(self, *_a: object, **_kw: object) -> object:
-        from openharness.permissions import DecisionResult
-
-        return DecisionResult.allow()
 
 
 class _SequencedStub:
@@ -90,14 +82,12 @@ def _ctx(
     return QueryContext(
         api_client=cast("SupportsStreamingMessages", client),
         tool_registry=create_default_tool_registry(),
-        permission_checker=_AllowAllChecker(),  # type: ignore[arg-type]
         hook_registry=HookRegistry(),
         system_prompt="t",
         cwd=cwd,
         model="qwen-plus",
         max_tokens=64,
         max_turns=2,
-        permission_mode=PermissionMode.DEFAULT,
         compact_enabled=False,
         snapshot_enabled=True,
         llm_focus_state_enabled=llm_focus_state_enabled,

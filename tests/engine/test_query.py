@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from engine.conftest import _AllowAllChecker, _StubApiClient
+from engine.conftest import _StubApiClient
 from openharness.engine.context import QueryContext
 from openharness.engine.errors import LoopLimitExceeded
 from openharness.engine.query import run_query
@@ -87,7 +87,6 @@ def _make_context(
     return QueryContext(
         api_client=cast("OpenAICompatibleApiClient", api_client),
         tool_registry=tool_registry if tool_registry is not None else ToolRegistry(),
-        permission_checker=_AllowAllChecker(),
         system_prompt="you are a test harness",
         cwd=Path("/tmp"),
         model="qwen-plus",
@@ -460,47 +459,12 @@ class TestRunQueryRecoveryPaths:
         assert completed.is_error is True
         assert "invalid input for Fake" in completed.output
 
-    async def test_permission_denied_returns_error_result(self) -> None:
-        from engine.conftest import _DenyChecker
-
-        client = _StubApiClient(
-            events_per_turn=[
-                [_fake_tool_use_event(tool_input={"value": "x"})],
-                [_end_turn_event()],
-            ],
-        )
-        # Override the AllowAll fixture with the deny checker.
-        ctx = _make_context(
-            api_client=client,
-            tool_registry=_registry_with_fake_tool(),
-        )
-        # dataclass.replace would also work but we have direct construction.
-        import dataclasses
-
-        ctx = dataclasses.replace(ctx, permission_checker=_DenyChecker())
-
-        events = [
-            event
-            async for event in run_query(
-                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
-                ctx,
-            )
-        ]
-        completed = next(
-            event for event in events if isinstance(event, ToolExecutionCompletedEvent)
-        )
-        assert completed.is_error is True
-        # P3-T3.3d:reason now comes from DecisionResult,not the tool name.
-        # _DenyChecker stub returns "stub denial for test" as the reason.
-        assert "permission denied" in completed.output
-        assert "stub denial for test" in completed.output
-
     async def test_tool_returning_is_error_passes_through(self) -> None:
         from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
         from tools.conftest import FakeInput
 
         class _ErroringFake(BaseTool[FakeInput]):
-            execution_domain = ExecutionDomain.LOCAL_DATA
+            execution_domain = ExecutionDomain.TRUSTED_CONTROL
             name = "Fake"
             description = "Always returns is_error=True."
             input_model = FakeInput
@@ -611,7 +575,7 @@ class TestRunQueryProgrammingErrorPropagation:
         from tools.conftest import FakeInput
 
         class _CrashingFake(BaseTool[FakeInput]):
-            execution_domain = ExecutionDomain.LOCAL_DATA
+            execution_domain = ExecutionDomain.TRUSTED_CONTROL
             name = "Fake"
             description = "Crashes mid-execution -- should propagate."
             input_model = FakeInput
@@ -704,7 +668,7 @@ class TestRunQueryDryRunMode:
         # A "rm -rf /" command would normally hit DenyListChecker; under
         # DRY_RUN we never even consult the checker -- the synthetic
         # "would call" path runs instead.
-        from openharness.permissions import DenyListChecker, ExecutionPosture
+        from openharness.permissions import ExecutionPosture
         from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
         from tools.conftest import FakeInput
 
@@ -734,7 +698,6 @@ class TestRunQueryDryRunMode:
         ctx = _make_context(api_client=client, tool_registry=registry)
         ctx = dataclasses.replace(
             ctx,
-            permission_checker=DenyListChecker(),
             execution_posture=ExecutionPosture.DRY_RUN,
         )
 
@@ -783,88 +746,6 @@ class TestRunQueryDryRunMode:
         # Real tool ran -- output is the FakeTool's "value=hello", not "would call".
         assert completed.output == "value=hello"
         assert completed.is_error is False
-
-
-class TestLegacyAskCharacterization:
-    """G0 deletion-gate baseline for the checker-era ASK semantics."""
-
-    async def test_auto_reviewer_posture_never_converts_legacy_ask_to_allow(self) -> None:
-        from openharness.permissions import DecisionResult, ReviewerPosture
-
-        class _AskChecker:
-            def evaluate(self, *_args: object, **_kwargs: object) -> DecisionResult:
-                return DecisionResult.ask("legacy confirmation required")
-
-        client = _StubApiClient(
-            events_per_turn=[
-                [_fake_tool_use_event(tool_input={"value": "legacy-auto"})],
-                [_end_turn_event()],
-            ],
-        )
-        ctx = _make_context(
-            api_client=client,
-            tool_registry=_registry_with_fake_tool(),
-        )
-        ctx = dataclasses.replace(
-            ctx,
-            permission_checker=_AskChecker(),  # type: ignore[arg-type]
-            reviewer_posture=ReviewerPosture.AUTO,
-        )
-
-        events = [
-            event
-            async for event in run_query(
-                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
-                ctx,
-            )
-        ]
-
-        completed = next(
-            event for event in events if isinstance(event, ToolExecutionCompletedEvent)
-        )
-        assert completed.output == (
-            "permission denied (requires exact approval): legacy confirmation required"
-        )
-        assert completed.is_error is True
-
-    async def test_legacy_ask_is_denied_in_default_mode(self) -> None:
-        """G0 characterization companion: DEFAULT has no durable approval."""
-        from openharness.permissions import DecisionResult
-
-        class _AskChecker:
-            def evaluate(self, *_args: object, **_kwargs: object) -> DecisionResult:
-                return DecisionResult.ask("legacy confirmation required")
-
-        client = _StubApiClient(
-            events_per_turn=[
-                [_fake_tool_use_event(tool_input={"value": "legacy-default"})],
-                [_end_turn_event()],
-            ],
-        )
-        ctx = _make_context(
-            api_client=client,
-            tool_registry=_registry_with_fake_tool(),
-        )
-        ctx = dataclasses.replace(
-            ctx,
-            permission_checker=_AskChecker(),  # type: ignore[arg-type]
-        )
-
-        events = [
-            event
-            async for event in run_query(
-                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
-                ctx,
-            )
-        ]
-
-        completed = next(
-            event for event in events if isinstance(event, ToolExecutionCompletedEvent)
-        )
-        assert completed.output == (
-            "permission denied (requires exact approval): legacy confirmation required"
-        )
-        assert completed.is_error is True
 
 
 class TestRunQueryParallelToolUsesInOneTurn:

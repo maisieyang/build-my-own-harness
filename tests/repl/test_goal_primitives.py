@@ -219,7 +219,6 @@ class TestPermissionStatus:
                 "hooks": "enabled; trusted in-process authority",
                 "plugins": "disabled",
             },
-            legacy_mode="default",
         )
 
         assert "Configured intent" in status
@@ -240,7 +239,7 @@ class TestPermissionStatus:
         assert "hooks: enabled; trusted in-process authority" in status
         assert "plugins: disabled" in status
 
-    def test_legacy_runtime_does_not_claim_an_installed_boundary(self) -> None:
+    def test_missing_profile_does_not_claim_an_installed_boundary(self) -> None:
         status = format_permissions_status(
             profile=None,
             external_policy=ExternalToolPolicy(),
@@ -249,11 +248,9 @@ class TestPermissionStatus:
             external_surfaces={},
             mcp_server_postures={},
             trusted_control_status={"hooks": "disabled", "plugins": "disabled"},
-            legacy_mode="auto",
         )
 
         assert "canonical profile: not configured" in status
-        assert "legacy mode: auto" in status
         assert "verified boundary: none" in status
 
     def test_parked_request_is_visible_after_returning_to_the_session(self) -> None:
@@ -290,7 +287,6 @@ class TestPermissionStatus:
             external_surfaces={},
             mcp_server_postures={},
             trusted_control_status={"hooks": "disabled", "plugins": "disabled"},
-            legacy_mode="default",
             parked_request=request,
         )
 

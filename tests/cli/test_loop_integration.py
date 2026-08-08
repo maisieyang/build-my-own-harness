@@ -125,9 +125,7 @@ class TestLoopIntegrationDenyList:
         # Loop emitted ToolExecutionCompleted with is_error=True; render
         # painted the [Bash error] marker + the descriptive deny message.
         assert "[Bash error]" in result.stdout
-        # P3-T3.3d:DecisionResult.deny carries a reason — DenyListChecker
-        # explains the matched pattern ("rm -rf /") in the deny message.
-        assert "permission denied" in result.stdout
+        assert "action denied" in result.stdout
         assert "Bash pattern" in result.stdout
         # LLM's recovery text still appears -- loop didn't crash.
         assert "OK, I won't do that." in result.stdout

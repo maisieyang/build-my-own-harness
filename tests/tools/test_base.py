@@ -211,7 +211,7 @@ class TestToolRegistry:
         registry.register(_FakeTool())
 
         assert registry.execution_domain_report() == {
-            ExecutionDomain.LOCAL_DATA: ("Fake",),
+            ExecutionDomain.TRUSTED_CONTROL: ("Fake",),
         }
 
     def test_external_surface_report_names_independent_policy_scope(self) -> None:

@@ -71,9 +71,8 @@ class TestIrreversibleGitRedlineEndToEnd:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _set_minimum_env(monkeypatch)
-        # Explicit Bash(*) allow AND --auto (AUTO permission mode) -- the
-        # red line must hold through both.
-        monkeypatch.setenv("OPENHARNESS_PERMISSIONS__ALLOW", "Bash(*)")
+        # The semantic red line must hold under the canonical workspace profile
+        # and the exact auto reviewer.
         stub = _StubApiClient(
             events_per_turn=[
                 [_git_commit_turn()],

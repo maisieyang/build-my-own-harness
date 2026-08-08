@@ -61,8 +61,6 @@ from openharness.observability import (
 )
 from openharness.permissions import (
     ActionDenyKind,
-    Decision,
-    DecisionResult,
     DenyResult,
     ExecutionPosture,
     ExternalToolMode,
@@ -506,8 +504,8 @@ async def run_query(
                     )
                     t0 = time.monotonic()
 
-                    # D12.5: DRY_RUN bypasses both permission_checker and
-                    # execute(), emitting a synthetic "would call X with Y"
+                    # DRY_RUN bypasses authorization review and execute(),
+                    # emitting a synthetic "would call X with Y"
                     # result so the LLM sees the loop progressing but no side
                     # effects occur.
                     if context.execution_posture is ExecutionPosture.DRY_RUN:
@@ -645,7 +643,7 @@ async def _dispatch_one(
     Recovery paths (all return ``is_error=True``, output names the failure):
     - Tool not in registry
     - Pydantic ValidationError on the tool's input model
-    - Permission checker returns ``Decision.DENY`` or ``Decision.ASK`` 不通过
+    - Canonical profile/boundary cannot authorize the execution domain
     - PreToolUse hook returns deny
     - Tool itself returns ``ToolResult(is_error=True)``
 
@@ -671,21 +669,12 @@ async def _dispatch_one(
         exec_context=exec_context,
     )
     verified_dispatch, verified_failure = _verified_dispatch_authorization(tool, context)
-    if verified_dispatch and action_deny is not None:
+    if action_deny is not None:
         return _outcome((f"action denied: {action_deny.reason}", True))
     if verified_failure is not None:
         return _outcome(verified_failure)
-    permission = (
-        DecisionResult.allow()
-        if verified_dispatch
-        else context.permission_checker.evaluate(tool_use.name, args, exec_context)
-    )
-    _record_action_deny_comparison(tool_use.name, action_deny, permission)
-    permission_failure = _permission_failure(permission, tool_use.name)
-    if permission_failure is not None:
-        return _outcome(permission_failure)
-    if action_deny is not None:
-        return _outcome((f"action denied: {action_deny.reason}", True))
+    if not verified_dispatch:
+        return _outcome((f"authorization denied: no canonical authority for {tool.name}", True))
 
     # PreToolUse hook chain — can deny / modify input / observe.
     # Hooks run AFTER AuthZ so they can't bypass framework safety baseline.
@@ -718,21 +707,14 @@ async def _dispatch_one(
                 exec_context=exec_context,
             )
             verified_dispatch, verified_failure = _verified_dispatch_authorization(tool, context)
-            if verified_dispatch and action_deny is not None:
+            if action_deny is not None:
                 return _outcome((f"action denied: {action_deny.reason}", True))
             if verified_failure is not None:
                 return _outcome(verified_failure)
-            permission = (
-                DecisionResult.allow()
-                if verified_dispatch
-                else context.permission_checker.evaluate(tool_use.name, args, exec_context)
-            )
-            _record_action_deny_comparison(tool_use.name, action_deny, permission)
-            permission_failure = _permission_failure(permission, tool_use.name)
-            if permission_failure is not None:
-                return _outcome(permission_failure)
-            if action_deny is not None:
-                return _outcome((f"action denied: {action_deny.reason}", True))
+            if not verified_dispatch:
+                return _outcome(
+                    (f"authorization denied: no canonical authority for {tool.name}", True)
+                )
 
     external_failure = await _external_effect_failure(
         tool,
@@ -963,7 +945,8 @@ async def _external_effect_failure(
     kind = tool.external_effect_kind
     if surface is None or kind is None:
         return "external effect denied: tool has incomplete external policy metadata", True
-    mode = getattr(context.external_tool_policy, surface.value)
+    external_policy = context.runtime_permission_profile.external_tools
+    mode = getattr(external_policy, surface.value)
     if mode is ExternalToolMode.DENY:
         return f"external effect denied by {surface.value} policy: {tool.name}", True
     requires_call_approval = (
@@ -989,7 +972,7 @@ async def _external_effect_failure(
             tool_name=tool.name,
             final_arguments=args.model_dump(mode="json"),
             profile=runtime.profile,
-            policy=context.external_tool_policy,
+            policy=external_policy,
             surface=surface.value,
             effect_kind=kind.value,
             trust_source=tool.trust_source,
@@ -1052,19 +1035,19 @@ def _verified_dispatch_authorization(
     tool: BaseTool[Any],
     context: QueryContext,
 ) -> tuple[bool, tuple[str, bool] | None]:
-    """Select verified local dispatch or leave the legacy host path alone.
+    """Require verified local dispatch for every local or delegated tool.
 
     Once a sandbox session is present, local execution must be justified by
     its reported verified boundary. Any drift or incomplete coverage denies;
-    it never falls back to the legacy checker or host execution.
+    it never falls back to unverified host execution.
     """
     if tool.execution_domain in {
         ExecutionDomain.EXTERNAL_EFFECT,
         ExecutionDomain.TRUSTED_CONTROL,
     }:
         # These domains have their own canonical authority: external policy or
-        # explicitly trusted in-process control. Neither is a legacy host-file
-        # permission question.
+        # explicitly trusted in-process control. Neither is a local data-plane
+        # containment question.
         return True, None
     if tool.execution_domain not in {
         ExecutionDomain.LOCAL_DATA,
@@ -1073,7 +1056,10 @@ def _verified_dispatch_authorization(
         return False, None
     session = context.sandbox_session
     if session is None:
-        return False, None
+        return True, (
+            "verified dispatch denied: local execution requires a verified sandbox boundary",
+            True,
+        )
 
     boundary = session.boundary
     if not boundary.is_verified:
@@ -1128,39 +1114,3 @@ def _require_autonomous_boundary(context: QueryContext) -> None:
             )
         if failure is not None:
             raise AutonomousBoundaryError(f"autonomous tool {tool.name}: {failure[0]}")
-
-
-def _record_action_deny_comparison(
-    tool_name: str,
-    action_deny: DenyResult | None,
-    legacy: DecisionResult,
-) -> None:
-    """Record safe categorical agreement with the retained host checker."""
-    if action_deny is None:
-        return
-    legacy_denied = legacy.decision is Decision.DENY
-    log = logger.info if legacy_denied else logger.warning
-    log(
-        "action_deny_policy_agreement" if legacy_denied else "action_deny_policy_authoritative",
-        tool=tool_name,
-        kind=action_deny.kind.value,
-        legacy_denied=legacy_denied,
-    )
-
-
-def _permission_failure(
-    permission: DecisionResult,
-    tool_name: str,
-) -> tuple[str, bool] | None:
-    """Translate a checker result into the dispatch recovery payload.
-
-    Kept in one helper so both the model-authored input and any hook-modified
-    final input receive byte-identical DENY/ASK semantics.
-    """
-    if permission.decision is Decision.DENY:
-        reason = permission.reason or tool_name
-        return f"permission denied: {reason}", True
-    if permission.decision is Decision.ASK:
-        reason = permission.reason or tool_name
-        return f"permission denied (requires exact approval): {reason}", True
-    return None

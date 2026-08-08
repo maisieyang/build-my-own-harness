@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from engine.conftest import _AllowAllChecker, _StubApiClient
+from engine.conftest import _StubApiClient
 from openharness.engine import QueryContext, run_query
 from openharness.engine.query import (
     _boundary_violation_metadata,
@@ -185,7 +185,6 @@ async def test_boundary_review_installs_and_consumes_one_verified_overlay() -> N
             _StubApiClient(events_per_turn=[[_tool_turn()], [end]]),
         ),
         tool_registry=registry,
-        permission_checker=_AllowAllChecker(),
         system_prompt="test",
         cwd=Path("/tmp"),
         model="qwen-plus",
@@ -248,7 +247,6 @@ async def test_explicit_network_deny_never_reaches_reviewer() -> None:
             _StubApiClient(events_per_turn=[[_tool_turn()], [end]]),
         ),
         tool_registry=registry,
-        permission_checker=_AllowAllChecker(),
         system_prompt="test",
         cwd=Path("/tmp"),
         model="qwen-plus",
@@ -289,7 +287,6 @@ async def test_local_reviewer_defer_parks_before_next_model_turn() -> None:
     context = QueryContext(
         api_client=cast("OpenAICompatibleApiClient", client),
         tool_registry=registry,
-        permission_checker=_AllowAllChecker(),
         system_prompt="test",
         cwd=Path("/tmp"),
         model="qwen-plus",
@@ -328,7 +325,6 @@ async def test_parked_multi_tool_turn_persists_a_well_formed_tool_result_pair() 
             _StubApiClient(events_per_turn=[[_multi_tool_turn()]]),
         ),
         tool_registry=registry,
-        permission_checker=_AllowAllChecker(),
         system_prompt="test",
         cwd=Path("/tmp"),
         model="qwen-plus",
@@ -366,7 +362,6 @@ async def test_approved_delta_without_overlay_executor_parks_fail_closed() -> No
             _StubApiClient(events_per_turn=[[_tool_turn()]]),
         ),
         tool_registry=registry,
-        permission_checker=_AllowAllChecker(),
         system_prompt="test",
         cwd=Path("/tmp"),
         model="qwen-plus",
@@ -410,7 +405,6 @@ async def test_approved_delta_parks_when_backend_cannot_compile_overlay() -> Non
             _StubApiClient(events_per_turn=[[_tool_turn()]]),
         ),
         tool_registry=registry,
-        permission_checker=_AllowAllChecker(),
         system_prompt="test",
         cwd=Path("/tmp"),
         model="qwen-plus",
@@ -458,7 +452,6 @@ async def test_approved_overlay_that_still_violates_boundary_parks_once() -> Non
             _StubApiClient(events_per_turn=[[_tool_turn()]]),
         ),
         tool_registry=registry,
-        permission_checker=_AllowAllChecker(),
         system_prompt="test",
         cwd=Path("/tmp"),
         model="qwen-plus",

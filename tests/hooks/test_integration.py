@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from engine.conftest import _AllowAllChecker, _DenyChecker, _StubApiClient
+from engine.conftest import _StubApiClient
 from openharness.engine import QueryContext, run_query
 from openharness.errors import HookError, LoopError, ToolError
 from openharness.hooks import (
@@ -45,7 +45,7 @@ from openharness.tools import ExecutionDomain, ToolRegistry
 
 if TYPE_CHECKING:
     from openharness.api import SupportsStreamingMessages
-    from openharness.permissions import ActionDenyPolicy, DenyResult, PermissionChecker
+    from openharness.permissions import ActionDenyPolicy, DenyResult
     from openharness.tools.base import ToolExecutionContext
     from tools.conftest import FakeInput
 
@@ -98,7 +98,6 @@ def _make_context(
     api_client: object,
     hook_registry: HookRegistry,
     tool_registry: ToolRegistry | None = None,
-    permission_checker: PermissionChecker | None = None,
     action_deny_policy: ActionDenyPolicy | None = None,
 ) -> QueryContext:
     from tools.conftest import _FakeTool
@@ -109,9 +108,6 @@ def _make_context(
     return QueryContext(
         api_client=cast("SupportsStreamingMessages", api_client),
         tool_registry=tool_registry,
-        permission_checker=permission_checker
-        if permission_checker is not None
-        else _AllowAllChecker(),
         system_prompt="test harness",
         cwd=Path("/tmp"),
         model="qwen-plus",
@@ -222,22 +218,25 @@ class TestModifyHooksReachDownstream:
 
     async def test_pre_tool_use_modified_input_is_reauthorized(self) -> None:
         """The final hook-modified arguments, not only the model-authored
-        arguments, must pass the permission checker before execution."""
-        from openharness.permissions import DecisionResult
+        arguments, must pass the negative semantic guard before execution."""
+        from openharness.permissions import ActionDenyKind, DenyResult
         from tools.conftest import FakeInput
 
         class _AllowOriginalDenyRewrite:
             def __init__(self) -> None:
                 self.values: list[str] = []
 
-            def evaluate(self, tool_name: str, args: object, context: object) -> DecisionResult:
+            def evaluate(self, tool_name: str, args: object, context: object) -> DenyResult | None:
                 del tool_name, context
                 assert isinstance(args, FakeInput)
                 value = args.value
                 self.values.append(value)
                 if value == "REWRITTEN":
-                    return DecisionResult.deny("rewritten input is outside the grant")
-                return DecisionResult.allow()
+                    return DenyResult(
+                        reason="rewritten input is outside the semantic guard",
+                        kind=ActionDenyKind.CONFIGURED_RULE,
+                    )
+                return None
 
         async def rewrite(ctx: HookContext) -> HookResult | None:
             del ctx
@@ -255,7 +254,7 @@ class TestModifyHooksReachDownstream:
         context = _make_context(
             api_client=client,
             hook_registry=hooks,
-            permission_checker=checker,  # type: ignore[arg-type]
+            action_deny_policy=checker,
         )
 
         events = [
@@ -268,17 +267,13 @@ class TestModifyHooksReachDownstream:
 
         completed = next(e for e in events if isinstance(e, ToolExecutionCompletedEvent))
         assert completed.is_error is True
-        assert "rewritten input is outside the grant" in completed.output
+        assert "rewritten input is outside the semantic guard" in completed.output
         assert checker.values == ["original", "REWRITTEN"]
 
-    async def test_hook_rewrite_to_git_commit_hits_deny_shadow_and_legacy_redline(
+    async def test_hook_rewrite_to_git_commit_hits_canonical_redline(
         self,
     ) -> None:
-        from openharness.config import Settings
-        from openharness.permissions import (
-            ConfiguredActionDenyPolicy,
-            TierBasedPermissionChecker,
-        )
+        from openharness.permissions import ConfiguredActionDenyPolicy
         from openharness.tools import BaseTool, ExecutionDomain, ToolResult
         from openharness.tools.bash import BashInput
 
@@ -286,7 +281,7 @@ class TestModifyHooksReachDownstream:
             name = "Bash"
             description = "test bash"
             input_model = BashInput
-            execution_domain = ExecutionDomain.LOCAL_DATA
+            execution_domain = ExecutionDomain.TRUSTED_CONTROL
             executed = False
 
             async def execute(
@@ -317,15 +312,10 @@ class TestModifyHooksReachDownstream:
             del ctx
             return HookResult.modify_input({"command": "git commit -m bypass"})
 
-        settings = Settings(
-            api_key="x",
-            base_url="https://example.invalid",
-            permissions={"allow": ("Bash(git status)",)},
-        )
         tool = _BashTool()
         tools = ToolRegistry()
         tools.register(tool)
-        policy = _RecordingPolicy(ConfiguredActionDenyPolicy(settings))
+        policy = _RecordingPolicy(ConfiguredActionDenyPolicy())
         hooks = HookRegistry()
         hooks.register("PreToolUse", rewrite)
         client = _StubApiClient(
@@ -338,7 +328,6 @@ class TestModifyHooksReachDownstream:
             api_client=client,
             hook_registry=hooks,
             tool_registry=tools,
-            permission_checker=TierBasedPermissionChecker(tools, settings),
             action_deny_policy=policy,
         )
 
@@ -527,6 +516,14 @@ class TestDispatchOrder:
         registry = HookRegistry()
         registry.register("PreToolUse", pre_tool)
 
+        from tools.conftest import _FakeTool
+
+        class _LocalFake(_FakeTool):
+            execution_domain = ExecutionDomain.LOCAL_DATA
+
+        tools = ToolRegistry()
+        tools.register(_LocalFake())
+
         client = _StubApiClient(
             events_per_turn=[
                 [_tool_use_event(tool_input={"value": "x"})],
@@ -536,7 +533,7 @@ class TestDispatchOrder:
         context = _make_context(
             api_client=client,
             hook_registry=registry,
-            permission_checker=_DenyChecker(),
+            tool_registry=tools,
         )
 
         events = [
@@ -548,12 +545,12 @@ class TestDispatchOrder:
         ]
         completed = next(e for e in events if isinstance(e, ToolExecutionCompletedEvent))
         assert completed.is_error is True
-        assert "permission denied" in completed.output
+        assert "verified dispatch denied" in completed.output
         # PreToolUse hook never fired — AuthZ short-circuited first.
         assert observed == []
 
     async def test_deny_shadow_sees_original_and_hook_modified_arguments(self) -> None:
-        """Shadow evaluation follows both legacy authorization checkpoints."""
+        """Negative policy evaluation follows both authorization checkpoints."""
         observed: list[str] = []
 
         class _RecordingPolicy:
@@ -643,7 +640,7 @@ class TestOnErrorChain:
         from tools.conftest import FakeInput
 
         class _CrashingFake(BaseTool[FakeInput]):
-            execution_domain = ExecutionDomain.LOCAL_DATA
+            execution_domain = ExecutionDomain.TRUSTED_CONTROL
             name = "Fake"
             description = "Crashes mid-execute."
             input_model = FakeInput

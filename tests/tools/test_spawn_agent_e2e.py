@@ -25,9 +25,11 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from engine.conftest import _AllowAllChecker, _StubApiClient
+from engine.conftest import _StubApiClient
 from openharness.engine import QueryContext, run_query
+from openharness.execution import BoundaryVerification, EnforcedBoundary
 from openharness.observability import configure_logging
+from openharness.permissions import workspace_runtime_profile
 from openharness.protocols import (
     ApiMessageCompleteEvent,
     ConversationMessage,
@@ -39,6 +41,24 @@ from openharness.tools import SpawnAgent, ToolRegistry
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
+
+    from openharness.execution import DataPlaneOperation, ExecutionResult
+
+
+class _BoundarySession:
+    def __init__(self, boundary: EnforcedBoundary) -> None:
+        self._boundary = boundary
+
+    @property
+    def boundary(self) -> EnforcedBoundary:
+        return self._boundary
+
+    async def execute(self, operation: DataPlaneOperation) -> ExecutionResult:
+        del operation
+        raise AssertionError("this delegated-runtime smoke should not execute local data tools")
+
+    async def close(self) -> None:
+        return None
 
 
 @pytest.fixture
@@ -109,15 +129,26 @@ class TestSpawnAgentFullChain:
 
         registry = ToolRegistry()
         registry.register(SpawnAgent())
+        profile = workspace_runtime_profile()
+        boundary = EnforcedBoundary(
+            profile_fingerprint=profile.fingerprint,
+            backend="test",
+            backend_version="1",
+            covered_effects=(),
+            verification=BoundaryVerification.VERIFIED,
+        )
+        session = _BoundarySession(boundary)
         context = QueryContext(
             api_client=stub,
             tool_registry=registry,
-            permission_checker=_AllowAllChecker(),
             system_prompt="you are the parent agent",
             cwd=tmp_path,
             model="qwen-plus",
             agent_depth=0,
             max_agent_depth=3,
+            sandbox_session=session,
+            runtime_permission_profile=profile,
+            enforced_boundary=boundary,
         )
 
         events = [
@@ -184,15 +215,26 @@ class TestSpawnAgentFullChain:
         )
         registry = ToolRegistry()
         registry.register(SpawnAgent())
+        profile = workspace_runtime_profile()
+        boundary = EnforcedBoundary(
+            profile_fingerprint=profile.fingerprint,
+            backend="test",
+            backend_version="1",
+            covered_effects=(),
+            verification=BoundaryVerification.VERIFIED,
+        )
+        session = _BoundarySession(boundary)
         context = QueryContext(
             api_client=stub,
             tool_registry=registry,
-            permission_checker=_AllowAllChecker(),
             system_prompt="",
             cwd=tmp_path,
             model="qwen-plus",
             agent_depth=0,
             max_agent_depth=3,
+            sandbox_session=session,
+            runtime_permission_profile=profile,
+            enforced_boundary=boundary,
         )
 
         async for _ in run_query(

@@ -20,7 +20,7 @@ examples/
 ├── skills/
 │   └── python-testing.md           ← lazy-loaded expertise (LoadSkill catalog)
 ├── bundles/
-│   └── read-only.md                ← ModeBundle (whitelist + deny_paths + hooks)
+│   └── read-only.md                ← ModeBundle (whitelist + hooks)
 └── hooks/
     └── turn_counter.py             ← filesystem plugin hook (Phase 5f)
 ```
@@ -78,7 +78,7 @@ each artifact by running its matching `oh ask` invocation.)
 | `commands/review.md` | Slash command — pre-LLM prompt template | 5b |
 | `commands/code-review.md` | Slash command with `mode:` → triggers a bundle | 5d |
 | `skills/python-testing.md` | Skill — lazy-loaded expertise in the system prompt catalog | 5c |
-| `bundles/read-only.md` | ModeBundle — system prompt + tool whitelist + deny_paths + hooks | 5d |
+| `bundles/read-only.md` | ModeBundle — system prompt + tool whitelist + hooks | 5d |
 | `hooks/turn_counter.py` | Filesystem plugin hook — `@hook_spec("PreApiCall")` | 5f |
 
 See the full feature index in [`README.md`](../README.md#key-features)

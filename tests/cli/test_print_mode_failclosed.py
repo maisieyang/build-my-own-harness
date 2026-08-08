@@ -99,10 +99,9 @@ class TestPrintModeFailClosedWired:
     def test_headless_allows_mutating_with_allow_rule(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Legacy allow syntax still parses, but it cannot widen or replace the
-        # verified boundary. The same contained Write has identical behavior.
+        # The canonical workspace profile contains this Write and the verified
+        # boundary enforces the same profile.
         _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("OPENHARNESS_PERMISSIONS__ALLOW", "Write(*)")
         stub = _StubApiClient(
             events_per_turn=[
                 [_write_tool_use_turn(path="notes.txt")],

@@ -34,7 +34,8 @@ runner = CliRunner()
 _COMMON_RUN_ASK_KWARGS: dict[str, object] = {
     "model_override": None,
     "max_tokens": 8192,
-    "permission_mode_override": None,
+    "reviewer_posture_override": None,
+    "execution_posture_override": None,
     "log_level_override": None,
     "log_format_override": None,
     "tool_result_cap_override": None,

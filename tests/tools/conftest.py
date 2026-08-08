@@ -30,7 +30,8 @@ class _FakeTool(BaseTool[FakeInput]):
     name = "Fake"
     description = "Fake tool used in tests."
     input_model = FakeInput
-    execution_domain = ExecutionDomain.LOCAL_DATA
+    # This fake exercises loop plumbing, not filesystem/process containment.
+    execution_domain = ExecutionDomain.TRUSTED_CONTROL
 
     async def execute(
         self,

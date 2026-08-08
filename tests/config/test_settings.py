@@ -66,96 +66,6 @@ class TestDefaults:
 
         assert settings.model == "qwen-plus"
 
-    def test_default_permission_mode_is_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from openharness.permissions import PermissionMode
-
-        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")
-        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://example.com/v1")
-
-        settings = Settings()
-
-        assert settings.permission_mode is PermissionMode.DEFAULT
-
-
-class TestPermissionConvergenceG0Baseline:
-    """Deletion-gate matrix for the currently fragmented permission inputs."""
-
-    def test_legacy_and_sandbox_permission_settings_coexist(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        from openharness.permissions import ExternalToolMode, PermissionMode
-
-        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")
-        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://example.com/v1")
-
-        settings = Settings()
-
-        assert settings.permission_mode is PermissionMode.DEFAULT
-        assert settings.permission_auto_review is True
-        assert settings.permission_reviewer_model is None
-        assert settings.deny_paths == ()
-        assert settings.permissions.model_dump() == {
-            "allow": (),
-            "deny": (),
-            "ask": (),
-        }
-        assert settings.sandbox_enabled is False
-        assert settings.sandbox_backend == "seatbelt"
-        assert settings.sandbox_network == "none"
-        assert settings.sandbox_network_policy.enabled is False
-        assert settings.sandbox_external_tool_policy.model_dump() == {
-            "mcp": ExternalToolMode.ASK,
-            "web": ExternalToolMode.ASK,
-            "browser": ExternalToolMode.ASK,
-            "computer_use": ExternalToolMode.ASK,
-        }
-        assert settings.sandbox_memory == "1g"
-        assert settings.sandbox_cpus == 1.0
-        assert settings.sandbox_pids == 256
-
-    def test_no_formal_canonical_profile_settings_field_exists_yet(self) -> None:
-        fields = Settings.model_fields
-
-        assert "runtime_permission_profile" not in fields
-        assert "permission_profile" not in fields
-
-
-class TestPermissionModeFromEnv:
-    """OPENHARNESS_PERMISSION_MODE env var sets the permission policy."""
-
-    @pytest.mark.parametrize(
-        ("env_value", "expected"),
-        [
-            ("default", "DEFAULT"),
-            ("auto", "AUTO"),
-            ("dry_run", "DRY_RUN"),
-        ],
-    )
-    def test_each_mode_value_loads(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        env_value: str,
-        expected: str,
-    ) -> None:
-        from openharness.permissions import PermissionMode
-
-        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")
-        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://example.com/v1")
-        monkeypatch.setenv("OPENHARNESS_PERMISSION_MODE", env_value)
-
-        settings = Settings()
-
-        assert settings.permission_mode is PermissionMode[expected]
-
-    def test_invalid_mode_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")
-        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://example.com/v1")
-        monkeypatch.setenv("OPENHARNESS_PERMISSION_MODE", "yolo")
-
-        with pytest.raises(ValidationError):
-            Settings()
-
 
 class TestMissingRequiredFields:
     """Missing required fields produce a ``ValidationError`` naming the field."""
@@ -215,49 +125,6 @@ class TestDotEnvFile:
         # Real env wins for the field it sets; file fills in what's missing.
         assert settings.api_key == "key-from-real-env"
         assert settings.base_url == "https://file.example.com/v1"
-
-
-class TestDenyPaths:
-    """``deny_paths`` (P3-T3.3b) — comma-separated env var for Tier 2 globs.
-
-    Parsed from ``OPENHARNESS_DENY_PATHS``. Empty value (or unset) yields
-    an empty tuple — the AuthZ Tier 2 layer treats this as "no user rules".
-    """
-
-    def test_default_is_empty_tuple_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
-        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
-        settings = Settings()
-        assert settings.deny_paths == ()
-
-    def test_single_pattern_parsed(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
-        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
-        monkeypatch.setenv("OPENHARNESS_DENY_PATHS", "secrets/**")
-        settings = Settings()
-        assert settings.deny_paths == ("secrets/**",)
-
-    def test_multiple_patterns_comma_separated(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
-        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
-        monkeypatch.setenv("OPENHARNESS_DENY_PATHS", "secrets/**,*.env,private/")
-        settings = Settings()
-        assert settings.deny_paths == ("secrets/**", "*.env", "private/")
-
-    def test_whitespace_around_commas_stripped(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
-        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
-        monkeypatch.setenv("OPENHARNESS_DENY_PATHS", " secrets/** , *.env ")
-        settings = Settings()
-        assert settings.deny_paths == ("secrets/**", "*.env")
-
-    def test_empty_segments_dropped(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # Trailing comma / double comma / pure whitespace yields no entry.
-        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
-        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
-        monkeypatch.setenv("OPENHARNESS_DENY_PATHS", "secrets/**,,*.env,")
-        settings = Settings()
-        assert settings.deny_paths == ("secrets/**", "*.env")
 
 
 class TestTrustedMcpServers:
@@ -436,7 +303,6 @@ class TestSandboxFields:
         assert settings.sandbox_enabled is False  # default: host execution
         assert settings.sandbox_backend == "seatbelt"
         assert settings.sandbox_image == "python:3.12-slim"
-        assert settings.sandbox_network == "none"
         assert settings.sandbox_memory == "1g"
         assert settings.sandbox_cpus == 1.0
         assert settings.sandbox_pids == 256
@@ -462,12 +328,12 @@ class TestSandboxFields:
         monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
         monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
         settings = Settings(
-            sandbox_network_policy={
-                "enabled": True,
-                "allow_domains": ("pypi.org",),
+            permission_profile={
+                "name": "networked",
+                "network": {"enabled": True, "allow_domains": ("pypi.org",)},
             }
         )
-        assert settings.sandbox_network_policy.allow_domains == ("pypi.org",)
+        assert settings.permission_profile.network.allow_domains == ("pypi.org",)
 
     def test_unknown_backend_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
@@ -498,23 +364,6 @@ class TestSandboxFields:
         monkeypatch.setenv("OPENHARNESS_SANDBOX_IMAGE", "ubuntu:latest")
         settings = Settings()
         assert settings.sandbox_image == "ubuntu:latest"
-
-    def test_network_must_be_none_or_bridge(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
-        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
-        monkeypatch.setenv("OPENHARNESS_SANDBOX_NETWORK", "host")
-        with pytest.raises(ValidationError):
-            Settings()
-
-    @pytest.mark.parametrize(("env_value", "expected"), [("none", "none"), ("bridge", "bridge")])
-    def test_network_valid_values(
-        self, env_value: str, expected: str, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
-        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
-        monkeypatch.setenv("OPENHARNESS_SANDBOX_NETWORK", env_value)
-        settings = Settings()
-        assert settings.sandbox_network == expected
 
     def test_cpus_must_be_positive(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")

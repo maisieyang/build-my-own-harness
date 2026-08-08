@@ -24,7 +24,7 @@ Behavior contract(unchanged across the P7-T3 refactor):
 - ``exit_code`` and ``duration_ms`` go to ``metadata`` (D9.5).
 
 Per D9.4: **no deny-list at this layer**. Bash trusts what it receives.
-P2-T6 ``PermissionChecker`` enforces safety one layer up.
+The canonical verified-dispatch boundary enforces safety one layer up.
 """
 
 from __future__ import annotations

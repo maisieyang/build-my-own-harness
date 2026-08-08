@@ -35,6 +35,8 @@ from openharness.execution.network_proxy import ManagedNetworkProxy
 from openharness.permissions.profile import (
     EnvironmentInheritance,
     FilesystemAccess,
+    FilesystemRule,
+    FilesystemScope,
 )
 
 if TYPE_CHECKING:
@@ -67,8 +69,15 @@ def _seatbelt_string(value: str) -> str:
 
 
 def _absolute_policy_path(raw: str, cwd: Path) -> Path:
-    path = cwd / raw if not os.path.isabs(raw) else type(cwd)(raw)
+    expanded = os.path.expanduser(raw)
+    path = cwd / expanded if not os.path.isabs(expanded) else type(cwd)(expanded)
     return path.resolve(strict=False)
+
+
+def _filesystem_filter(rule: FilesystemRule, cwd: Path) -> str:
+    selector = "literal" if rule.scope is FilesystemScope.EXACT else "subpath"
+    path = _seatbelt_string(str(_absolute_policy_path(rule.path, cwd)))
+    return f'({selector} "{path}")'
 
 
 def _runtime_read_roots() -> tuple[Path, ...]:
@@ -125,30 +134,32 @@ def compile_seatbelt_profile(
         f'(allow sysctl-read ({selector} "{_seatbelt_string(value)}"))'
         for selector, value in _RUNTIME_SYSCTL_READ_RULES
     )
-    readable_paths = {
-        str(_absolute_policy_path(rule.path, cwd))
+    readable_rules = tuple(
+        rule
         for rule in profile.filesystem.rules
         if rule.access in (FilesystemAccess.READ, FilesystemAccess.WRITE)
-    }
-    readable_paths.update(str(path) for path in _runtime_read_roots())
+    )
+    readable_paths = {str(_absolute_policy_path(rule.path, cwd)) for rule in readable_rules}
+    runtime_read_paths = {str(path) for path in _runtime_read_roots()}
+    traversal_sources = readable_paths | runtime_read_paths
     traversal_paths = {
         str(parent)
-        for raw_path in readable_paths
+        for raw_path in traversal_sources
         for parent in Path(raw_path).parents
-        if str(parent) not in readable_paths
+        if str(parent) not in traversal_sources
     }
     for path in sorted(traversal_paths):
         lines.append(f'(allow file-read* (literal "{_seatbelt_string(path)}"))')
-    for path in sorted(readable_paths):
+    for path in sorted(runtime_read_paths):
         lines.append(f'(allow file-read* (subpath "{_seatbelt_string(path)}"))')
-    writable_paths = [
-        _seatbelt_string(str(_absolute_policy_path(rule.path, cwd)))
-        for rule in profile.filesystem.rules
-        if rule.access is FilesystemAccess.WRITE
+    for rule in sorted(readable_rules, key=lambda item: (item.normalized_path(), item.scope.value)):
+        lines.append(f"(allow file-read* {_filesystem_filter(rule, cwd)})")
+    writable_rules = [
+        rule for rule in profile.filesystem.rules if rule.access is FilesystemAccess.WRITE
     ]
     runtime_writable_paths = tuple(_seatbelt_string(str(path)) for path in _RUNTIME_WRITABLE_PATHS)
     write_exclusions = [
-        *(f'(require-not (subpath "{path}"))' for path in writable_paths),
+        *(f"(require-not {_filesystem_filter(rule, cwd)})" for rule in writable_rules),
         *(f'(require-not (literal "{path}"))' for path in runtime_writable_paths),
     ]
     exclusions = " ".join(write_exclusions)
@@ -157,20 +168,20 @@ def compile_seatbelt_profile(
         lines.append(f'(allow file-write* (literal "{path}"))')
     for rule in sorted(
         profile.filesystem.rules,
-        key=lambda item: (item.normalized_path(), item.access.value),
+        key=lambda item: (item.normalized_path(), item.access.value, item.scope.value),
     ):
-        path = _seatbelt_string(str(_absolute_policy_path(rule.path, cwd)))
+        path_filter = _filesystem_filter(rule, cwd)
         if rule.access is FilesystemAccess.READ:
-            lines.append(f'(allow file-read* (subpath "{path}"))')
+            lines.append(f"(allow file-read* {path_filter})")
         elif rule.access is FilesystemAccess.WRITE:
-            lines.append(f'(allow file-read* (subpath "{path}"))')
-            lines.append(f'(allow file-write* (subpath "{path}"))')
+            lines.append(f"(allow file-read* {path_filter})")
+            lines.append(f"(allow file-write* {path_filter})")
         elif rule.access is FilesystemAccess.DENY:
-            lines.append(f'(deny file-read* file-write* (subpath "{path}"))')
+            lines.append(f"(deny file-read* file-write* {path_filter})")
         elif rule.access is FilesystemAccess.DENY_READ:
-            lines.append(f'(deny file-read* (subpath "{path}"))')
+            lines.append(f"(deny file-read* {path_filter})")
         elif rule.access is FilesystemAccess.DENY_WRITE:
-            lines.append(f'(deny file-write* (subpath "{path}"))')
+            lines.append(f"(deny file-write* {path_filter})")
     if not profile.network.enabled:
         lines.append("(deny network*)")
     elif network_proxy_port is not None:
@@ -280,7 +291,7 @@ class SeatbeltSession:
         boundary_root: Path,
         default_timeout: float | None = None,
         network_proxy: NetworkProxySession | None = None,
-        hard_deny_rules: tuple[tuple[FilesystemAccess, Path], ...] = (),
+        hard_deny_rules: tuple[tuple[FilesystemAccess, Path, FilesystemScope], ...] = (),
     ) -> None:
         self._executable = executable
         self._profile_text = profile_text
@@ -556,7 +567,7 @@ class SeatbeltBackend:
                 f"sandbox-exec failed to install the managed boundary: {exc}"
             ) from exc
         filesystem_rules = tuple(
-            f"{rule.access.value}:{_absolute_policy_path(rule.path, self._cwd)}"
+            f"{rule.access.value}:{rule.scope.value}:{_absolute_policy_path(rule.path, self._cwd)}"
             for rule in profile.filesystem.rules
         )
         runtime_read_rules = tuple(f"runtime_read:{path}" for path in _runtime_read_roots())
@@ -624,7 +635,7 @@ class SeatbeltBackend:
             default_timeout=profile.process.timeout_seconds,
             network_proxy=network_proxy,
             hard_deny_rules=tuple(
-                (rule.access, _absolute_policy_path(rule.path, self._cwd))
+                (rule.access, _absolute_policy_path(rule.path, self._cwd), rule.scope)
                 for rule in profile.filesystem.rules
                 if rule.access
                 in {
@@ -640,18 +651,21 @@ def _matches_hard_deny(
     operation: DataPlaneOperation,
     *,
     requested: str,
-    rules: tuple[tuple[FilesystemAccess, Path], ...],
+    rules: tuple[tuple[FilesystemAccess, Path, FilesystemScope], ...],
 ) -> bool:
     requested_path = Path(requested).resolve(strict=False)
     is_read = isinstance(operation, (FileReadOperation, FileSearchOperation))
     is_write = isinstance(operation, (FileWriteOperation, FileEditOperation))
-    for access, root in rules:
+    for access, root, scope in rules:
         applies = (
             access is FilesystemAccess.DENY
             or (is_read and access is FilesystemAccess.DENY_READ)
             or (is_write and access is FilesystemAccess.DENY_WRITE)
         )
-        if applies and (requested_path == root or requested_path.is_relative_to(root)):
+        within_scope = requested_path == root or (
+            scope is FilesystemScope.SUBTREE and requested_path.is_relative_to(root)
+        )
+        if applies and within_scope:
             return True
     return False
 

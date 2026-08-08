@@ -7,25 +7,95 @@ boundary grants belong to the permission runtime, not this policy.
 
 from __future__ import annotations
 
+import fnmatch
+import os
+import re
+import shlex
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Protocol
 
-from openharness.permissions.rules import parse_rule, rule_matches
-from openharness.permissions.tier_based import (
-    _extract_path_arg,
-    _matches_bash_deny,
-    _matches_irreversible_git_action,
-    _matches_tier1,
-    _matches_tier2,
-)
-
 if TYPE_CHECKING:
     from pydantic import BaseModel
 
-    from openharness.config import Settings
-    from openharness.permissions.rules import PermissionRule
     from openharness.tools.base import ToolExecutionContext, ToolRegistry
+
+
+_SENSITIVE_PATHS: tuple[str, ...] = (
+    "~/.ssh/**",
+    "~/.aws/**",
+    "~/.gnupg/**",
+    "~/.kube/**",
+    "~/.config/gh/**",
+    "/etc/passwd",
+    "/etc/shadow",
+    "/etc/sudoers",
+)
+_CATASTROPHIC_COMMANDS: tuple[str, ...] = (
+    "rm -rf /",
+    "rm -rf /*",
+    ":(){ :|:& };:",
+    "mkfs",
+    "dd if=/dev/zero of=/dev/",
+    "> /dev/sda",
+    "chmod -R 777 /",
+)
+_IRREVERSIBLE_GIT_SUBCOMMANDS = frozenset({"commit", "push"})
+_GIT_OPTIONS_WITH_ARGUMENT = frozenset(
+    {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
+)
+
+
+def _glob_match(path: str, pattern: str) -> bool:
+    normalized_path = os.path.expanduser(path)
+    normalized_pattern = os.path.expanduser(pattern)
+    if normalized_pattern.endswith("/**"):
+        root = normalized_pattern[:-3]
+        return normalized_path == root or normalized_path.startswith(root + "/")
+    return fnmatch.fnmatch(normalized_path, normalized_pattern)
+
+
+def _matches_sensitive_path(path: str) -> str | None:
+    return next((pattern for pattern in _SENSITIVE_PATHS if _glob_match(path, pattern)), None)
+
+
+def _matches_catastrophic_command(command: str) -> str | None:
+    return next((pattern for pattern in _CATASTROPHIC_COMMANDS if pattern in command), None)
+
+
+def _git_subcommand(tokens: list[str]) -> tuple[str, list[str]] | None:
+    if not tokens or tokens[0] != "git":
+        return None
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token.startswith("-"):
+            index += 2 if token in _GIT_OPTIONS_WITH_ARGUMENT else 1
+            continue
+        return token, tokens[index + 1 :]
+    return None
+
+
+def _matches_irreversible_git_action(command: str) -> str | None:
+    for segment in re.split(r"&&|\|\||;|\||\n", command):
+        try:
+            parsed = _git_subcommand(shlex.split(segment))
+        except ValueError:
+            continue
+        if parsed is None:
+            continue
+        subcommand, rest = parsed
+        if subcommand in _IRREVERSIBLE_GIT_SUBCOMMANDS and "--dry-run" not in rest:
+            return f"git {subcommand}"
+    return None
+
+
+def _extract_path_arg(args: BaseModel) -> str | None:
+    for attribute in ("path", "file_path"):
+        value = getattr(args, attribute, None)
+        if isinstance(value, str):
+            return value
+    return None
 
 
 class ActionDenyKind(Enum):
@@ -62,18 +132,12 @@ class ActionDenyPolicy(Protocol):
 
 
 class ConfiguredActionDenyPolicy:
-    """Framework red lines plus the user's negative-only legacy rules.
+    """Framework semantic red lines that a profile cannot fully express.
 
-    This is the canonical negative authority beside the legacy host checker. It intentionally
-    excludes ``permissions.allow``, ``permissions.ask``, Tier 3 ASK, and the
-    headless fail-closed gate because none of those are deny-only action facts.
+    User filesystem/network/external intent belongs exclusively to the
+    canonical profile. This policy contains only non-granting framework
+    tripwires and therefore has no configuration constructor.
     """
-
-    def __init__(self, settings: Settings) -> None:
-        self._deny_paths = settings.deny_paths
-        self._deny_rules: tuple[tuple[str, PermissionRule], ...] = tuple(
-            (spec, parse_rule(spec)) for spec in settings.permissions.deny
-        )
 
     def evaluate(
         self,
@@ -81,10 +145,11 @@ class ConfiguredActionDenyPolicy:
         args: BaseModel,
         context: ToolExecutionContext,
     ) -> DenyResult | None:
+        del context
         if tool_name == "Bash":
             command = getattr(args, "command", None)
             if isinstance(command, str):
-                bash_pattern = _matches_bash_deny(command)
+                bash_pattern = _matches_catastrophic_command(command)
                 if bash_pattern is not None:
                     return DenyResult(
                         kind=ActionDenyKind.CATASTROPHIC_COMMAND,
@@ -100,25 +165,11 @@ class ConfiguredActionDenyPolicy:
 
         path = _extract_path_arg(args)
         if path is not None:
-            sensitive_pattern = _matches_tier1(path)
+            sensitive_pattern = _matches_sensitive_path(path)
             if sensitive_pattern is not None:
                 return DenyResult(
                     kind=ActionDenyKind.SENSITIVE_PATH,
                     reason=(f"path {path!r} matches sensitive system path ({sensitive_pattern})"),
-                )
-
-            configured_pattern = _matches_tier2(path, self._deny_paths, context.cwd)
-            if configured_pattern is not None:
-                return DenyResult(
-                    kind=ActionDenyKind.CONFIGURED_PATH,
-                    reason=f"path {path!r} matches deny rule {configured_pattern!r}",
-                )
-
-        for spec, rule in self._deny_rules:
-            if rule_matches(rule, tool_name, args, context.cwd, deny=True):
-                return DenyResult(
-                    kind=ActionDenyKind.CONFIGURED_RULE,
-                    reason=f"matches deny rule {spec!r}",
                 )
 
         return None

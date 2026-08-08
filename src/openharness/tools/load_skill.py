@@ -7,9 +7,8 @@ the LLM sees only the catalog(names + descriptions, injected by
 a skill is relevant. The body lands in ``messages[]`` as a ``tool_result``
 block — standard tool dispatch path, no special handling.
 
-Per L5:``is_read_only=True`` so the AuthZ Tier 3 lax path applies
-automatically. The :class:`openharness.permissions.PermissionChecker`
-sees this just like ``Read`` / ``Grep`` and routes accordingly — no
+The canonical dispatch boundary sees this just like ``Read`` / ``Grep`` and
+routes it according to its declared local effect — no
 ``isinstance(LoadSkillTool)`` branch anywhere, satisfying the
 cross-cutting invariant.
 

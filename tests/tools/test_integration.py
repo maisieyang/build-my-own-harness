@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import cast
 from unittest.mock import Mock
 
-from engine.conftest import _AllowAllChecker
 from openharness.api import OpenAICompatibleApiClient
 from openharness.engine import QueryContext
 from openharness.protocols import ApiMessageRequest, ConversationMessage, TextBlock
@@ -65,7 +64,6 @@ def test_query_context_accepts_real_tool_registry() -> None:
     ctx = QueryContext(
         api_client=cast("OpenAICompatibleApiClient", Mock(spec=OpenAICompatibleApiClient)),
         tool_registry=ToolRegistry(),
-        permission_checker=_AllowAllChecker(),
         system_prompt="",
         cwd=Path("/tmp"),
         model="qwen-plus",

@@ -4,15 +4,15 @@ P1-T4 shipped a single-call CLI that streamed one LLM response. P2-T6.6e
 rewrites ``_run_ask`` to drive the full agent loop (``run_query``):
 
 * Build :class:`QueryContext` from ``Settings`` + the default tool registry +
-  :class:`DenyListChecker` + the assembled system prompt + the detected
-  environment + permission_mode (from ``--auto`` / ``--dry-run`` flags).
+  the canonical permission profile + the assembled system prompt + the
+  detected environment and independent review/execution postures.
 * Hand off to :func:`run_query`; render the streamed events.
 
 Design highlights (rationale in ``learnings/04-cli.md`` + ``learnings/10-cli-loop.md``;
 external contracts in ``decisions/05-cli.md`` + ``decisions/06`` + ``decisions/07``):
 
 * **Provider-neutral env vars** (``OPENHARNESS_API_KEY`` / ``_BASE_URL`` /
-  ``_MODEL`` / ``_PERMISSION_MODE``) are read by ``Settings``; the CLI never
+  ``_MODEL`` / ``_PERMISSION_PROFILE``) are read by ``Settings``; the CLI never
   reaches into ``os.environ`` directly.
 * **Differentiated error UX**: each error type maps to a category prefix
   in stderr; exit code 1. ``LoopLimitExceeded`` (D6.1) is caught by the
@@ -20,10 +20,8 @@ external contracts in ``decisions/05-cli.md`` + ``decisions/06`` + ``decisions/0
   signals the category, the embedded message itself names ``--max-turns``.
   Anything that escapes named arms lands in the ``except OpenHarnessError``
   root catch-all (P3-T2.2b widened from ``OpenHarnessApiError``).
-* **Permission flags** ``--auto`` / ``--dry-run`` are mutually exclusive
-  (D12.8). ``--dry-run`` lists every tool call without executing
-  (D12.5). ``--auto`` is parsed but Phase 2 has no interactive
-  confirmation flow yet.
+* **Orthogonal postures**: ``--auto`` selects the exact-request reviewer;
+  ``--dry-run`` lists tool calls without executing. They may be combined.
 
 The seams that tests substitute:
 
@@ -129,16 +127,11 @@ from openharness.observability.logging import (
 from openharness.permissions import (
     ActionDenyPolicy,
     ConfiguredActionDenyPolicy,
-    ExternalToolPolicy,
-    NetworkPolicy,
-    PermissionMode,
+    ExecutionPosture,
     PermissionRuntime,
     PlanActionDenyPolicy,
     ReviewerPosture,
     RuntimePermissionProfile,
-    TierBasedPermissionChecker,
-    postures_from_legacy_mode,
-    workspace_runtime_profile,
 )
 from openharness.plugins import (
     LayeredStore,
@@ -461,9 +454,6 @@ class SandboxConfig:
     enabled: bool
     backend: SandboxBackendName
     image: str
-    network: str
-    network_policy: NetworkPolicy
-    external_tools: ExternalToolPolicy
     memory: str
     cpus: float
     runtime: str
@@ -475,31 +465,15 @@ def _resolve_sandbox_config(
     sandbox_override: bool | None,
     sandbox_backend_override: SandboxBackendName | None,
     sandbox_image_override: str | None,
-    sandbox_network_override: str | None,
     sandbox_memory_override: str | None,
     sandbox_cpus_override: float | None,
     sandbox_runtime_override: str | None,
 ) -> SandboxConfig:
-    """CLI flag overrides Settings, per field (P7b-T2 precedent)."""
-    network = sandbox_network_override or settings.sandbox_network
-    if sandbox_network_override is None and settings.sandbox_network_policy.enabled:
-        network_policy = settings.sandbox_network_policy
-    elif network == "bridge":
-        network_policy = NetworkPolicy(
-            enabled=True,
-            allow_loopback=True,
-            allow_private=True,
-            allow_link_local=True,
-        )
-    else:
-        network_policy = NetworkPolicy()
+    """Resolve implementation-only backend settings; never permission intent."""
     return SandboxConfig(
         enabled=sandbox_override if sandbox_override is not None else settings.sandbox_enabled,
         backend=sandbox_backend_override or settings.sandbox_backend,
         image=sandbox_image_override or settings.sandbox_image,
-        network=network,
-        network_policy=network_policy,
-        external_tools=settings.sandbox_external_tool_policy,
         memory=sandbox_memory_override or settings.sandbox_memory,
         cpus=sandbox_cpus_override if sandbox_cpus_override is not None else settings.sandbox_cpus,
         runtime=sandbox_runtime_override or settings.sandbox_runtime,
@@ -515,30 +489,22 @@ def _append_project_instructions(
     return f"{base_prompt}\n\n{project_instructions_content}"
 
 
-def _sandbox_profile(config: SandboxConfig) -> RuntimePermissionProfile:
-    """Translate user configuration intent into the canonical profile.
-
-    Docker's historical ``bridge`` spelling means unrestricted IP network
-    access.  Keep that compatibility meaning explicit in the profile instead
-    of letting a backend silently widen a default-deny policy.
-    """
-    return workspace_runtime_profile().model_copy(
-        update={
-            "network": config.network_policy,
-            "external_tools": config.external_tools,
-        }
-    )
+def _resolve_permission_profile(
+    settings: Settings,
+) -> RuntimePermissionProfile:
+    """Return the session's single canonical authorization intent."""
+    return settings.permission_profile
 
 
 async def _open_sandbox_session(
     *,
     stack: contextlib.AsyncExitStack,
     config: SandboxConfig,
+    profile: RuntimePermissionProfile,
     cwd: Path,
     pids: int,
 ) -> tuple[RuntimePermissionProfile, SandboxSession]:
     """Compile intent, open a backend, and verify its reported facts."""
-    profile = _sandbox_profile(config)
     backend: SandboxBackend
     if config.backend == "seatbelt":
         backend = SeatbeltBackend(cwd=cwd)
@@ -552,6 +518,12 @@ async def _open_sandbox_session(
             runtime=config.runtime,
         )
 
+    support = backend.preflight(profile)
+    if not support.supported:
+        features = ", ".join(support.unsupported_features) or "unknown"
+        raise SandboxUnavailableError(
+            f"{support.backend} cannot enforce canonical profile before open: {features}"
+        )
     session = await backend.open(profile)
     boundary = session.boundary
     if (
@@ -586,7 +558,8 @@ async def _run_ask(
     *,
     model_override: str | None,
     max_tokens: int,
-    permission_mode_override: PermissionMode | None,
+    reviewer_posture_override: ReviewerPosture | None,
+    execution_posture_override: ExecutionPosture | None,
     log_level_override: LogLevel | None,
     log_format_override: LogFormat | None,
     tool_result_cap_override: int | None,
@@ -596,7 +569,6 @@ async def _run_ask(
     sandbox_override: bool | None = None,
     sandbox_backend_override: SandboxBackendName | None = None,
     sandbox_image_override: str | None = None,
-    sandbox_network_override: str | None = None,
     sandbox_memory_override: str | None = None,
     sandbox_cpus_override: float | None = None,
     sandbox_runtime_override: str | None = None,
@@ -628,12 +600,8 @@ async def _run_ask(
     """
     settings = _load_settings()
     model = model_override or settings.model
-    permission_mode = (
-        permission_mode_override
-        if permission_mode_override is not None
-        else settings.permission_mode
-    )
-    reviewer_posture, execution_posture = postures_from_legacy_mode(permission_mode)
+    reviewer_posture = reviewer_posture_override or settings.reviewer_posture
+    execution_posture = execution_posture_override or settings.execution_posture
     log_level = log_level_override or settings.log_level
     log_format = log_format_override or settings.log_format
     tool_result_cap = (
@@ -652,7 +620,6 @@ async def _run_ask(
         sandbox_override=sandbox_override,
         sandbox_backend_override=sandbox_backend_override,
         sandbox_image_override=sandbox_image_override,
-        sandbox_network_override=sandbox_network_override,
         sandbox_memory_override=sandbox_memory_override,
         sandbox_cpus_override=sandbox_cpus_override,
         sandbox_runtime_override=sandbox_runtime_override,
@@ -903,26 +870,22 @@ async def _run_ask(
         # base hook_registry are assembled so the bundle composes
         # against the fully-built primitives (MCP adapters + LoadSkill
         # in registry; auto-truncate hook in hook_registry). Layer 2
-        # (whitelist) wraps registry; Layer 3 (deny_paths) augments
-        # settings; Layer 3 (hooks) registers into a clone of
+        # (whitelist) wraps registry; Layer 3 (hooks) registers into a clone of
         # hook_registry. Layer 1 (system_prompt) handled below — bundle
         # overrides ours, else we build against the EFFECTIVE registry
         # so the LLM's tool catalog reflects the whitelist.
         effective_registry = registry
         effective_hook_registry = hook_registry
-        effective_settings = settings
         if bundle is not None:
             application = apply_bundle_to_context(
                 bundle=bundle,
                 tool_registry=registry,
                 hook_registry=hook_registry,
-                settings=settings,
                 system_prompt="",  # placeholder; prompt logic lives below
                 plugin_hook_catalog=plugin_hook_catalog,
             )
             effective_registry = application.tool_registry
             effective_hook_registry = application.hook_registry
-            effective_settings = application.settings
 
         project_instructions_content = (
             load_project_instructions(
@@ -975,12 +938,13 @@ async def _run_ask(
         # local core tools prefer ``sandbox_session``; the legacy execution
         # environment remains host only as an inactive compatibility field.
         execution_env: ExecutionEnvironment = _HOST_EXECUTION
-        active_profile = _sandbox_profile(sandbox_config)
+        active_profile = _resolve_permission_profile(settings)
         sandbox_session: SandboxSession | None = None
         if sandbox_enabled:
             active_profile, sandbox_session = await _open_sandbox_session(
                 stack=stack,
                 config=sandbox_config,
+                profile=active_profile,
                 cwd=env.cwd,
                 pids=settings.sandbox_pids,
             )
@@ -1001,20 +965,7 @@ async def _run_ask(
         context = QueryContext(
             api_client=client,
             tool_registry=effective_registry,
-            # P3-T3.3e:replaced Phase 2 DenyListChecker (Bash-only) with the
-            # full three-Tier checker (hardcoded paths + user globs + mode-based +
-            # carry-over Bash deny-list). P5d-T4: TierBasedPermissionChecker
-            # reads ``settings.deny_paths`` which already includes the bundle's
-            # extra patterns (via ``effective_settings``).
-            # loop-runtime L2: `-p` headless runs are fail-closed — a mutating
-            # tool with no matching permissions.allow rule is DENIED. Wiring
-            # ``headless=print_mode`` is what activates that guarantee in
-            # production (the L2 unit tests pass headless=True directly).
-            # Interactive ``_run_chat`` stays headless=False (legacy ALLOW).
-            permission_checker=TierBasedPermissionChecker(
-                effective_registry, effective_settings, headless=print_mode
-            ),
-            action_deny_policy=ConfiguredActionDenyPolicy(effective_settings),
+            action_deny_policy=ConfiguredActionDenyPolicy(),
             hook_registry=effective_hook_registry,
             system_prompt=system_prompt,
             cwd=env.cwd,
@@ -1024,11 +975,9 @@ async def _run_ask(
             # at the dataclass default while LoopLimitExceeded's message
             # already promised this knob.
             max_turns=max_turns,
-            permission_mode=permission_mode,
             reviewer_posture=reviewer_posture,
             execution_posture=execution_posture,
             autonomous=(reviewer_posture is ReviewerPosture.AUTO or print_mode),
-            external_tool_policy=sandbox_config.external_tools,
             authorization_context=(prompt,),
             skill_store=skill_store,
             # P6-T1 (D16.5): propagate the sub-agent recursion cap from
@@ -1077,7 +1026,7 @@ async def _run_ask(
 
         # P12-T5 (D30.4): --resume loads the cwd's snapshot and
         # rebuilds the context's agent-state (model / max_tokens /
-        # permission_mode / system_prompt / messages). Runtime state
+        # system_prompt / messages). Runtime state
         # (registries / hooks / execution_env / memory_store) stays
         # what we just built above — D30.7's split.
         #
@@ -1092,9 +1041,7 @@ async def _run_ask(
                     snapshot,
                     api_client=client,
                     tool_registry=effective_registry,
-                    permission_checker=context.permission_checker,
                     action_deny_policy=context.action_deny_policy,
-                    permission_mode=permission_mode,
                     reviewer_posture=reviewer_posture,
                     execution_posture=execution_posture,
                     autonomous=context.autonomous,
@@ -1107,7 +1054,6 @@ async def _run_ask(
                         sandbox_session.boundary if sandbox_session is not None else None
                     ),
                     permission_runtime=permission_runtime,
-                    external_tool_policy=sandbox_config.external_tools,
                     authorization_context=(prompt,),
                     skill_store=skill_store,
                     memory_store=memory_store,
@@ -1336,7 +1282,8 @@ async def _run_chat(
     initial_prompt: str | None = None,
     model_override: str | None,
     max_tokens: int,
-    permission_mode_override: PermissionMode | None,
+    reviewer_posture_override: ReviewerPosture | None,
+    execution_posture_override: ExecutionPosture | None,
     log_level_override: LogLevel | None,
     log_format_override: LogFormat | None,
     tool_result_cap_override: int | None,
@@ -1346,7 +1293,6 @@ async def _run_chat(
     sandbox_override: bool | None = None,
     sandbox_backend_override: SandboxBackendName | None = None,
     sandbox_image_override: str | None = None,
-    sandbox_network_override: str | None = None,
     sandbox_memory_override: str | None = None,
     sandbox_cpus_override: float | None = None,
     sandbox_runtime_override: str | None = None,
@@ -1379,12 +1325,8 @@ async def _run_chat(
 
     settings = _load_settings()
     model = model_override or settings.model
-    permission_mode = (
-        permission_mode_override
-        if permission_mode_override is not None
-        else settings.permission_mode
-    )
-    reviewer_posture, execution_posture = postures_from_legacy_mode(permission_mode)
+    reviewer_posture = reviewer_posture_override or settings.reviewer_posture
+    execution_posture = execution_posture_override or settings.execution_posture
     log_level = log_level_override or settings.log_level
     log_format = log_format_override or settings.log_format
     tool_result_cap = (
@@ -1400,7 +1342,6 @@ async def _run_chat(
         sandbox_override=sandbox_override,
         sandbox_backend_override=sandbox_backend_override,
         sandbox_image_override=sandbox_image_override,
-        sandbox_network_override=sandbox_network_override,
         sandbox_memory_override=sandbox_memory_override,
         sandbox_cpus_override=sandbox_cpus_override,
         sandbox_runtime_override=sandbox_runtime_override,
@@ -1502,12 +1443,13 @@ async def _run_chat(
             )
 
         execution_env: ExecutionEnvironment = _HOST_EXECUTION
-        active_profile = _sandbox_profile(sandbox_config)
+        active_profile = _resolve_permission_profile(settings)
         sandbox_session: SandboxSession | None = None
         if sandbox_config.enabled:
             active_profile, sandbox_session = await _open_sandbox_session(
                 stack=stack,
                 config=sandbox_config,
+                profile=active_profile,
                 cwd=env.cwd,
                 pids=settings.sandbox_pids,
             )
@@ -1568,7 +1510,6 @@ async def _run_chat(
         bundle_overrides_prompt: bool = False
         effective_registry = registry
         effective_hook_registry = hook_registry
-        effective_settings = settings
         # Initial system_prompt — fallback for the memory-disabled path
         # AND for the brief window before the loop's first iteration
         # rebuilds with memory. CLAUDE.md threads through; memory
@@ -1772,7 +1713,7 @@ async def _run_chat(
                 typer.echo(
                     _repl.format_permissions_status(
                         profile=active_profile,
-                        external_policy=sandbox_config.external_tools,
+                        external_policy=active_profile.external_tools,
                         boundary=(
                             sandbox_session.boundary if sandbox_session is not None else None
                         ),
@@ -1797,7 +1738,6 @@ async def _run_chat(
                                 "loading is an explicit trust decision"
                             ),
                         },
-                        legacy_mode=permission_mode.value,
                         parked_request=permission_runtime.parked_request,
                     )
                 )
@@ -2047,13 +1987,11 @@ async def _run_chat(
                     bundle=bundle,
                     tool_registry=registry,
                     hook_registry=hook_registry,
-                    settings=settings,
                     system_prompt="",
                     plugin_hook_catalog=plugin_hook_catalog,
                 )
                 effective_registry = application.tool_registry
                 effective_hook_registry = application.hook_registry
-                effective_settings = application.settings
                 if bundle.system_prompt is not None:
                     system_prompt = _append_project_instructions(
                         bundle.system_prompt,
@@ -2113,7 +2051,7 @@ async def _run_chat(
 
             # D47 — plan is a capability view plus deny-only forged-call
             # guard. Approval only exits that view; it never grants execution.
-            turn_action_policy: ActionDenyPolicy = ConfiguredActionDenyPolicy(effective_settings)
+            turn_action_policy: ActionDenyPolicy = ConfiguredActionDenyPolicy()
             if chat_mode is _repl.ChatMode.PLAN:
                 turn_action_policy = PlanActionDenyPolicy(
                     registry=effective_registry,
@@ -2142,20 +2080,15 @@ async def _run_chat(
                 dispatch_tool_registry=(
                     effective_registry if chat_mode is _repl.ChatMode.PLAN else None
                 ),
-                permission_checker=TierBasedPermissionChecker(
-                    effective_registry, effective_settings
-                ),
                 action_deny_policy=turn_action_policy,
                 hook_registry=effective_hook_registry,
                 system_prompt=turn_system_prompt,
                 cwd=env.cwd,
                 model=model,
                 max_tokens=max_tokens,
-                permission_mode=permission_mode,
                 reviewer_posture=reviewer_posture,
                 execution_posture=execution_posture,
                 autonomous=(reviewer_posture is ReviewerPosture.AUTO or goal is not None),
-                external_tool_policy=sandbox_config.external_tools,
                 authorization_context=extract_authorization_context(authorization_messages),
                 skill_store=skill_store,
                 max_agent_depth=settings.max_agent_depth,
@@ -2393,7 +2326,6 @@ def _root(
             sandbox=None,
             sandbox_backend=None,
             sandbox_image=None,
-            sandbox_network=None,
             sandbox_memory=None,
             sandbox_cpus=None,
             sandbox_runtime=None,
@@ -2430,7 +2362,7 @@ def ask(
     auto: bool = typer.Option(
         False,
         "--auto",
-        help="Skip interactive confirmation prompts (Phase 3 reserved; no-op in Phase 2).",
+        help="Use the automated reviewer for exact permission requests.",
     ),
     dry_run: bool = typer.Option(
         False,
@@ -2540,10 +2472,8 @@ def ask(
         None,
         "--sandbox/--no-sandbox",
         help=(
-            "Enable the Docker sandbox substrate for Bash (Phase 7b). When "
-            "on, Bash commands execute inside a per-query container with "
-            "cwd bind-mounted read-write and network=none by default. "
-            "Default OFF (host execution); overrides OPENHARNESS_SANDBOX."
+            "Install the configured verified boundary for local tools. "
+            "Without it, local/delegated execution fails closed."
         ),
     ),
     sandbox_backend: SandboxBackendName | None = typer.Option(
@@ -2561,16 +2491,6 @@ def ask(
         help=(
             "Docker image for the sandbox (default: python:3.12-slim). "
             "Overrides OPENHARNESS_SANDBOX_IMAGE."
-        ),
-    ),
-    sandbox_network: str | None = typer.Option(
-        None,
-        "--sandbox-network",
-        hidden=True,
-        help=(
-            "Container network mode [none|bridge]. ``none`` (default) "
-            "blocks external network — strongest default. ``bridge`` "
-            "enables NAT'd internet. Overrides OPENHARNESS_SANDBOX_NETWORK."
         ),
     ),
     sandbox_memory: str | None = typer.Option(
@@ -2721,13 +2641,6 @@ def ask(
     ),
 ) -> None:
     """Stream a single LLM response (with tool dispatch) to stdout."""
-    if auto and dry_run:
-        typer.echo(
-            "error: --auto and --dry-run are mutually exclusive",
-            err=True,
-        )
-        raise typer.Exit(code=2)
-
     # loop-runtime L1: ``--output-format`` is meaningless without ``-p``.
     # text (T1) / json (T3) / stream-json (T4) are all wired.
     if output_format != "text" and not print_mode:
@@ -2751,11 +2664,8 @@ def ask(
         )
         raise typer.Exit(code=2)
 
-    permission_mode_override: PermissionMode | None = None
-    if dry_run:
-        permission_mode_override = PermissionMode.DRY_RUN
-    elif auto:
-        permission_mode_override = PermissionMode.AUTO
+    reviewer_posture_override = ReviewerPosture.AUTO if auto else None
+    execution_posture_override = ExecutionPosture.DRY_RUN if dry_run else None
 
     # `--no-auto-truncate` is the only way to set ``auto_truncate=False`` via
     # CLI;no positive ``--auto-truncate`` flag (it's the default).
@@ -2764,7 +2674,8 @@ def ask(
     common_run_ask_kwargs: dict[str, Any] = {
         "model_override": model,
         "max_tokens": max_tokens,
-        "permission_mode_override": permission_mode_override,
+        "reviewer_posture_override": reviewer_posture_override,
+        "execution_posture_override": execution_posture_override,
         "log_level_override": log_level,
         "log_format_override": log_format,
         "tool_result_cap_override": tool_result_cap,
@@ -2774,7 +2685,6 @@ def ask(
         "sandbox_override": sandbox,
         "sandbox_backend_override": sandbox_backend,
         "sandbox_image_override": sandbox_image,
-        "sandbox_network_override": sandbox_network,
         "sandbox_memory_override": sandbox_memory,
         "sandbox_cpus_override": sandbox_cpus,
         "sandbox_runtime_override": sandbox_runtime,
@@ -2910,7 +2820,11 @@ def chat(
     max_tokens: int = typer.Option(
         DEFAULT_MAX_TOKENS, "--max-tokens", min=1, help="Max tokens per turn."
     ),
-    auto: bool = typer.Option(False, "--auto", help="Skip confirmations."),
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Use the automated reviewer for exact permission requests.",
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="List tool calls; don't execute."),
     log_level: LogLevel | None = typer.Option(None, "--log-level"),
     log_format: LogFormat | None = typer.Option(None, "--log-format"),
@@ -2925,7 +2839,6 @@ def chat(
         help="Verified backend [seatbelt|docker-command].",
     ),
     sandbox_image: str | None = typer.Option(None, "--sandbox-image"),
-    sandbox_network: str | None = typer.Option(None, "--sandbox-network"),
     sandbox_memory: str | None = typer.Option(None, "--sandbox-memory"),
     sandbox_cpus: float | None = typer.Option(None, "--sandbox-cpus"),
     sandbox_runtime: str | None = typer.Option(None, "--sandbox-runtime"),
@@ -3001,15 +2914,8 @@ def chat(
     ),
 ) -> None:
     """Multi-turn REPL — same flag surface as ``ask`` minus the prompt arg."""
-    if auto and dry_run:
-        typer.echo("error: --auto and --dry-run are mutually exclusive", err=True)
-        raise typer.Exit(code=2)
-
-    permission_mode_override: PermissionMode | None = None
-    if dry_run:
-        permission_mode_override = PermissionMode.DRY_RUN
-    elif auto:
-        permission_mode_override = PermissionMode.AUTO
+    reviewer_posture_override = ReviewerPosture.AUTO if auto else None
+    execution_posture_override = ExecutionPosture.DRY_RUN if dry_run else None
 
     auto_truncate_override: bool | None = False if no_auto_truncate else None
 
@@ -3019,7 +2925,8 @@ def chat(
                 initial_prompt=prompt,
                 model_override=model,
                 max_tokens=max_tokens,
-                permission_mode_override=permission_mode_override,
+                reviewer_posture_override=reviewer_posture_override,
+                execution_posture_override=execution_posture_override,
                 log_level_override=log_level,
                 log_format_override=log_format,
                 tool_result_cap_override=tool_result_cap,
@@ -3029,7 +2936,6 @@ def chat(
                 sandbox_override=sandbox,
                 sandbox_backend_override=sandbox_backend,
                 sandbox_image_override=sandbox_image,
-                sandbox_network_override=sandbox_network,
                 sandbox_memory_override=sandbox_memory,
                 sandbox_cpus_override=sandbox_cpus,
                 sandbox_runtime_override=sandbox_runtime,
@@ -3078,9 +2984,10 @@ _CONFIG_TEMPLATE = """\
 # OPENHARNESS_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
 # OPENHARNESS_MODEL="qwen-plus"
 
-# Permissions
-# OPENHARNESS_DENY_PATHS="secrets/**,*.env"
-# OPENHARNESS_PERMISSION_MODE="default"  # default / auto / dry_run
+# Canonical permission intent (nested overrides preserve workspace defaults)
+# OPENHARNESS_PERMISSION_PROFILE__NETWORK__ENABLED="true"
+# OPENHARNESS_PERMISSION_PROFILE__NETWORK__ALLOW_DOMAINS='["pypi.org"]'
+# OPENHARNESS_PERMISSION_PROFILE__EXTERNAL_TOOLS__WEB="allow"
 
 # Observability
 # OPENHARNESS_LOG_LEVEL="WARNING"

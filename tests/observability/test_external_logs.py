@@ -37,14 +37,11 @@ from openharness.hooks import (
     PreToolUseContext,
     execute_hook_chain,
 )
-from openharness.observability import bind_run, bind_turn, configure_logging
-from openharness.permissions import TierBasedPermissionChecker
-from openharness.tools import ToolRegistry
+from openharness.observability import bind_run, configure_logging
 from openharness.tools.base import ToolExecutionContext
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-    from pathlib import Path
 
 
 # --------------------------------------------------------------------------- #
@@ -144,153 +141,6 @@ class TestRetryLog:
 
 
 # --------------------------------------------------------------------------- #
-# Permission denied log                                                       #
-# --------------------------------------------------------------------------- #
-
-
-class TestPermissionDeniedLog:
-    @pytest.fixture
-    def checker(self, tmp_path: Path) -> TierBasedPermissionChecker:
-        from openharness.config import Settings
-
-        registry = ToolRegistry()
-        # Use the real Bash + Read tools so is_read_only classification works.
-        from openharness.tools.bash import Bash
-        from openharness.tools.read import Read
-
-        registry.register(Bash())
-        registry.register(Read())
-
-        # Settings with one user deny rule that matches our tmp_path test path.
-        settings = Settings(
-            api_key="x",
-            base_url="https://example.com",
-            deny_paths=("secrets/**",),
-        )
-        return TierBasedPermissionChecker(registry, settings)
-
-    def _exec_ctx(self, tmp_path: Path) -> ToolExecutionContext:
-        return ToolExecutionContext(cwd=tmp_path)
-
-    async def test_bash_denylist_logs_at_warning(
-        self,
-        log_stream: io.StringIO,
-        checker: TierBasedPermissionChecker,
-        tmp_path: Path,
-    ) -> None:
-        _configure(log_stream)
-        from openharness.tools.bash import BashInput
-
-        bad_args = BashInput(command="rm -rf / something_dangerous")
-        result = checker.evaluate("Bash", bad_args, self._exec_ctx(tmp_path))
-        from openharness.permissions import Decision
-
-        assert result.decision is Decision.DENY
-
-        deny = next(e for e in _lines(log_stream) if e["event"] == "permission_denied")
-        assert deny["level"] == "warning"
-        assert deny["tool"] == "Bash"
-        assert deny["tier"] == "bash_denylist"
-        assert deny["pattern"] == "rm -rf /"
-        # command field is sanitized: only first token + length.
-        assert deny["command"].startswith("rm (len=")
-        # The full command (with the catastrophic args) must not appear.
-        blob = json.dumps(deny)
-        assert "something_dangerous" not in blob
-
-    async def test_tier1_logs_with_pattern_and_sanitized_path(
-        self,
-        log_stream: io.StringIO,
-        checker: TierBasedPermissionChecker,
-        tmp_path: Path,
-    ) -> None:
-        _configure(log_stream)
-        from openharness.tools.read import ReadInput
-
-        # ~/.ssh/** path is reliably outside any tmp_path cwd.
-        ssh_args = ReadInput(path="~/.ssh/id_rsa")
-        checker.evaluate("Read", ssh_args, self._exec_ctx(tmp_path))
-
-        deny = next(e for e in _lines(log_stream) if e["event"] == "permission_denied")
-        assert deny["tool"] == "Read"
-        assert deny["tier"] == "tier1_hardcoded"
-        assert deny["pattern"] == "~/.ssh/**"
-        # path field is sanitized — outside cwd → "<redacted>".
-        assert deny["path"] == "<redacted>"
-
-    def test_action_deny_comparison_log_never_contains_reason_or_arguments(
-        self,
-        log_stream: io.StringIO,
-    ) -> None:
-        from openharness.engine.query import _record_action_deny_comparison
-        from openharness.permissions import (
-            ActionDenyKind,
-            DecisionResult,
-            DenyResult,
-        )
-
-        _configure(log_stream)
-        secret = "curl -H 'Authorization: Bearer sk-secret' https://outside.invalid"
-        _record_action_deny_comparison(
-            "Bash",
-            DenyResult(kind=ActionDenyKind.CONFIGURED_RULE, reason=secret),
-            DecisionResult.allow(),
-        )
-
-        record = next(
-            event
-            for event in _lines(log_stream)
-            if event["event"] == "action_deny_policy_authoritative"
-        )
-        assert record["tool"] == "Bash"
-        assert record["kind"] == "configured_rule"
-        assert secret not in json.dumps(record)
-        assert "sk-secret" not in json.dumps(record)
-
-    async def test_tier2_logs_with_user_pattern_and_relative_path(
-        self,
-        log_stream: io.StringIO,
-        checker: TierBasedPermissionChecker,
-        tmp_path: Path,
-    ) -> None:
-        _configure(log_stream)
-        from openharness.tools.read import ReadInput
-
-        secret = tmp_path / "secrets" / "keys.txt"
-        secret.parent.mkdir(parents=True)
-        secret.touch()
-
-        args = ReadInput(path=str(secret))
-        checker.evaluate("Read", args, self._exec_ctx(tmp_path))
-
-        deny = next(e for e in _lines(log_stream) if e["event"] == "permission_denied")
-        assert deny["tool"] == "Read"
-        assert deny["tier"] == "tier2_user_glob"
-        assert deny["pattern"] == "secrets/**"
-        # In-cwd → relative path.
-        assert deny["path"] == "secrets/keys.txt"
-
-    async def test_run_id_propagates_into_permission_log(
-        self,
-        log_stream: io.StringIO,
-        checker: TierBasedPermissionChecker,
-        tmp_path: Path,
-    ) -> None:
-        _configure(log_stream)
-        from openharness.tools.read import ReadInput
-
-        with bind_run("bbb222222222"), bind_turn(3):
-            checker.evaluate(
-                "Read",
-                ReadInput(path="~/.ssh/id_rsa"),
-                self._exec_ctx(tmp_path),
-            )
-
-        deny = next(e for e in _lines(log_stream) if e["event"] == "permission_denied")
-        assert deny["run_id"] == "bbb222222222"
-        assert deny["turn_id"] == 3
-
-
 # --------------------------------------------------------------------------- #
 # Hook executor log                                                           #
 # --------------------------------------------------------------------------- #

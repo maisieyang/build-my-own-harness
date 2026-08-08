@@ -1,8 +1,8 @@
 """Tests for ``QueryContext.from_snapshot`` factory — P12-T4 (D30.7).
 
 Verifies the agent-state / runtime-state split: snapshot loads
-``model`` / ``max_tokens`` / ``permission_mode`` / ``system_prompt``
-/ ``messages`` from disk; caller passes registries / hooks /
+``model`` / ``max_tokens`` / ``system_prompt`` / ``messages`` from disk;
+caller passes the canonical profile, registries, hooks,
 execution_env / etc. fresh per invocation.
 """
 
@@ -23,7 +23,6 @@ from openharness.permissions import (
     ExternalToolPolicy,
     PermissionDelta,
     PermissionDeltaRequest,
-    PermissionMode,
     PermissionRuntime,
     workspace_runtime_profile,
 )
@@ -51,18 +50,10 @@ class _StubApiClient:
         raise NotImplementedError("not invoked in from_snapshot tests")
 
 
-class _AllowAllChecker:
-    def evaluate(self, *_a: object, **_kw: object) -> object:
-        from openharness.permissions import DecisionResult
-
-        return DecisionResult.allow()
-
-
 def _runtime_kwargs(cwd: Path) -> dict[str, object]:
     return {
         "api_client": cast("SupportsStreamingMessages", _StubApiClient()),
         "tool_registry": create_default_tool_registry(),
-        "permission_checker": _AllowAllChecker(),
         "cwd": cwd,
     }
 
@@ -71,7 +62,6 @@ def _synthesize_snapshot(
     *,
     cwd: Path,
     model: str = "qwen-plus",
-    permission_mode: str = "default",
     system_prompt: str = "you are helpful",
     max_tokens: int = 1024,
     messages: list[dict[str, object]] | None = None,
@@ -83,7 +73,7 @@ def _synthesize_snapshot(
         "git_head": None,
         "cwd": str(cwd),
         "model": model,
-        "permission_mode": permission_mode,
+        "permission_profile_fingerprint": workspace_runtime_profile().fingerprint,
         "system_prompt": system_prompt,
         "max_tokens": max_tokens,
         "messages": messages or [],
@@ -97,7 +87,6 @@ class TestFromSnapshotAgentState:
         snap = _synthesize_snapshot(
             cwd=tmp_path,
             model="qwen-max",
-            permission_mode="auto",
             max_tokens=2048,
         )
         ctx, messages = QueryContext.from_snapshot(
@@ -106,7 +95,6 @@ class TestFromSnapshotAgentState:
         )
         assert ctx.model == "qwen-max"
         assert ctx.max_tokens == 2048
-        assert ctx.permission_mode == PermissionMode.DEFAULT
         assert messages == []
 
     def test_loads_system_prompt_verbatim(self, tmp_path: Path) -> None:
@@ -165,16 +153,16 @@ class TestFromSnapshotMessagesRoundTrip:
     def test_real_write_then_load_then_from_snapshot_round_trip(self, tmp_path: Path) -> None:
         # Write a real snapshot file (T2's writer) → load_snapshot →
         # from_snapshot. Pins the end-to-end shape that --resume uses.
-        from dataclasses import dataclass
+        from dataclasses import dataclass, field
 
         from openharness.services.snapshot import load_snapshot
 
         @dataclass
         class _Ctx:
             model: str = "qwen-plus"
-            permission_mode: PermissionMode = PermissionMode.DEFAULT
             system_prompt: str | None = "system"
             max_tokens: int = 1024
+            runtime_permission_profile: object = field(default_factory=workspace_runtime_profile)
 
         original = [
             ConversationMessage(role="user", content=[TextBlock(text="round trip")]),
@@ -193,7 +181,6 @@ class TestFromSnapshotMessagesRoundTrip:
             **_runtime_kwargs(tmp_path),  # type: ignore[arg-type]
         )
         assert ctx.model == "qwen-plus"
-        assert ctx.permission_mode == PermissionMode.DEFAULT
         assert ctx.system_prompt == "system"
         assert messages == original
 
@@ -201,9 +188,9 @@ class TestFromSnapshotMessagesRoundTrip:
 class TestFromSnapshotRuntimeKwargRequirements:
     def test_missing_required_runtime_kwarg_typeerrors(self, tmp_path: Path) -> None:
         snap = _synthesize_snapshot(cwd=tmp_path)
-        # Drop ``permission_checker`` from runtime kwargs → TypeError
+        # API client remains required runtime state.
         rt = _runtime_kwargs(tmp_path)
-        rt.pop("permission_checker")
+        rt.pop("api_client")
         with pytest.raises(TypeError):
             QueryContext.from_snapshot(snap, **rt)  # type: ignore[arg-type]
 
@@ -222,28 +209,27 @@ class TestFromSnapshotRuntimeKwargRequirements:
 
 
 class TestFromSnapshotRuntimePosture:
-    def test_current_runtime_postures_override_legacy_snapshot_mode(self, tmp_path: Path) -> None:
+    def test_current_runtime_postures_are_invocation_state(self, tmp_path: Path) -> None:
         from openharness.permissions import ExecutionPosture, ReviewerPosture
 
-        snap = _synthesize_snapshot(cwd=tmp_path, permission_mode="dry_run")
+        snap = _synthesize_snapshot(cwd=tmp_path)
         ctx, _ = QueryContext.from_snapshot(
             snap,
-            permission_mode=PermissionMode.AUTO,
             reviewer_posture=ReviewerPosture.AUTO,
             execution_posture=ExecutionPosture.EXECUTE,
             **_runtime_kwargs(tmp_path),  # type: ignore[arg-type]
         )
-        assert ctx.permission_mode is PermissionMode.AUTO
         assert ctx.reviewer_posture is ReviewerPosture.AUTO
         assert ctx.execution_posture is ExecutionPosture.EXECUTE
 
-    def test_invalid_legacy_snapshot_mode_is_diagnostic_only(self, tmp_path: Path) -> None:
-        snap = _synthesize_snapshot(cwd=tmp_path, permission_mode="not_a_mode")
-        ctx, _ = QueryContext.from_snapshot(
-            snap,
-            **_runtime_kwargs(tmp_path),  # type: ignore[arg-type]
-        )
-        assert ctx.permission_mode is PermissionMode.DEFAULT
+    def test_profile_drift_fails_closed(self, tmp_path: Path) -> None:
+        snap = _synthesize_snapshot(cwd=tmp_path)
+        snap["permission_profile_fingerprint"] = "different"
+        with pytest.raises(ValueError, match="canonical profile"):
+            QueryContext.from_snapshot(
+                snap,
+                **_runtime_kwargs(tmp_path),  # type: ignore[arg-type]
+            )
 
 
 class TestFromSnapshotPermissionRuntime:
@@ -325,7 +311,6 @@ class TestFromSnapshotPermissionRuntime:
             snap,
             permission_runtime=runtime,
             runtime_permission_profile=profile,
-            external_tool_policy=profile.external_tools,
             **_runtime_kwargs(tmp_path),  # type: ignore[arg-type]
         )
 

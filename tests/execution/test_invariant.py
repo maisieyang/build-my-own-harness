@@ -29,8 +29,6 @@ class TestPhase7aCrossCuttingInvariant:
     """
 
     _PROTECTED_MODULES = (
-        "openharness.permissions.checker",
-        "openharness.permissions.tier_based",
         "openharness.hooks.executor",
         "openharness.hooks.registry",
         "openharness.observability.context",
@@ -123,8 +121,6 @@ class TestPhase5dCrossCuttingInvariant:
     """
 
     _PROTECTED_MODULES = (
-        "openharness.permissions.checker",
-        "openharness.permissions.tier_based",
         "openharness.hooks.executor",
         "openharness.hooks.registry",
         "openharness.hooks.context",
@@ -233,8 +229,6 @@ class TestPhase8MarkdownStoreInvariant:
     """
 
     _PROTECTED_MODULES = (
-        "openharness.permissions.checker",
-        "openharness.permissions.tier_based",
         "openharness.hooks.executor",
         "openharness.hooks.registry",
         "openharness.engine.context",
@@ -325,8 +319,6 @@ class TestPhase6PlusConversationCompleteInvariant:
     """
 
     _PROTECTED_MODULES = (
-        "openharness.permissions.checker",
-        "openharness.permissions.tier_based",
         "openharness.hooks.executor",
         "openharness.hooks.registry",
         "openharness.observability.context",

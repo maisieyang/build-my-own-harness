@@ -30,7 +30,6 @@ from openharness.engine.query import run_query
 from openharness.hooks.context import PreApiCallContext, PreToolUseContext
 from openharness.hooks.executor import execute_hook_chain
 from openharness.hooks.registry import HookRegistry
-from openharness.permissions import Decision
 from openharness.protocols import (
     ApiMessageCompleteEvent,
     ConversationMessage,
@@ -46,12 +45,6 @@ if TYPE_CHECKING:
     from openharness.api import SupportsStreamingMessages
     from openharness.hooks.result import HookResult
     from openharness.protocols import ApiMessageRequest, ApiStreamEvent
-
-
-class _AllowAllChecker:
-    def check(self, tool_name: str, tool_input: dict[str, object], **_: object) -> object:
-        del tool_name, tool_input
-        return Decision.allow()
 
 
 class _PtlOnceThenEnd:
@@ -96,7 +89,6 @@ def _ctx(client: object, hook_registry: HookRegistry) -> QueryContext:
     return QueryContext(
         api_client=cast("SupportsStreamingMessages", client),
         tool_registry=ToolRegistry(),
-        permission_checker=_AllowAllChecker(),  # type: ignore[arg-type]
         hook_registry=hook_registry,
         system_prompt="t",
         cwd=Path("/tmp"),

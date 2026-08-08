@@ -87,7 +87,7 @@ flowchart LR
     C --> E["Agent engine"]
     E <--> M["OpenAI-compatible 模型"]
     E --> P["Permission profile、已验证 boundary 与 hooks"]
-    P --> X["Seatbelt、Docker command backend 或 legacy host"]
+    P --> X["Seatbelt 或 Docker command boundary"]
     E <--> S["Compaction、snapshots 与 memory"]
     C --> V["独立 /goal 判官"]
     V -->|"checker feedback"| E
@@ -98,8 +98,8 @@ flowchart LR
 
 1. **动作。** Typed streaming 和 tool call 进入 deny-only hard policy、生命周期
    hooks 与独立 external-effect policy；选择 verified posture 后，本地与 delegated
-   execution 共享同一个已验证的 session boundary。legacy checker 只保留在未 sandbox
-   的 host 路径。
+   execution 共享同一个已验证的 session boundary；没有 verified boundary 时，这两个
+   domain 会 fail closed。
 2. **证据与状态。** Tool results、compaction、memory 与 snapshots 保存长任务
    恢复所需的可信状态。
 3. **能力。** Skills、commands、mode bundles、MCP、plugins 与 subagents 扩展
@@ -277,6 +277,17 @@ uv run oh "检查当前仓库，指出风险最高的缺口"
 权威来源。所有配置都使用 `OPENHARNESS_*` namespace，见
 [`.env.example`](./.env.example)。
 
+### Permission 模型
+
+`permission_profile` 是本地 filesystem、network、environment、process 与
+external-tool surface 唯一的授权意图。sandbox backend 将意图翻译成已安装的
+boundary 并报告可验证事实；配置本身从不被当作 enforcement 证明。`--auto` 选择
+exact delta 的 reviewer，`--dry-run` 则独立决定调用是否执行，两者可以组合。
+
+旧的 `permission_mode`、`permissions.allow/deny/ask`、`deny_paths`，以及由 sandbox
+持有的 network/external policy 字段会在启动时被明确拒绝，并提示 canonical
+replacement。无法等价表达的规则必须显式重写；migration 不会扩大授权范围。
+
 ## 质量契约
 
 ```bash
@@ -308,9 +319,9 @@ uv run ruff format --check
   `allow`，不可信、未知、可修改或破坏性的外部调用仍需要一次精确审批。
 - Hooks 与 plugins 是 opt-in、进程内运行的 trusted control-plane code。它们可以
   拒绝或改写调用，但改写后的最终参数会在 dispatch 前重新授权。
-- 普通交互执行的 Isolation 仍是 opt-in。macOS 上由 Seatbelt backend 覆盖统一的本地 data plane；
-  Docker 明确保持 command-only backend，未启用 sandbox 的 posture 继续使用 legacy
-  host execution。自主执行（`--auto`、active Goal 或 headless mode）若暴露的任一本地或
+- Isolation 在启动时仍是 opt-in。macOS 上由 Seatbelt backend 覆盖统一的本地 data plane；
+  Docker 明确保持 command-only backend，未启用 sandbox 的 posture 不能执行 local 或
+  delegated tool。自主执行（`--auto`、active Goal 或 headless mode）若暴露的任一本地或
   delegated capability 缺少 verified boundary coverage，会在第一次模型调用前失败；
   no-sandbox 的只读 catalog 也不豁免。dry-run 与纯 external/control catalog 不要求本地 boundary。
 - `/goal` judge 具有概率性，只读取 conversation evidence 而不直接读取操作系统

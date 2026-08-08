@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hashlib import sha1
 from pathlib import Path
 
@@ -27,7 +27,6 @@ from openharness.execution import (
 from openharness.permissions import (
     PermissionDelta,
     PermissionDeltaRequest,
-    PermissionMode,
     PermissionRuntime,
     workspace_runtime_profile,
 )
@@ -62,10 +61,10 @@ class _StubContext:
     permission_checker etc. unnecessary for the serializer)."""
 
     model: str = "qwen-plus"
-    permission_mode: PermissionMode = PermissionMode.DEFAULT
     system_prompt: str | None = "test prompt"
     max_tokens: int = 1024
     permission_runtime: PermissionRuntime | None = None
+    runtime_permission_profile: object = field(default_factory=workspace_runtime_profile)
 
 
 def _permission_runtime() -> PermissionRuntime:
@@ -264,7 +263,7 @@ class TestSerializeSnapshot:
             "git_head",
             "cwd",
             "model",
-            "permission_mode",
+            "permission_profile_fingerprint",
             "system_prompt",
             "max_tokens",
             "messages",
@@ -272,16 +271,18 @@ class TestSerializeSnapshot:
             "extra",
         }
 
-    def test_permission_mode_serialized_as_string(self, tmp_path: Path) -> None:
+    def test_canonical_profile_fingerprint_is_single_written(self, tmp_path: Path) -> None:
+        context = _StubContext()
         out = _serialize_snapshot(
             cwd=tmp_path,
             tool_metadata={},
             messages=[],
-            context=_StubContext(permission_mode=PermissionMode.AUTO),  # type: ignore[arg-type]
+            context=context,  # type: ignore[arg-type]
         )
-        # enum.value, not repr — keeps the JSON portable across Python versions
-        assert out["permission_mode"] == "auto"
-        assert isinstance(out["permission_mode"], str)
+        assert out["permission_profile_fingerprint"] == (
+            context.runtime_permission_profile.fingerprint  # type: ignore[attr-defined]
+        )
+        assert "permission_mode" not in out
 
     def test_permission_runtime_state_persists_exact_park_fingerprints(
         self, tmp_path: Path
@@ -731,7 +732,7 @@ class TestLoadSnapshotStalenessLogs:
             "git_head": "deadbee",  # 7 chars, looks like a real SHA
             "cwd": str(tmp_path.resolve()),
             "model": "qwen-plus",
-            "permission_mode": "default",
+            "permission_profile_fingerprint": workspace_runtime_profile().fingerprint,
             "system_prompt": "test",
             "max_tokens": 1024,
             "messages": [],

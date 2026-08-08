@@ -9,10 +9,8 @@ Four surfaces:
 3. **Error paths** — unknown name → ``is_error=True`` with the catalog
    surfaced(errors-as-payload,framing §4.2). The LLM reads the
    catalog and corrects itself.
-4. **Invariant verification** — ``is_read_only=True`` propagates
-   through :class:`TierBasedPermissionChecker` Tier 3 → ``Decision.ALLOW``
-   without any LoadSkill-aware branching in ``permissions/``. This is
-   the third tenant test of Phase 3 abstractions.
+4. **Invariant verification** — no authorization module branches on the
+   LoadSkill implementation.
 """
 
 from __future__ import annotations
@@ -21,9 +19,6 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from openharness.config.settings import Settings
-from openharness.permissions.checker import Decision
-from openharness.permissions.tier_based import TierBasedPermissionChecker
 from openharness.skills.store import EmptySkillStore, FilesystemSkillStore
 from openharness.tools import LoadSkillInput, LoadSkillTool, ToolRegistry
 from openharness.tools.base import ToolExecutionContext
@@ -151,66 +146,8 @@ class TestLoadSkillToolErrorPaths:
 
 
 class TestLoadSkillToolInvariant:
-    """L5 / cross-cutting: ``is_read_only=True`` propagates through
-    :class:`TierBasedPermissionChecker` to ``Decision.ALLOW`` **without any
-    LoadSkill-aware branching in ``permissions/``** — verifying the third
-    tenant of the Phase 3 abstraction invariant.
-    """
+    def test_no_permissions_module_names_load_skill_tool(self) -> None:
+        from pathlib import Path
 
-    def test_tier3_returns_allow_for_LoadSkill(
-        self,
-        store_with_two_skills: FilesystemSkillStore,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        # Construct a real TierBasedPermissionChecker the way the CLI does,
-        # then ask it about LoadSkill — should return ALLOW because the
-        # tool's ``is_read_only=True`` routes it through Tier 3 lax path.
-        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
-        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
-        registry = ToolRegistry()
-        registry.register(LoadSkillTool(store_with_two_skills))
-        settings = Settings()
-        checker = TierBasedPermissionChecker(registry, settings)
-
-        result = checker.evaluate(
-            tool_name="LoadSkill",
-            args=LoadSkillInput(name="react-testing"),
-            context=ToolExecutionContext(cwd=tmp_path),
-        )
-        assert result.decision == Decision.ALLOW
-
-    def test_tier3_allow_even_for_unknown_skill_name(
-        self,
-        store_with_two_skills: FilesystemSkillStore,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        # Permission cares about ``tool.is_read_only``,not whether the
-        # particular ``name`` exists — that's the tool's job. The dispatch
-        # path is uniform.
-        monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
-        monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
-        registry = ToolRegistry()
-        registry.register(LoadSkillTool(store_with_two_skills))
-        settings = Settings()
-        checker = TierBasedPermissionChecker(registry, settings)
-
-        result = checker.evaluate(
-            tool_name="LoadSkill",
-            args=LoadSkillInput(name="hallucinated-name"),
-            context=ToolExecutionContext(cwd=tmp_path),
-        )
-        assert result.decision == Decision.ALLOW
-
-    def test_no_permissions_module_imports_LoadSkillTool(self) -> None:
-        # The invariant in code: permissions/ must NOT know about LoadSkill.
-        # If permissions/ ever imports it, the abstraction has leaked.
-        import openharness.permissions.checker as checker_mod
-        import openharness.permissions.tier_based as tier_mod
-
-        for mod in (checker_mod, tier_mod):
-            assert "LoadSkillTool" not in dir(mod), (
-                f"{mod.__name__} unexpectedly references LoadSkillTool — "
-                "the cross-cutting invariant has been violated."
-            )
+        source = Path(__file__).parents[2] / "src" / "openharness" / "permissions"
+        assert all("LoadSkillTool" not in path.read_text() for path in source.glob("*.py"))

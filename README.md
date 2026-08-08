@@ -92,7 +92,7 @@ flowchart LR
     C --> E["Agent engine"]
     E <--> M["OpenAI-compatible model"]
     E --> P["Permission profile, verified boundary, and hooks"]
-    P --> X["Seatbelt, Docker command backend, or legacy host"]
+    P --> X["Seatbelt or Docker command boundary"]
     E <--> S["Compaction, snapshots, and memory"]
     C --> V["Independent /goal judge"]
     V -->|"checker feedback"| E
@@ -104,7 +104,7 @@ The ownership model has four parts:
 1. **Actions.** Typed streaming and tool calls feed a deny-only hard policy,
    lifecycle hooks, independent external-effect policy, and—when the verified
    posture is selected—one session boundary shared by local and delegated
-   execution. The legacy checker remains only on the unsandboxed host path.
+   execution. Without a verified boundary, those domains fail closed.
 2. **Evidence and state.** Tool results, compaction, memory, and snapshots
    preserve enough trustworthy state for long tasks to recover.
 3. **Capabilities.** Skills, commands, mode bundles, MCP servers, plugins, and
@@ -302,6 +302,20 @@ already running under Seatbelt: macOS does not allow nested `sandbox-exec`
 boundaries. Inside the REPL, use `/permissions` to confirm that the installed
 boundary reports `macos-seatbelt sandbox-exec (verified)`.
 
+### Permission model
+
+`permission_profile` is the single configured authorization intent for local
+filesystem, network, environment, process, and external-tool surfaces. The
+sandbox backend translates that intent into an installed boundary and reports
+verifiable facts; configuration alone is never treated as proof of enforcement.
+`--auto` chooses the reviewer for exact deltas, while `--dry-run` independently
+chooses whether calls execute. They can be combined.
+
+Legacy `permission_mode`, `permissions.allow/deny/ask`, `deny_paths`, and
+sandbox-owned network/external policy fields are rejected at startup with a
+canonical replacement. Unrepresentable rules must be rewritten explicitly;
+the migration path never widens authority.
+
 ### Project instructions
 
 OpenHarness owns the loading mechanism; the project where `oh` is started owns
@@ -366,13 +380,13 @@ uv run ruff format --check
 - Hooks and plugins are opt-in trusted, in-process control-plane code. They can
   enforce or rewrite a call, but rewritten final arguments are authorized again
   before dispatch.
-- Isolation remains opt-in for ordinary interactive execution. On macOS the Seatbelt backend covers the unified
+- Isolation remains opt-in at startup. On macOS the Seatbelt backend covers the unified
   local data plane with a deny-by-default policy, same-sandbox-only process
   signals, explicit workspace/profile roots, and reported toolchain read
   dependencies. Docker remains an explicitly command-only backend; existing
   protected control paths are read-only binds and missing ones are reserved by
   read-only mounts so the reported boundary cannot be created around later. A
-  non-sandbox posture retains legacy host execution. Autonomous execution
+  non-sandbox posture cannot execute local or delegated tools. Autonomous execution
   (`--auto`, an active Goal, or headless mode) fails before the first model call
   if any exposed local/delegated capability lacks verified boundary coverage;
   a no-sandbox read-only catalog is not exempt. Dry-run and pure external/control

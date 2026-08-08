@@ -340,10 +340,10 @@ def _patch_run_query_capture(monkeypatch: pytest.MonkeyPatch, captured: _Capture
 
 
 class TestPermissionFlags:
-    """``--auto`` / ``--dry-run`` thread permission_mode into QueryContext."""
+    """``--auto`` and ``--dry-run`` select independent runtime postures."""
 
     def test_default_mode_when_no_flags(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from openharness.permissions import ExecutionPosture, PermissionMode, ReviewerPosture
+        from openharness.permissions import ExecutionPosture, ReviewerPosture
 
         _set_minimum_env(monkeypatch)
         stub = _RecordingStubClient(_hello_world_events())
@@ -356,12 +356,11 @@ class TestPermissionFlags:
 
         assert result.exit_code == 0
         assert captured.context is not None
-        assert captured.context.permission_mode is PermissionMode.DEFAULT  # type: ignore[attr-defined]
         assert captured.context.reviewer_posture is ReviewerPosture.MANUAL  # type: ignore[attr-defined]
         assert captured.context.execution_posture is ExecutionPosture.EXECUTE  # type: ignore[attr-defined]
 
     def test_dry_run_flag_sets_dry_run_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from openharness.permissions import ExecutionPosture, PermissionMode
+        from openharness.permissions import ExecutionPosture
 
         _set_minimum_env(monkeypatch)
         stub = _RecordingStubClient(_hello_world_events())
@@ -373,11 +372,10 @@ class TestPermissionFlags:
         result = runner.invoke(cli_module.app, ["ask", "hi", "--dry-run"])
 
         assert result.exit_code == 0
-        assert captured.context.permission_mode is PermissionMode.DRY_RUN  # type: ignore[attr-defined]
         assert captured.context.execution_posture is ExecutionPosture.DRY_RUN  # type: ignore[attr-defined]
 
     def test_auto_flag_sets_auto_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from openharness.permissions import PermissionMode, ReviewerPosture
+        from openharness.permissions import ReviewerPosture
 
         _set_minimum_env(monkeypatch)
         stub = _RecordingStubClient(_hello_world_events())
@@ -389,36 +387,23 @@ class TestPermissionFlags:
         result = runner.invoke(cli_module.app, ["ask", "hi", "--auto"])
 
         assert result.exit_code == 0
-        assert captured.context.permission_mode is PermissionMode.AUTO  # type: ignore[attr-defined]
         assert captured.context.reviewer_posture is ReviewerPosture.AUTO  # type: ignore[attr-defined]
         assert captured.context.autonomous is True  # type: ignore[attr-defined]
 
-    def test_auto_and_dry_run_mutually_exclusive(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _set_minimum_env(monkeypatch)
-        runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi", "--auto", "--dry-run"])
-
-        assert result.exit_code == 2
-        assert "mutually exclusive" in result.stderr
-
-    def test_env_var_permission_mode_propagates_when_no_flag(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from openharness.permissions import PermissionMode
+    def test_auto_and_dry_run_can_be_combined(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from openharness.permissions import ExecutionPosture, ReviewerPosture
 
         _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("OPENHARNESS_PERMISSION_MODE", "dry_run")
         stub = _RecordingStubClient(_hello_world_events())
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
         captured = _CapturedContext()
         _patch_run_query_capture(monkeypatch, captured)
-
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.app, ["ask", "hi", "--auto", "--dry-run"])
 
         assert result.exit_code == 0
-        # Env var takes effect even without --dry-run flag.
-        assert captured.context.permission_mode is PermissionMode.DRY_RUN  # type: ignore[attr-defined]
+        assert captured.context.reviewer_posture is ReviewerPosture.AUTO  # type: ignore[attr-defined]
+        assert captured.context.execution_posture is ExecutionPosture.DRY_RUN  # type: ignore[attr-defined]
 
 
 # --------------------------------------------------------------------------- #
@@ -1131,6 +1116,7 @@ class TestSandboxFlags:
         captured_profile: list[object],
     ) -> object:
         from openharness.execution import (
+            BackendSupport,
             BoundaryVerification,
             EnforcedBoundary,
             ExecutionEffect,
@@ -1148,6 +1134,10 @@ class TestSandboxFlags:
         class _Backend:
             def __init__(self, **kwargs: object) -> None:
                 captured_init.update(kwargs)
+
+            def preflight(self, profile: object) -> BackendSupport:
+                del profile
+                return BackendSupport.available(backend=name)
 
             async def open(self, profile: object) -> _Session:
                 captured_profile.append(profile)
@@ -1215,8 +1205,16 @@ class TestSandboxFlags:
         assert isinstance(ctx.sandbox_session, OneShotOverlaySession)  # type: ignore[attr-defined]
         assert ctx.sandbox_session.boundary is session.boundary  # type: ignore[attr-defined]
 
-    def test_sandbox_network_flag_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_canonical_network_profile_reaches_backend(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from openharness.permissions import NetworkPolicy, workspace_runtime_profile
+
         _set_minimum_env(monkeypatch)
+        profile = workspace_runtime_profile().model_copy(
+            update={"network": NetworkPolicy(enabled=True)}
+        )
+        monkeypatch.setenv("OPENHARNESS_PERMISSION_PROFILE", profile.model_dump_json())
         stub = _RecordingStubClient(_hello_world_events())
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
         captured = _CapturedContext()
@@ -1235,8 +1233,6 @@ class TestSandboxFlags:
                 "--sandbox",
                 "--sandbox-backend",
                 "docker-command",
-                "--sandbox-network",
-                "bridge",
                 "--sandbox-memory",
                 "512m",
                 "--sandbox-cpus",
@@ -1346,7 +1342,6 @@ def _write_bundle_file(
     *,
     system_prompt: str | None = None,
     tools_whitelist: list[str] | None = None,
-    deny_paths: list[str] | None = None,
     hooks: list[str] | None = None,
 ) -> None:
     """Author a ModeBundle markdown file with the requested overrides."""
@@ -1359,10 +1354,6 @@ def _write_bundle_file(
     if tools_whitelist is not None:
         lines.append("tools:")
         lines.append(f"  whitelist: {tools_whitelist!r}".replace("'", '"'))
-    if deny_paths is not None:
-        lines.append("deny_paths:")
-        for p in deny_paths:
-            lines.append(f"  - {p!r}".replace("'", '"'))
     if hooks is not None:
         lines.append(f"hooks: {hooks!r}".replace("'", '"'))
     lines.append("---")
@@ -1371,7 +1362,7 @@ def _write_bundle_file(
 
 class TestBundles:
     """``mode:`` field on a slash command resolves a ModeBundle and applies
-    its 4-layer overrides to the QueryContext. ``UnknownBundleError`` UX
+    its 3-layer overrides to the QueryContext. ``UnknownBundleError`` UX
     surfaces a friendly error for the typo case.
     """
 
@@ -1426,7 +1417,6 @@ class TestBundles:
             "read-only code review mode",
             system_prompt="You are a code reviewer. Read-only.",
             tools_whitelist=["Read", "Grep"],
-            deny_paths=["secrets/**"],
             hooks=["audit_log", "deny_writes"],
         )
         (project / "AGENTS.md").write_text(
@@ -1452,9 +1442,7 @@ class TestBundles:
         assert isinstance(ctx.tool_registry, WhitelistRegistry)  # type: ignore[attr-defined]
         names = sorted(t.name for t in ctx.tool_registry.list_tools())  # type: ignore[attr-defined]
         assert names == ["Grep", "Read"]
-        # Layer 3a: deny_paths reach the permission_checker (via Settings).
-        assert "secrets/**" in ctx.permission_checker._deny_paths  # type: ignore[attr-defined]
-        # Layer 3b: bundle's hooks are in the hook_registry.
+        # Layer 3: bundle's hooks are in the hook_registry.
         post = ctx.hook_registry.get("PostToolUse")  # type: ignore[attr-defined]
         pre = ctx.hook_registry.get("PreToolUse")  # type: ignore[attr-defined]
         assert audit_log in post
@@ -1997,20 +1985,12 @@ class TestPrintMode:
         assert result.exit_code == 2
         assert "only applies in headless print mode" in result.stderr
 
-    # ---- T5: headless permission posture (fail-closed + permission_mode 透传) ---- #
-    # Characterization/regression tests (NOT RED-first): v1's engine already
-    # fail-closes ASK→DENY for non-AUTO modes (query.py Three-Axis G), and
-    # _run_ask already threads permission_mode + the real TierBasedPermissionChecker.
-    # These lock the print-mode wiring against the exact regression upstream hit
-    # (run_print_mode that noop-allowed + dropped permission_mode — reference §7.3).
-    # The engine's ASK→DENY deny semantics are covered by tests/engine/test_query.py.
+    # ---- headless posture: autonomous boundary gate + exact reviewer ---- #
 
-    def test_print_mode_threads_default_permission_mode(
+    def test_print_mode_uses_manual_reviewer_by_default(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """`-p` without `--auto` stays DEFAULT (fail-closed) — NOT silently
-        auto-allowed. In DEFAULT mode the engine denies ASK (mutating) tools."""
-        from openharness.permissions import PermissionMode
+        from openharness.permissions import ReviewerPosture
 
         _set_minimum_env(monkeypatch)
         stub = _RecordingStubClient(_hello_world_events())
@@ -2022,13 +2002,11 @@ class TestPrintMode:
         result = runner.invoke(cli_module.app, ["ask", "-p", "go"])
 
         assert result.exit_code == 0, result.stderr
-        assert captured.context.permission_mode is PermissionMode.DEFAULT  # type: ignore[attr-defined]
+        assert captured.context.reviewer_posture is ReviewerPosture.MANUAL  # type: ignore[attr-defined]
         assert captured.context.autonomous is True  # type: ignore[attr-defined]
 
-    def test_print_mode_auto_threads_auto_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """`-p --auto` threads AUTO into the engine context (the loop-runtime
-        '圈地': trust in-cwd actions; sensitive paths still Tier-1 denied)."""
-        from openharness.permissions import PermissionMode
+    def test_print_mode_auto_selects_exact_reviewer(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from openharness.permissions import ReviewerPosture
 
         _set_minimum_env(monkeypatch)
         stub = _RecordingStubClient(_hello_world_events())
@@ -2040,12 +2018,10 @@ class TestPrintMode:
         result = runner.invoke(cli_module.app, ["ask", "-p", "--auto", "go"])
 
         assert result.exit_code == 0, result.stderr
-        assert captured.context.permission_mode is PermissionMode.AUTO  # type: ignore[attr-defined]
+        assert captured.context.reviewer_posture is ReviewerPosture.AUTO  # type: ignore[attr-defined]
 
-    def test_print_mode_uses_real_permission_checker(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """`-p` wires the real TierBasedPermissionChecker — NOT a noop that
-        allows everything (the upstream run_print_mode bug, §7.3)."""
-        from openharness.permissions import TierBasedPermissionChecker
+    def test_print_mode_uses_canonical_profile(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from openharness.permissions import RuntimePermissionProfile
 
         _set_minimum_env(monkeypatch)
         stub = _RecordingStubClient(_hello_world_events())
@@ -2057,9 +2033,9 @@ class TestPrintMode:
         result = runner.invoke(cli_module.app, ["ask", "-p", "go"])
 
         assert result.exit_code == 0, result.stderr
-        assert isinstance(
-            captured.context.permission_checker,  # type: ignore[attr-defined]
-            TierBasedPermissionChecker,
+        assert isinstance(  # type: ignore[attr-defined]
+            captured.context.runtime_permission_profile,
+            RuntimePermissionProfile,
         )
 
     def test_print_mode_request_failure_exits_nonzero(

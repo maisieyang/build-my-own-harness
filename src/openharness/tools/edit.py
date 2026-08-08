@@ -9,13 +9,10 @@ Per phase-2-plan.md: no implicit uniqueness check (callers may want to
 replace the first of many duplicates). Multi-line ``old_str`` is supported
 -- bytes-equivalent match, no whitespace or case normalization.
 
-Path resolution stays here (D9.1) but the **project-root scope guard**
-that used to live in this file is gone as of P3-T3.3f. The Tier 3
-mode-based check in :class:`TierBasedPermissionChecker` runs before
-``execute`` and returns ``DecisionResult.ask`` for paths outside cwd —
-single-point enforcement, framework-side, with ASK semantics that
-``--auto`` can override. Double-defense was tempting (Phase 2 D9.2)
-but couples Edit's invariants to the AuthZ layer; centralizing wins.
+Path resolution stays here, but the **project-root scope guard** that used to
+live in this file is gone. The canonical profile is installed and verified as
+a sandbox boundary before ``execute``; exact deltas go through the unified
+review lifecycle instead of a tool-local authorization path.
 
 P3-T1.1c: writes go through ``_atomic_write_text`` (tempfile + fsync + rename
 in the target's directory). A mid-write crash leaves the original file
@@ -94,7 +91,7 @@ class Edit(BaseTool[EditInput]):
             return tool_result_from_operation(sandbox_result)
 
         # P3-T3.3f:project-root scope check moved to AuthZ Tier 3
-        # (TierBasedPermissionChecker) — Edit no longer double-checks here.
+        # The verified dispatch boundary is authoritative; Edit does not duplicate it.
         if not path.exists():
             return ToolResult(is_error=True, output=f"file not found: {path}")
         if not path.is_file():

@@ -16,17 +16,16 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import pytest
 
-from openharness.permissions import PermissionMode
+from openharness.permissions import workspace_runtime_profile
 from openharness.protocols import ConversationMessage, TextBlock
 from openharness.services.snapshot import (
     SNAPSHOT_SCHEMA,
-    SNAPSHOT_VERSION,
     _compute_history_name,
     _gc_history,
     _resolve_history_path,
@@ -42,9 +41,9 @@ if TYPE_CHECKING:
 @dataclass
 class _StubContext:
     model: str = "qwen-plus"
-    permission_mode: PermissionMode = PermissionMode.DEFAULT
     system_prompt: str | None = "test"
     max_tokens: int = 1024
+    runtime_permission_profile: object = field(default_factory=workspace_runtime_profile)
 
 
 def _msg(role: str, text: str) -> ConversationMessage:
@@ -402,8 +401,8 @@ class TestPhase12BackwardCompat:
         snapshot_dir = get_snapshot_dir(tmp_path)
         snapshot_dir.mkdir(parents=True, exist_ok=True)
         phase12_snap = {
-            "version": SNAPSHOT_VERSION,
-            "schema": SNAPSHOT_SCHEMA,
+            "version": 1,
+            "schema": "openharness.snapshot.v1",
             "created_at": "2026-05-25T10:00:00+00:00",
             "git_head": "p12abc1",
             "cwd": str(tmp_path.resolve()),
