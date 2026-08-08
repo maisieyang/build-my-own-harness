@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
     from openharness.config import Settings
     from openharness.permissions.rules import PermissionRule
-    from openharness.tools.base import ToolExecutionContext
+    from openharness.tools.base import ToolExecutionContext, ToolRegistry
 
 
 class ActionDenyKind(Enum):
@@ -36,6 +36,8 @@ class ActionDenyKind(Enum):
     SENSITIVE_PATH = "sensitive_path"
     CONFIGURED_PATH = "configured_path"
     CONFIGURED_RULE = "configured_rule"
+    PLAN_CAPABILITY = "plan_capability"
+    POLICY_FAILURE = "policy_failure"
 
 
 @dataclass(frozen=True)
@@ -62,7 +64,7 @@ class ActionDenyPolicy(Protocol):
 class ConfiguredActionDenyPolicy:
     """Framework red lines plus the user's negative-only legacy rules.
 
-    G1 installs this beside the legacy checker as a shadow.  It intentionally
+    This is the canonical negative authority beside the legacy host checker. It intentionally
     excludes ``permissions.allow``, ``permissions.ask``, Tier 3 ASK, and the
     headless fail-closed gate because none of those are deny-only action facts.
     """
@@ -119,4 +121,40 @@ class ConfiguredActionDenyPolicy:
                     reason=f"matches deny rule {spec!r}",
                 )
 
+        return None
+
+
+class PlanActionDenyPolicy:
+    """Plan-mode capability clamp layered over the canonical deny policy.
+
+    This policy cannot grant an action. It preserves every denial from the
+    configured policy, then rejects mutation and delegated execution even if a
+    caller forges a tool call that was absent from the model-visible catalog.
+    """
+
+    def __init__(self, *, registry: ToolRegistry, base: ActionDenyPolicy) -> None:
+        self._registry = registry
+        self._base = base
+
+    def evaluate(
+        self,
+        tool_name: str,
+        args: BaseModel,
+        context: ToolExecutionContext,
+    ) -> DenyResult | None:
+        from openharness.tools.base import ExecutionDomain
+
+        base_deny = self._base.evaluate(tool_name, args, context)
+        if base_deny is not None:
+            return base_deny
+
+        try:
+            tool = self._registry.get(tool_name)
+        except KeyError:
+            return None
+        if tool.execution_domain is ExecutionDomain.DELEGATED_RUNTIME or not tool.is_read_only:
+            return DenyResult(
+                kind=ActionDenyKind.PLAN_CAPABILITY,
+                reason=f"{tool_name} is unavailable in plan mode",
+            )
         return None

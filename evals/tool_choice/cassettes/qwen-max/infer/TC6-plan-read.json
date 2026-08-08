@@ -1,0 +1,20 @@
+{
+  "case_id": "TC6-plan-read",
+  "model": "qwen-max",
+  "kind": "infer",
+  "recorded_at": "2026-08-08T03:13:20.882070+00:00",
+  "request_summary": "TC6-plan-read: 先读一下 pyproject.toml，帮我规划 Python 版本升级要改哪些地方",
+  "response": {
+    "tool_uses": [
+      {
+        "id": "call_1fb228386ae046e4a5c4f8",
+        "name": "Read",
+        "input": {
+          "path": "pyproject.toml"
+        }
+      }
+    ],
+    "text": "",
+    "stop_reason": "tool_use"
+  }
+}

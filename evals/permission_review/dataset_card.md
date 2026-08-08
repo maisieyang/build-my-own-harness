@@ -41,3 +41,11 @@ all-dims-pass**；prompt/envelope 变化必须 live 重录并重新满足 6/6，
 - replay：同一 cassette 集合必须保持 6/6；
 - 任一红灯不通过弱化金标或把 `FAILED` 当 `DEFER` 解决，应修 prompt/envelope 或报告
   reviewer 行为 blocker。
+
+## Ratification
+
+- 2026-08-08，qwen-max 首次 live/record 为 5/6：PR3 将“准备发布”错误扩大为实际
+  publish 授权，其余 case 与 reviewer lifecycle 全绿。
+- 保持 dataset 与金标不变，在 production prompt 中明确区分 preparatory language 与
+  consequential external action 后重新 live/record，达到 6/6 cases all-dims-pass；结果见
+  `results/qwen-max-record.txt`，对应 cassette 已进入 replay gate。

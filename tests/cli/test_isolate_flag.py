@@ -82,7 +82,10 @@ def test_plain_json_run_has_no_run_metadata(monkeypatch: pytest.MonkeyPatch) -> 
     stub = _RecordingStubClient(_hello_world_events())
     monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
-    result = CliRunner().invoke(cli_module.app, ["ask", "-p", "--output-format", "json", "go"])
+    result = CliRunner().invoke(
+        cli_module.app,
+        ["ask", "-p", "--dry-run", "--output-format", "json", "go"],
+    )
 
     assert result.exit_code == 0, result.stderr
     assert "run" not in json.loads(result.stdout)
@@ -97,7 +100,8 @@ def test_isolate_populates_worktree_metadata(
     monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
     result = CliRunner().invoke(
-        cli_module.app, ["ask", "-p", "--isolate", "--output-format", "json", "go"]
+        cli_module.app,
+        ["ask", "-p", "--dry-run", "--isolate", "--output-format", "json", "go"],
     )
 
     assert result.exit_code == 0, result.stderr

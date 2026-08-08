@@ -519,10 +519,12 @@ class TierBasedPermissionChecker:
         # 6. Headless fail-closed gate (loop-runtime L2, ONE place — review
         #    round 3 consolidates the former scattered DENY branches). Under the
         #    ``-p`` posture, a mutating tool that reached here with no matching
-        #    allow rule is DENIED — in-cwd OR outside — because Tier 3's ASK
-        #    maps to ALLOW under --auto and would escape the guarantee. Two
+        #    allow rule is DENIED — in-cwd OR outside — because an unattended
+        #    host path cannot ratify Tier 3's unresolved exact approval. Two
         #    carve-outs: read-only tools, and the framework's own per-project
-        #    memory dir (Phase-16 write path, review round 3 [B]).
+        #    memory dir (Phase-16 write path, review round 3 [B]). Verified
+        #    autonomous dispatch uses a sandbox boundary and bypasses this
+        #    legacy checker entirely.
         if self._headless and not tool.is_read_only:
             if path is not None and _inside_project_memory_dir(path, context.cwd):
                 return DecisionResult.allow()
@@ -553,9 +555,9 @@ class TierBasedPermissionChecker:
                 f'glob) or "{tool_name}(/abs/dir/**)" (absolute)'
             )
 
-        # 7. Tier 3 mode-based — interactive only (headless handled at step 6).
-        #    Write/exec outside cwd → ASK (Three-Axis G): a plausible legitimate
-        #    intent; loop layer + PermissionMode decide the final outcome.
+        # 7. Tier 3 host-path boundary (headless handled at step 6).
+        #    Write/exec outside cwd → unresolved exact approval (Three-Axis G):
+        #    the legacy dispatcher always fails closed on ASK.
         t3 = _matches_tier3(tool.is_read_only, path, context.cwd)
         if t3 is not None:
             return DecisionResult.ask(t3)
@@ -565,10 +567,10 @@ class TierBasedPermissionChecker:
         #     git red line (step 1b), and every allow rule (step 4, which
         #     short-circuits to ALLOW) — is a general-compute channel. Its
         #     file side effects (echo>/tmp, brew install) are invisible to the
-        #     path-based Tiers, so nothing above could gate them. Interactive
-        #     posture ASKS (aligning with Claude Code's per-command Bash
-        #     prompt); AUTO maps ASK→ALLOW in _dispatch_one, preserving the
-        #     "pre-trusted" mode; sandbox remains the OS-level enforcement.
+        #     path-based Tiers, so nothing above could gate them. The host path
+        #     returns ASK, which always fails closed unless the call matched an
+        #     explicit allow rule. Sandboxed dispatch instead proves COMMAND
+        #     coverage at the OS boundary and never reaches this checker.
         #     Path-bearing mutating tools are already covered by Tier 3 above.
         if not tool.is_read_only and path is None:
             return DecisionResult.ask(

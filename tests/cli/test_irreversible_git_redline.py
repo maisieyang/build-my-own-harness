@@ -86,7 +86,17 @@ class TestIrreversibleGitRedlineEndToEnd:
         with runner.isolated_filesystem():
             result = runner.invoke(
                 cli_module.app,
-                ["ask", "-p", "--auto", "--output-format", "stream-json", "commit my changes"],
+                [
+                    "ask",
+                    "-p",
+                    "--auto",
+                    "--sandbox",
+                    "--sandbox-backend",
+                    "seatbelt",
+                    "--output-format",
+                    "stream-json",
+                    "commit my changes",
+                ],
             )
 
         assert result.exit_code == 0, result.stderr

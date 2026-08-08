@@ -33,7 +33,7 @@ from openharness.permissions.rules import (
     PermissionRules,
     plan_mode_preset,
 )
-from openharness.tools import ExternalEffectSurface
+from openharness.tools import ExecutionDomain, ExternalEffectSurface, ToolRegistry
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -48,7 +48,6 @@ if TYPE_CHECKING:
         RuntimePermissionProfile,
     )
     from openharness.protocols.messages import ConversationMessage
-    from openharness.tools import ExecutionDomain
 
 
 @dataclass(frozen=True)
@@ -125,6 +124,21 @@ class PlanMenuChoice(Enum):
     DISCARD = "3"
 
 
+def shape_plan_tool_registry(base: ToolRegistry) -> ToolRegistry:
+    """Return the model-visible plan catalog without widening authority.
+
+    Plan mode exposes only read-only, non-delegated tools. The returned view
+    contains the original tool instances so execution behavior stays
+    identical, while the caller retains the full registry for forged-call
+    detection at dispatch.
+    """
+    shaped = ToolRegistry()
+    for tool in base.list_tools():
+        if tool.is_read_only and tool.execution_domain is not ExecutionDomain.DELEGATED_RUNTIME:
+            shaped.register(tool)
+    return shaped
+
+
 # Rendered by the harness after every assistant turn while in plan mode.
 # Approval exits the read-only planning clamp; it does not auto-launch an
 # execution turn. The next user message is the handoff point where they can
@@ -179,7 +193,10 @@ def overlay_plan_permissions(
     mode: ChatMode,
     grant: PlanMenuChoice | None,
 ) -> PermissionRules:
-    """Turn-scoped permission overlay for the plan state machine.
+    """Legacy plan overlay retained for public/test compatibility.
+
+    Production plan mode now uses :func:`shape_plan_tool_registry` plus an
+    authoritative deny-only forged-call guard. This helper is not wired by CLI.
 
     - ``mode=PLAN`` → append :func:`plan_mode_preset` to ``deny`` (the clamp;
       engine precedence deny > allow keeps it authoritative over any allow).

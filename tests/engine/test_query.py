@@ -39,6 +39,8 @@ from openharness.protocols import (
 from openharness.tools import ExecutionDomain, ToolRegistry
 
 if TYPE_CHECKING:
+    from pydantic import BaseModel
+
     from openharness.api import OpenAICompatibleApiClient
     from openharness.protocols import ApiStreamEvent
 
@@ -347,6 +349,91 @@ class TestRunQueryRecoveryPaths:
         assert completed.is_error is True
         assert "tool not found: Ghost" in completed.output
 
+    async def test_forged_hidden_tool_is_denied_by_action_policy_before_execution(
+        self,
+    ) -> None:
+        from openharness.permissions import ActionDenyKind, DenyResult
+        from openharness.tools import ToolExecutionContext
+
+        class _PlanPolicy:
+            def evaluate(
+                self,
+                tool_name: str,
+                args: BaseModel,
+                context: ToolExecutionContext,
+            ) -> DenyResult | None:
+                del args, context
+                if tool_name == "Fake":
+                    return DenyResult(
+                        kind=ActionDenyKind.PLAN_CAPABILITY,
+                        reason="tool is not exposed in plan mode",
+                    )
+                return None
+
+        client = _StubApiClient(
+            events_per_turn=[
+                [_fake_tool_use_event(tool_input={"value": "must not execute"})],
+                [_end_turn_event()],
+            ],
+        )
+        visible_registry = ToolRegistry()
+        dispatch_registry = _registry_with_fake_tool()
+        context = _make_context(api_client=client, tool_registry=visible_registry)
+        context = dataclasses.replace(
+            context,
+            dispatch_tool_registry=dispatch_registry,
+            action_deny_policy=_PlanPolicy(),
+        )
+
+        events = [
+            event
+            async for event in run_query(
+                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+                context,
+            )
+        ]
+
+        assert client.captured_requests[0].tools is None
+        completed = next(
+            event for event in events if isinstance(event, ToolExecutionCompletedEvent)
+        )
+        assert completed.is_error is True
+        assert completed.output == "action denied: tool is not exposed in plan mode"
+
+    async def test_action_policy_failure_denies_instead_of_failing_open(self) -> None:
+        class _BrokenPolicy:
+            def evaluate(self, *_args: object, **_kwargs: object) -> None:
+                raise RuntimeError("sensitive arguments must not reach logs")
+
+        client = _StubApiClient(
+            events_per_turn=[
+                [_fake_tool_use_event(tool_input={"value": "must not execute"})],
+                [_end_turn_event()],
+            ],
+        )
+        context = _make_context(
+            api_client=client,
+            tool_registry=_registry_with_fake_tool(),
+        )
+        context = dataclasses.replace(
+            context,
+            action_deny_policy=_BrokenPolicy(),  # type: ignore[arg-type]
+        )
+
+        events = [
+            event
+            async for event in run_query(
+                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+                context,
+            )
+        ]
+
+        completed = next(
+            event for event in events if isinstance(event, ToolExecutionCompletedEvent)
+        )
+        assert completed.output == "action denied: action policy evaluation failed"
+        assert completed.is_error is True
+
     async def test_validation_error_returns_error_result(self) -> None:
         # FakeInput requires `value: str`. Send something missing it.
         client = _StubApiClient(
@@ -568,7 +655,7 @@ class TestRunQueryDryRunMode:
     async def test_dry_run_skips_execute_and_emits_synthetic_completion(
         self,
     ) -> None:
-        from openharness.permissions import PermissionMode
+        from openharness.permissions import ExecutionPosture
         from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
         from tools.conftest import FakeInput
 
@@ -597,7 +684,7 @@ class TestRunQueryDryRunMode:
             ],
         )
         ctx = _make_context(api_client=client, tool_registry=registry)
-        ctx = dataclasses.replace(ctx, permission_mode=PermissionMode.DRY_RUN)
+        ctx = dataclasses.replace(ctx, execution_posture=ExecutionPosture.DRY_RUN)
 
         events = [
             event
@@ -617,7 +704,7 @@ class TestRunQueryDryRunMode:
         # A "rm -rf /" command would normally hit DenyListChecker; under
         # DRY_RUN we never even consult the checker -- the synthetic
         # "would call" path runs instead.
-        from openharness.permissions import DenyListChecker, PermissionMode
+        from openharness.permissions import DenyListChecker, ExecutionPosture
         from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
         from tools.conftest import FakeInput
 
@@ -648,7 +735,7 @@ class TestRunQueryDryRunMode:
         ctx = dataclasses.replace(
             ctx,
             permission_checker=DenyListChecker(),
-            permission_mode=PermissionMode.DRY_RUN,
+            execution_posture=ExecutionPosture.DRY_RUN,
         )
 
         events = [
@@ -669,7 +756,7 @@ class TestRunQueryDryRunMode:
         # D12.4: AUTO is reserved for Phase 3 (skip interactive confirmation).
         # In Phase 2 it must behave identically to DEFAULT — pass through to
         # permission_checker + tool.execute().
-        from openharness.permissions import PermissionMode
+        from openharness.permissions import ReviewerPosture
 
         client = _StubApiClient(
             events_per_turn=[
@@ -681,7 +768,7 @@ class TestRunQueryDryRunMode:
             api_client=client,
             tool_registry=_registry_with_fake_tool(),
         )
-        ctx = dataclasses.replace(ctx, permission_mode=PermissionMode.AUTO)
+        ctx = dataclasses.replace(ctx, reviewer_posture=ReviewerPosture.AUTO)
 
         events = [
             event
@@ -701,14 +788,8 @@ class TestRunQueryDryRunMode:
 class TestLegacyAskCharacterization:
     """G0 deletion-gate baseline for the checker-era ASK semantics."""
 
-    async def test_legacy_ask_is_allowed_in_auto_mode(self) -> None:
-        """G0 characterization: pin the unsafe legacy branch before removal.
-
-        This is deliberately a CURRENT-behavior test, not the target contract.
-        G8 must replace it with the invariant that AUTO selects a reviewer and
-        never converts an authorization result into ALLOW.
-        """
-        from openharness.permissions import DecisionResult, PermissionMode
+    async def test_auto_reviewer_posture_never_converts_legacy_ask_to_allow(self) -> None:
+        from openharness.permissions import DecisionResult, ReviewerPosture
 
         class _AskChecker:
             def evaluate(self, *_args: object, **_kwargs: object) -> DecisionResult:
@@ -727,7 +808,7 @@ class TestLegacyAskCharacterization:
         ctx = dataclasses.replace(
             ctx,
             permission_checker=_AskChecker(),  # type: ignore[arg-type]
-            permission_mode=PermissionMode.AUTO,
+            reviewer_posture=ReviewerPosture.AUTO,
         )
 
         events = [
@@ -741,8 +822,10 @@ class TestLegacyAskCharacterization:
         completed = next(
             event for event in events if isinstance(event, ToolExecutionCompletedEvent)
         )
-        assert completed.output == "value=legacy-auto"
-        assert completed.is_error is False
+        assert completed.output == (
+            "permission denied (requires exact approval): legacy confirmation required"
+        )
+        assert completed.is_error is True
 
     async def test_legacy_ask_is_denied_in_default_mode(self) -> None:
         """G0 characterization companion: DEFAULT has no durable approval."""
@@ -779,8 +862,7 @@ class TestLegacyAskCharacterization:
             event for event in events if isinstance(event, ToolExecutionCompletedEvent)
         )
         assert completed.output == (
-            "permission denied (requires confirmation): legacy confirmation required; "
-            "rerun with --auto to allow"
+            "permission denied (requires exact approval): legacy confirmation required"
         )
         assert completed.is_error is True
 

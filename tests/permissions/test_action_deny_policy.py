@@ -12,6 +12,7 @@ from openharness.permissions import (
     Decision,
     DenyResult,
     PermissionRules,
+    PlanActionDenyPolicy,
     TierBasedPermissionChecker,
 )
 from openharness.tools import (
@@ -216,3 +217,44 @@ def test_ask_allow_and_headless_failclosed_are_not_deny_policy(tmp_path: Path) -
     args = _PathInput(path=str(tmp_path / "not-preauthorized.txt"))
     assert policy.evaluate("Write", args, context) is None
     assert checker.evaluate("Write", args, context).decision is Decision.DENY
+
+
+def test_plan_policy_denies_mutating_and_delegated_capabilities(tmp_path: Path) -> None:
+    from openharness.tools import SpawnAgent
+
+    registry = _registry()
+    delegate = SpawnAgent()
+    delegate.is_read_only = True
+    registry.register(delegate)
+    base, _ = _policies()
+    policy = PlanActionDenyPolicy(registry=registry, base=base)
+    context = ToolExecutionContext(cwd=tmp_path)
+
+    write = policy.evaluate("Write", _PathInput(path="notes.md"), context)
+    delegated = policy.evaluate(
+        "Agent",
+        delegate.input_model(description="inspect", prompt="inspect only"),
+        context,
+    )
+
+    assert write is not None
+    assert write.kind.value == "plan_capability"
+    assert delegated is not None
+    assert delegated.kind.value == "plan_capability"
+
+
+def test_plan_policy_preserves_base_deny_and_allows_read_only_no_match(tmp_path: Path) -> None:
+    from openharness.tools import Read
+
+    registry = _registry()
+    registry.register(Read())
+    configured, _ = _policies(deny_paths=("secrets/**",))
+    policy = PlanActionDenyPolicy(registry=registry, base=configured)
+    context = ToolExecutionContext(cwd=tmp_path)
+
+    assert (
+        policy.evaluate("Read", _PathInput(path=str(tmp_path / "secrets" / "key")), context)
+        is not None
+    )
+    assert policy.evaluate("Read", _PathInput(path=str(tmp_path / "README.md")), context) is None
+    assert policy.evaluate("Unknown", _PathInput(path="ignored"), context) is None

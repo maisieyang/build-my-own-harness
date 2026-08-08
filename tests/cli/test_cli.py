@@ -343,7 +343,7 @@ class TestPermissionFlags:
     """``--auto`` / ``--dry-run`` thread permission_mode into QueryContext."""
 
     def test_default_mode_when_no_flags(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from openharness.permissions import PermissionMode
+        from openharness.permissions import ExecutionPosture, PermissionMode, ReviewerPosture
 
         _set_minimum_env(monkeypatch)
         stub = _RecordingStubClient(_hello_world_events())
@@ -357,9 +357,11 @@ class TestPermissionFlags:
         assert result.exit_code == 0
         assert captured.context is not None
         assert captured.context.permission_mode is PermissionMode.DEFAULT  # type: ignore[attr-defined]
+        assert captured.context.reviewer_posture is ReviewerPosture.MANUAL  # type: ignore[attr-defined]
+        assert captured.context.execution_posture is ExecutionPosture.EXECUTE  # type: ignore[attr-defined]
 
     def test_dry_run_flag_sets_dry_run_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from openharness.permissions import PermissionMode
+        from openharness.permissions import ExecutionPosture, PermissionMode
 
         _set_minimum_env(monkeypatch)
         stub = _RecordingStubClient(_hello_world_events())
@@ -372,9 +374,10 @@ class TestPermissionFlags:
 
         assert result.exit_code == 0
         assert captured.context.permission_mode is PermissionMode.DRY_RUN  # type: ignore[attr-defined]
+        assert captured.context.execution_posture is ExecutionPosture.DRY_RUN  # type: ignore[attr-defined]
 
     def test_auto_flag_sets_auto_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from openharness.permissions import PermissionMode
+        from openharness.permissions import PermissionMode, ReviewerPosture
 
         _set_minimum_env(monkeypatch)
         stub = _RecordingStubClient(_hello_world_events())
@@ -387,6 +390,8 @@ class TestPermissionFlags:
 
         assert result.exit_code == 0
         assert captured.context.permission_mode is PermissionMode.AUTO  # type: ignore[attr-defined]
+        assert captured.context.reviewer_posture is ReviewerPosture.AUTO  # type: ignore[attr-defined]
+        assert captured.context.autonomous is True  # type: ignore[attr-defined]
 
     def test_auto_and_dry_run_mutually_exclusive(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_minimum_env(monkeypatch)
@@ -1845,13 +1850,26 @@ class TestPrintMode:
     process exits 0 on a clean ``end_turn`` run.
     """
 
+    def test_print_mode_without_sandbox_fails_before_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        stub = _RecordingStubClient(_hello_world_events("must not run"))
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+
+        result = CliRunner().invoke(cli_module.app, ["ask", "-p", "go"])
+
+        assert result.exit_code == 1
+        assert "requires a verified sandbox boundary" in result.stderr
+        assert stub.last_request is None
+
     def test_print_mode_text_passthrough(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_minimum_env(monkeypatch)
         stub = _RecordingStubClient(_hello_world_events("hi from stub"))
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "-p", "say hi"])
+        result = runner.invoke(cli_module.app, ["ask", "-p", "--dry-run", "say hi"])
 
         assert result.exit_code == 0, result.stderr
         assert "hi from stub" in result.stdout
@@ -1865,7 +1883,8 @@ class TestPrintMode:
 
         runner = CliRunner()
         result = runner.invoke(
-            cli_module.app, ["ask", "--print", "--output-format", "text", "say hi"]
+            cli_module.app,
+            ["ask", "--print", "--dry-run", "--output-format", "text", "say hi"],
         )
 
         assert result.exit_code == 0, result.stderr
@@ -1880,7 +1899,7 @@ class TestPrintMode:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "-p", "go"])
+        result = runner.invoke(cli_module.app, ["ask", "-p", "--dry-run", "go"])
 
         assert result.exit_code == 0, result.stderr
 
@@ -1910,7 +1929,10 @@ class TestPrintMode:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "-p", "--output-format", "json", "go"])
+        result = runner.invoke(
+            cli_module.app,
+            ["ask", "-p", "--dry-run", "--output-format", "json", "go"],
+        )
 
         assert result.exit_code == 0, result.stderr
         obj = json.loads(result.stdout)
@@ -1932,7 +1954,10 @@ class TestPrintMode:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "-p", "--output-format", "json", "go"])
+        result = runner.invoke(
+            cli_module.app,
+            ["ask", "-p", "--dry-run", "--output-format", "json", "go"],
+        )
 
         assert result.exit_code != 0
         obj = json.loads(result.stdout)
@@ -1949,7 +1974,8 @@ class TestPrintMode:
 
         runner = CliRunner()
         result = runner.invoke(
-            cli_module.app, ["ask", "-p", "--output-format", "stream-json", "go"]
+            cli_module.app,
+            ["ask", "-p", "--dry-run", "--output-format", "stream-json", "go"],
         )
 
         assert result.exit_code == 0, result.stderr
@@ -1997,6 +2023,7 @@ class TestPrintMode:
 
         assert result.exit_code == 0, result.stderr
         assert captured.context.permission_mode is PermissionMode.DEFAULT  # type: ignore[attr-defined]
+        assert captured.context.autonomous is True  # type: ignore[attr-defined]
 
     def test_print_mode_auto_threads_auto_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """`-p --auto` threads AUTO into the engine context (the loop-runtime

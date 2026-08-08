@@ -132,6 +132,7 @@ class TestGoalSetAndJudge:
         assert result.exit_code == 0
         # 零人工输入即开工:kickoff turn 已跑,判官在其结束被调.
         assert len(contexts) == 1
+        assert contexts[0].autonomous is True
         assert len(judge_calls) == 1
         condition, transcript = judge_calls[0]
         assert condition == "tests pass"

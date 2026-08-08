@@ -435,10 +435,10 @@ class Settings(BaseSettings):
     permission_mode: PermissionMode = Field(
         default=PermissionMode.DEFAULT,
         description=(
-            "Permission policy. DEFAULT runs the deny-list normally; AUTO is "
-            "P3-reserved (skip interactive confirmation, currently identical "
-            "to DEFAULT); DRY_RUN never executes tools, emits 'would call X' "
-            "events instead. Overridden by --auto / --dry-run CLI flags."
+            "Legacy CLI compatibility enum. DEFAULT selects manual review + "
+            "execution; AUTO selects the exact-request auto reviewer; DRY_RUN "
+            "selects manual review + non-executing 'would call X' events. "
+            "Reviewer and execution postures are independent after bootstrap."
         ),
     )
     # ``Annotated[..., NoDecode]`` tells pydantic-settings:do NOT try to
@@ -461,7 +461,7 @@ class Settings(BaseSettings):
             "loop-runtime L2: declarative permission rules aligned with Claude "
             "Code (``permissions.allow/deny/ask``, precedence deny>ask>allow). "
             "Nested env: ``OPENHARNESS_PERMISSIONS__ALLOW`` etc. Coexists with "
-            "``permission_mode`` (posture) + ``deny_paths`` (Tier 2 legacy); the "
+            "the legacy ``permission_mode`` config edge + ``deny_paths``; the "
             "Tier 1 sensitive-path red line sits above every rule and cannot be "
             "overridden by an allow rule. See :class:`PermissionRules`."
         ),

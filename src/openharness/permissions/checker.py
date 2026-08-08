@@ -1,18 +1,11 @@
-"""Permission interface + :class:`DenyListChecker` minimal implementation.
+"""Legacy host-path permission interface and deny-list implementation.
 
-P2-T4.4c shipped the ``Decision`` enum + ``PermissionChecker`` Protocol so
-``run_query`` could call ``context.permission_checker.evaluate(...)``.
-P2-T6.6a adds the concrete pieces:
-
-- :class:`PermissionMode` enum (DEFAULT / AUTO / DRY_RUN) for the CLI flags
-  threaded through ``Settings`` and ``QueryContext`` (D12.4).
-- :class:`DenyListChecker` -- a small substring-based deny-list scoped to
-  ``Bash`` commands per D12.2 (Write/Edit already have D9.2 cwd scope guard;
-  Read/Grep are read-only, lower risk). The 9-step algorithm is Phase 3
-  territory; this layer is the safety floor.
-
-``PermissionChecker`` remains a Protocol (not ABC) by design: Phase 5
-plugins / MCP adapters can drop in a checker without needing to inherit.
+``PermissionChecker`` remains public for compatibility and for execution
+without a selected sandbox. Verified local/delegated dispatch instead uses
+the canonical runtime profile plus the sandbox's reported boundary; external
+effects use the exact approval lifecycle. ``PermissionMode`` is likewise a
+legacy config/CLI compatibility type which is split into independent reviewer
+and execution postures at bootstrap.
 """
 
 from __future__ import annotations
@@ -35,10 +28,10 @@ class Decision(Enum):
     - ``ALLOW``:framework lets the call run.
     - ``DENY``:framework refuses; caller feeds reason back to LLM
       (ToolResult is_error=True). LLM 自己 plan B.
-    - ``ASK``:framework wants human-in-the-loop confirmation. Resolution
-      depends on ``PermissionMode``:AUTO → treat as ALLOW;
-      DEFAULT → Phase 4+ will prompt;until then fail-safe to DENY with
-      a hint pointing at ``--auto``.
+    - ``ASK``:the legacy checker cannot prove authority. It always fails
+      closed as an unresolved exact approval; AUTO never upgrades it to
+      ALLOW. Durable approve/deny/park/resume is handled by
+      :class:`~openharness.permissions.runtime.PermissionRuntime`.
     """
 
     ALLOW = "allow"
@@ -75,25 +68,25 @@ class DecisionResult:
 
     @classmethod
     def ask(cls, reason: str) -> DecisionResult:
-        """Construct an ASK result (boundary case warranting confirmation).
+        """Construct an unresolved exact-approval result.
 
-        ``reason`` explains the boundary; loop layer maps to ALLOW (AUTO
-        mode) / DENY-with-hint (DEFAULT mode, Phase 4+ replaces with
-        interactive prompt).
+        The legacy host path fails closed on this result in every reviewer
+        posture. AUTO selects an automated reviewer for canonical approval
+        requests; it is not blanket authorization for legacy ASK.
         """
         return cls(decision=Decision.ASK, reason=reason)
 
 
 class PermissionMode(Enum):
-    """High-level permission policy threaded from CLI flags down through
-    Settings into :class:`QueryContext`.
+    """Legacy public config type mapped to orthogonal runtime postures.
 
-    - ``DEFAULT`` -- run the configured ``PermissionChecker`` normally.
-    - ``AUTO`` -- reserved for Phase 3 (skip interactive confirmation).
-      Phase 2 treats it as DEFAULT but threads the flag for forward compat.
-    - ``DRY_RUN`` -- ``run_query`` short-circuits every tool call and emits
-      a synthetic ``ToolExecutionCompleted(output="would call ...")`` event
-      instead. The PermissionChecker is bypassed entirely.
+    - ``DEFAULT`` maps to manual review plus real execution.
+    - ``AUTO`` maps to automated review plus real execution and does not
+      authorize a legacy ``Decision.ASK``.
+    - ``DRY_RUN`` maps to manual review plus simulated execution.
+
+    New authority code should consume ``ReviewerPosture`` and
+    ``ExecutionPosture`` rather than branch on this compatibility enum.
     """
 
     DEFAULT = "default"

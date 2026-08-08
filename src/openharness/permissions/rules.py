@@ -212,10 +212,9 @@ def accept_edits_preset() -> tuple[str, ...]:
 
 
 def plan_mode_preset() -> tuple[str, ...]:
-    """plan 模式 **deny** 预设:钳死全部 mutating 工具,只读探索照常.
+    """Legacy plan deny preset retained for public/config compatibility.
 
-    :func:`accept_edits_preset` 的镜像——"收编为规则预设"立场的第二次应用
-    (D47.1).Bash **整拒**(含只读命令,D47 声明简化;只读分类归 v2);引擎
-    deny > allow 序保证叠加在任何 allow 之上仍成立.
+    Production plan mode capability-shapes the model catalog and uses a
+    deny-only dispatch guard; it no longer wires this preset.
     """
     return ("Edit(*)", "Write(*)", "Bash(*)")

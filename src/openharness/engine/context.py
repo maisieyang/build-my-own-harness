@@ -6,6 +6,8 @@ Per the P2-T1 Three-Axis discussion (D7.1 / D7.2 / D7.5):
   P2-T4.4d added ``model`` + ``max_tokens`` (loop builds ApiMessageRequest);
   P2-T6.6b added ``permission_mode`` (DRY_RUN short-circuit needs to live
   next to permission_checker). Both recorded in learnings/08 / 10.
+- ``permission_mode`` is now a retained public/config diagnostic. Independent
+  reviewer and execution postures carry current runtime authority.
 - D7.2 typed unfinished collaborators as ``object`` at runtime, then tightened
   per hand-off. P2-T2.2e cashed ``tool_registry``; P2-T4.4c cashed
   ``permission_checker``. The marker convention is exhausted.
@@ -27,7 +29,12 @@ from typing import TYPE_CHECKING, Any
 
 from openharness.execution.host import _HOST_EXECUTION
 from openharness.hooks import HookRegistry
-from openharness.permissions import ExternalToolPolicy, PermissionMode
+from openharness.permissions import (
+    ExecutionPosture,
+    ExternalToolPolicy,
+    PermissionMode,
+    ReviewerPosture,
+)
 from openharness.skills.store import EmptySkillStore
 
 if TYPE_CHECKING:
@@ -63,10 +70,18 @@ class QueryContext:
     model: str
     max_tokens: int = 8192
     max_turns: int = 20
-    # G1/S1 deny-only semantic guard. While this remains a shadow, the legacy
-    # checker remains the production authority.
+    # Optional full dispatch catalog when the model-visible registry is
+    # capability-shaped (for example, plan mode). Hidden forged calls are
+    # resolved here only so the authoritative deny policy can reject them.
+    dispatch_tool_registry: ToolRegistry | None = None
+    # Canonical negative-only semantic guard. It can deny but never grant.
     action_deny_policy: ActionDenyPolicy | None = None
     permission_mode: PermissionMode = field(default=PermissionMode.DEFAULT)
+    reviewer_posture: ReviewerPosture = field(default=ReviewerPosture.MANUAL)
+    execution_posture: ExecutionPosture = field(default=ExecutionPosture.EXECUTE)
+    # True when no online human turn is expected to authorize model-selected
+    # local/delegated actions (for example --auto, a Goal loop, or headless).
+    autonomous: bool = False
     # Independent from the local filesystem/process boundary. External calls
     # remain governed even when the session intentionally has no sandbox.
     external_tool_policy: ExternalToolPolicy = field(default_factory=ExternalToolPolicy)
@@ -162,6 +177,11 @@ class QueryContext:
         *,
         api_client: SupportsStreamingMessages,
         tool_registry: ToolRegistry,
+        dispatch_tool_registry: ToolRegistry | None = None,
+        permission_mode: PermissionMode = PermissionMode.DEFAULT,
+        reviewer_posture: ReviewerPosture = ReviewerPosture.MANUAL,
+        execution_posture: ExecutionPosture = ExecutionPosture.EXECUTE,
+        autonomous: bool = False,
         permission_checker: PermissionChecker,
         cwd: Path,
         action_deny_policy: ActionDenyPolicy | None = None,
@@ -202,8 +222,10 @@ class QueryContext:
         recovery handles).
 
         Loaded from snapshot:
-        - ``model``, ``max_tokens``, ``permission_mode``,
-          ``system_prompt``, ``messages``
+        - ``model``, ``max_tokens``, ``system_prompt``, ``messages``
+
+        The v1 ``permission_mode`` value is migration diagnostics only. Current
+        reviewer/execution postures are caller-supplied runtime state.
 
         Caller-required runtime kwargs (no defaults — must reconstruct
         each invocation):
@@ -224,12 +246,13 @@ class QueryContext:
                 ``ConversationMessage.model_validate`` (indicates a
                 snapshot from a different content-block schema).
         """
-        from openharness.permissions import PermissionMode as _PM
         from openharness.protocols.messages import ConversationMessage as _CM
 
         model = snapshot["model"]
         max_tokens = snapshot["max_tokens"]
-        permission_mode = _PM(snapshot["permission_mode"])
+        # v1 carried a single permission_mode. It is retained as migration
+        # diagnostics only; the current invocation supplies both postures.
+        snapshot.get("permission_mode")
         system_prompt = snapshot["system_prompt"]
         messages = [_CM.model_validate(m) for m in snapshot["messages"]]
 
@@ -254,6 +277,7 @@ class QueryContext:
         context = cls(
             api_client=api_client,
             tool_registry=tool_registry,
+            dispatch_tool_registry=dispatch_tool_registry,
             permission_checker=permission_checker,
             action_deny_policy=action_deny_policy,
             system_prompt=system_prompt,
@@ -262,6 +286,9 @@ class QueryContext:
             max_tokens=max_tokens,
             max_turns=max_turns,
             permission_mode=permission_mode,
+            reviewer_posture=reviewer_posture,
+            execution_posture=execution_posture,
+            autonomous=autonomous,
             external_tool_policy=(
                 external_tool_policy if external_tool_policy is not None else ExternalToolPolicy()
             ),

@@ -93,7 +93,7 @@ def _synthesize_snapshot(
 
 
 class TestFromSnapshotAgentState:
-    def test_loads_model_max_tokens_permission_mode(self, tmp_path: Path) -> None:
+    def test_loads_model_and_tokens_but_not_runtime_posture(self, tmp_path: Path) -> None:
         snap = _synthesize_snapshot(
             cwd=tmp_path,
             model="qwen-max",
@@ -106,7 +106,7 @@ class TestFromSnapshotAgentState:
         )
         assert ctx.model == "qwen-max"
         assert ctx.max_tokens == 2048
-        assert ctx.permission_mode == PermissionMode.AUTO
+        assert ctx.permission_mode == PermissionMode.DEFAULT
         assert messages == []
 
     def test_loads_system_prompt_verbatim(self, tmp_path: Path) -> None:
@@ -221,23 +221,29 @@ class TestFromSnapshotRuntimeKwargRequirements:
         assert ctx.snapshot_enabled is False
 
 
-class TestFromSnapshotPermissionModeRoundTrip:
-    def test_each_mode_round_trips(self, tmp_path: Path) -> None:
-        for mode_value in ("default", "auto", "dry_run"):
-            snap = _synthesize_snapshot(cwd=tmp_path, permission_mode=mode_value)
-            ctx, _ = QueryContext.from_snapshot(
-                snap,
-                **_runtime_kwargs(tmp_path),  # type: ignore[arg-type]
-            )
-            assert ctx.permission_mode == PermissionMode(mode_value)
+class TestFromSnapshotRuntimePosture:
+    def test_current_runtime_postures_override_legacy_snapshot_mode(self, tmp_path: Path) -> None:
+        from openharness.permissions import ExecutionPosture, ReviewerPosture
 
-    def test_invalid_permission_mode_raises(self, tmp_path: Path) -> None:
+        snap = _synthesize_snapshot(cwd=tmp_path, permission_mode="dry_run")
+        ctx, _ = QueryContext.from_snapshot(
+            snap,
+            permission_mode=PermissionMode.AUTO,
+            reviewer_posture=ReviewerPosture.AUTO,
+            execution_posture=ExecutionPosture.EXECUTE,
+            **_runtime_kwargs(tmp_path),  # type: ignore[arg-type]
+        )
+        assert ctx.permission_mode is PermissionMode.AUTO
+        assert ctx.reviewer_posture is ReviewerPosture.AUTO
+        assert ctx.execution_posture is ExecutionPosture.EXECUTE
+
+    def test_invalid_legacy_snapshot_mode_is_diagnostic_only(self, tmp_path: Path) -> None:
         snap = _synthesize_snapshot(cwd=tmp_path, permission_mode="not_a_mode")
-        with pytest.raises(ValueError):
-            QueryContext.from_snapshot(
-                snap,
-                **_runtime_kwargs(tmp_path),  # type: ignore[arg-type]
-            )
+        ctx, _ = QueryContext.from_snapshot(
+            snap,
+            **_runtime_kwargs(tmp_path),  # type: ignore[arg-type]
+        )
+        assert ctx.permission_mode is PermissionMode.DEFAULT
 
 
 class TestFromSnapshotPermissionRuntime:

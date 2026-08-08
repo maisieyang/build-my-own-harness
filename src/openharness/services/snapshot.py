@@ -291,9 +291,9 @@ def _serialize_snapshot(
     each ContentBlock subtype carries its ``type`` discriminator so
     the discriminated union reconstructs correctly on load.
 
-    ``permission_mode`` serialized as enum **value** (string), not
-    the enum repr — so JSON consumers (and a future v2 → v1 reader)
-    don't need access to the Python enum class.
+    ``permission_mode`` remains a legacy diagnostic serialized as enum
+    **value** (string), not runtime authority. Resume reconstructs reviewer
+    and execution postures from the current invocation instead of this field.
     """
     permission_runtime = getattr(context, "permission_runtime", None)
     extra: dict[str, Any] = {}

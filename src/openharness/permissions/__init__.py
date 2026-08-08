@@ -1,12 +1,14 @@
-"""Permission system -- decides whether a tool call may execute.
+"""Permission system -- authority, reviewer posture, and execution evidence.
 
-P2-T4.4c shipped the *interface*; P2-T6 shipped the binary implementation;
-P3-T3.3d adds ``Decision.ASK`` + ``DecisionResult`` for three-state HITL
-semantics:
+The public legacy checker surface remains available for host execution and
+configuration compatibility. Canonical verified dispatch is governed by a
+runtime profile and proven sandbox boundary; external deltas use the durable
+exact approval lifecycle. The exported building blocks include:
 
 - :class:`Decision` enum (ALLOW / DENY / ASK)
 - :class:`DecisionResult` dataclass wrapping decision + reason
-- :class:`PermissionMode` enum (DEFAULT / AUTO / DRY_RUN)
+- :class:`PermissionMode` legacy config enum (DEFAULT / AUTO / DRY_RUN)
+- :class:`ReviewerPosture` and :class:`ExecutionPosture`
 - :class:`PermissionChecker` Protocol with ``evaluate(...)`` -> DecisionResult
 - :class:`DenyListChecker` -- minimal Bash deny-list
 
@@ -28,6 +30,7 @@ from openharness.permissions.action_policy import (
     ActionDenyPolicy,
     ConfiguredActionDenyPolicy,
     DenyResult,
+    PlanActionDenyPolicy,
 )
 from openharness.permissions.checker import (
     Decision,
@@ -35,6 +38,11 @@ from openharness.permissions.checker import (
     DenyListChecker,
     PermissionChecker,
     PermissionMode,
+)
+from openharness.permissions.posture import (
+    ExecutionPosture,
+    ReviewerPosture,
+    postures_from_legacy_mode,
 )
 from openharness.permissions.profile import (
     EnvironmentInheritance,
@@ -87,6 +95,7 @@ __all__ = [
     "DenyResult",
     "EnvironmentInheritance",
     "EnvironmentPolicy",
+    "ExecutionPosture",
     "ExternalPolicyEvidence",
     "ExternalToolMode",
     "ExternalToolPolicy",
@@ -113,12 +122,15 @@ __all__ = [
     "PermissionRules",
     "PermissionRuntime",
     "PermissionRuntimeState",
+    "PlanActionDenyPolicy",
     "ProcessPolicy",
+    "ReviewerPosture",
     "RuntimePermissionProfile",
     "TierBasedPermissionChecker",
     "accept_edits_preset",
     "match_rules",
     "parse_rule",
     "plan_mode_preset",
+    "postures_from_legacy_mode",
     "workspace_runtime_profile",
 ]

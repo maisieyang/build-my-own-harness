@@ -127,13 +127,17 @@ from openharness.observability.logging import (
     get_logger,
 )
 from openharness.permissions import (
+    ActionDenyPolicy,
     ConfiguredActionDenyPolicy,
     ExternalToolPolicy,
     NetworkPolicy,
     PermissionMode,
     PermissionRuntime,
+    PlanActionDenyPolicy,
+    ReviewerPosture,
     RuntimePermissionProfile,
     TierBasedPermissionChecker,
+    postures_from_legacy_mode,
     workspace_runtime_profile,
 )
 from openharness.plugins import (
@@ -629,6 +633,7 @@ async def _run_ask(
         if permission_mode_override is not None
         else settings.permission_mode
     )
+    reviewer_posture, execution_posture = postures_from_legacy_mode(permission_mode)
     log_level = log_level_override or settings.log_level
     log_format = log_format_override or settings.log_format
     tool_result_cap = (
@@ -984,7 +989,7 @@ async def _run_ask(
                 api_client=client,
                 model=settings.permission_reviewer_model or model,
             )
-            if permission_mode is PermissionMode.AUTO and settings.permission_auto_review
+            if reviewer_posture is ReviewerPosture.AUTO and settings.permission_auto_review
             else None
         )
         permission_runtime = PermissionRuntime(
@@ -1020,6 +1025,9 @@ async def _run_ask(
             # already promised this knob.
             max_turns=max_turns,
             permission_mode=permission_mode,
+            reviewer_posture=reviewer_posture,
+            execution_posture=execution_posture,
+            autonomous=(reviewer_posture is ReviewerPosture.AUTO or print_mode),
             external_tool_policy=sandbox_config.external_tools,
             authorization_context=(prompt,),
             skill_store=skill_store,
@@ -1086,6 +1094,10 @@ async def _run_ask(
                     tool_registry=effective_registry,
                     permission_checker=context.permission_checker,
                     action_deny_policy=context.action_deny_policy,
+                    permission_mode=permission_mode,
+                    reviewer_posture=reviewer_posture,
+                    execution_posture=execution_posture,
+                    autonomous=context.autonomous,
                     cwd=env.cwd,
                     hook_registry=effective_hook_registry,
                     execution_env=execution_env,
@@ -1372,6 +1384,7 @@ async def _run_chat(
         if permission_mode_override is not None
         else settings.permission_mode
     )
+    reviewer_posture, execution_posture = postures_from_legacy_mode(permission_mode)
     log_level = log_level_override or settings.log_level
     log_format = log_format_override or settings.log_format
     tool_result_cap = (
@@ -1503,7 +1516,7 @@ async def _run_chat(
                 api_client=client,
                 model=settings.permission_reviewer_model or model,
             )
-            if permission_mode is PermissionMode.AUTO and settings.permission_auto_review
+            if reviewer_posture is ReviewerPosture.AUTO and settings.permission_auto_review
             else None
         )
         permission_runtime = PermissionRuntime(
@@ -2063,21 +2076,33 @@ async def _run_chat(
             if manual_input_received:
                 goal_auto_turns = 0
 
+            # Plan mode shapes the model-visible capability catalog. Keep the
+            # full registry only for dispatch-time forged-call denial.
+            turn_registry = (
+                _repl.shape_plan_tool_registry(effective_registry)
+                if chat_mode is _repl.ChatMode.PLAN
+                else effective_registry
+            )
+
             # P10-T4.4f: rebuild system_prompt with per-turn memory
             # manifest unless the bundle explicitly overrode the prompt
             # (bundle.system_prompt set → user opted out of harness-
             # composed sections, memory included). Runs every turn so
             # multi-turn conversations get fresh relevance scoring
             # against the current user_input.
-            if memory_store is not None and memory_dir is not None and not bundle_overrides_prompt:
+            if not bundle_overrides_prompt:
                 # P16-T1/T2 (D36.7 / D36.11): per-turn MEMORY.md re-read
                 # so the LLM sees the index updated by the previous
                 # turn's memory writes. Phase 10's relevance ranking +
                 # use_count bookkeeping was retired alongside extraction
                 # (D36.9) — the LLM picks what to Read from the index.
-                memory_index_content = _load_memory_index_for_injection(memory_dir)
+                memory_index_content = (
+                    _load_memory_index_for_injection(memory_dir)
+                    if memory_store is not None and memory_dir is not None
+                    else None
+                )
                 system_prompt = build_system_prompt(
-                    effective_registry.to_api_schema(),
+                    turn_registry.to_api_schema(),
                     env,
                     skill_store=skill_store,
                     project_instructions_content=project_instructions_content,
@@ -2086,17 +2111,14 @@ async def _run_chat(
                     web_enabled=effective_web,
                 )
 
-            # D47 — turn-scoped permission overlay + posture prompt. Plan
-            # mode clamps mutating tools; approval only exits that clamp and
-            # never arms a hidden execution turn or permission grant.
-            turn_permissions = _repl.overlay_plan_permissions(
-                effective_settings.permissions, mode=chat_mode, grant=None
-            )
-            turn_settings = (
-                effective_settings
-                if turn_permissions is effective_settings.permissions
-                else effective_settings.model_copy(update={"permissions": turn_permissions})
-            )
+            # D47 — plan is a capability view plus deny-only forged-call
+            # guard. Approval only exits that view; it never grants execution.
+            turn_action_policy: ActionDenyPolicy = ConfiguredActionDenyPolicy(effective_settings)
+            if chat_mode is _repl.ChatMode.PLAN:
+                turn_action_policy = PlanActionDenyPolicy(
+                    registry=effective_registry,
+                    base=turn_action_policy,
+                )
             # Posture (D47.6 / D48.8), not contract — appended per turn,
             # never stored. Plan posture and goal posture can coexist only
             # nominally (judge won't fire in plan mode, D48.1), but the goal
@@ -2116,15 +2138,23 @@ async def _run_chat(
                 )
             context = QueryContext(
                 api_client=client,
-                tool_registry=effective_registry,
-                permission_checker=TierBasedPermissionChecker(effective_registry, turn_settings),
-                action_deny_policy=ConfiguredActionDenyPolicy(turn_settings),
+                tool_registry=turn_registry,
+                dispatch_tool_registry=(
+                    effective_registry if chat_mode is _repl.ChatMode.PLAN else None
+                ),
+                permission_checker=TierBasedPermissionChecker(
+                    effective_registry, effective_settings
+                ),
+                action_deny_policy=turn_action_policy,
                 hook_registry=effective_hook_registry,
                 system_prompt=turn_system_prompt,
                 cwd=env.cwd,
                 model=model,
                 max_tokens=max_tokens,
                 permission_mode=permission_mode,
+                reviewer_posture=reviewer_posture,
+                execution_posture=execution_posture,
+                autonomous=(reviewer_posture is ReviewerPosture.AUTO or goal is not None),
                 external_tool_policy=sandbox_config.external_tools,
                 authorization_context=extract_authorization_context(authorization_messages),
                 skill_store=skill_store,

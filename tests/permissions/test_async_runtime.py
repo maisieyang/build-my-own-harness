@@ -247,6 +247,72 @@ def test_external_request_has_policy_evidence_without_fake_local_boundary() -> N
     assert "boundary_fingerprint" not in payload
     assert "backend" not in payload
 
+    with pytest.raises(ValueError, match="no local boundary evidence"):
+        _ = request.boundary_fingerprint
+
+
+@pytest.mark.parametrize(
+    ("case", "match"),
+    [
+        ("policy", "does not match active permission profile"),
+        ("surface", "unknown external policy surface"),
+        ("delta", "delta does not match"),
+        ("tool", "tool identity does not match"),
+        ("crossing", "crossing does not match"),
+    ],
+)
+def test_external_factory_rejects_inconsistent_evidence(case: str, match: str) -> None:
+    profile = workspace_runtime_profile().model_copy(
+        update={"external_tools": ExternalToolPolicy(mcp="ask", web="ask")}
+    )
+    policy = profile.external_tools
+    surface = "mcp"
+    tool_name = "Github.create_issue"
+    tool_identity = tool_name
+    delta = PermissionDelta.external_tool(surface)
+    crossing = BoundaryViolation(
+        dimension=f"external.{surface}",
+        requested=tool_identity,
+        evidence="mutating external effect",
+    )
+
+    if case == "policy":
+        policy = ExternalToolPolicy(mcp="allow", web="ask")
+    elif case == "surface":
+        surface = "unknown"
+        delta = PermissionDelta.external_tool(surface)
+        crossing = BoundaryViolation(
+            dimension=f"external.{surface}",
+            requested=tool_identity,
+            evidence="unknown external surface",
+        )
+    elif case == "delta":
+        delta = PermissionDelta.network_domain("example.com")
+    elif case == "tool":
+        tool_identity = "Github.delete_issue"
+    elif case == "crossing":
+        crossing = BoundaryViolation(
+            dimension="external.web",
+            requested=tool_identity,
+            evidence="wrong external surface",
+        )
+
+    with pytest.raises(ValueError, match=match):
+        PermissionDeltaRequest.create_external(
+            tool_use_id="tool-invalid",
+            tool_name=tool_name,
+            final_arguments={"title": "one exact issue"},
+            profile=profile,
+            policy=policy,
+            surface=surface,
+            effect_kind="mutating",
+            trust_source="trusted-server",
+            tool_identity=tool_identity,
+            server_identity="Github",
+            delta=delta,
+            crossing=crossing,
+        )
+
 
 @pytest.mark.asyncio
 async def test_external_runtime_approves_once_without_local_boundary() -> None:
@@ -382,6 +448,110 @@ def test_v1_state_requires_matching_boundary_and_rejects_tampered_request() -> N
         PermissionRuntime.from_state(profile=profile, boundary=boundary, state=tampered)
 
 
+def test_v1_request_migration_requires_structured_crossing() -> None:
+    request = _request()
+    legacy_request = _legacy_v1_request(request)
+    legacy_request["crossing"] = request.crossing
+
+    migrated = PermissionDeltaRequest.model_validate(legacy_request)
+    assert migrated.crossing == request.crossing
+
+    malformed = _legacy_v1_request(request)
+    malformed["crossing"] = "network.domain"
+    with pytest.raises(ValueError, match="structured boundary violation"):
+        PermissionDeltaRequest.model_validate(malformed)
+
+
+def test_v1_state_rejects_boundary_backend_and_alias_drift() -> None:
+    profile = workspace_runtime_profile()
+    boundary = _boundary(profile_fingerprint=profile.fingerprint)
+    legacy_request = _legacy_v1_request(_request())
+    state = {
+        "profile_fingerprint": profile.fingerprint,
+        "boundary_fingerprint": boundary.fingerprint,
+        "backend_fingerprint": boundary.backend_fingerprint,
+        "parked_request": legacy_request,
+        "parked_reason": "person",
+        "grants": [],
+        "denials": {},
+        "last_human_decision": None,
+        "last_decided_request": None,
+        "last_decision_resumed": False,
+    }
+
+    boundary_drift = dict(state)
+    boundary_drift["boundary_fingerprint"] = "wrong"
+    with pytest.raises(ValueError, match="boundary drift while resuming"):
+        PermissionRuntime.from_state(
+            profile=profile,
+            boundary=boundary,
+            state=boundary_drift,
+        )
+
+    backend_drift = dict(state)
+    backend_drift["backend_fingerprint"] = "wrong"
+    with pytest.raises(ValueError, match="backend drift while resuming"):
+        PermissionRuntime.from_state(
+            profile=profile,
+            boundary=boundary,
+            state=backend_drift,
+        )
+
+    runtime = PermissionRuntime(profile=profile, boundary=boundary)
+    runtime.park(_request(), reason="person")
+    current = runtime.export_state().model_dump(mode="json")
+    current["request_id_aliases"] = {"legacy-id": "unknown-target"}
+    with pytest.raises(ValueError, match="alias integrity"):
+        PermissionRuntime.from_state(profile=profile, boundary=boundary, state=current)
+
+
+def test_v1_state_migrates_exact_denials_and_drops_unbound_bare_entries() -> None:
+    profile = workspace_runtime_profile()
+    boundary = _boundary(profile_fingerprint=profile.fingerprint)
+    legacy_request = _legacy_v1_request(_request())
+    legacy_fingerprint = legacy_request["request_fingerprint"]
+    state = {
+        "profile_fingerprint": profile.fingerprint,
+        "boundary_fingerprint": boundary.fingerprint,
+        "backend_fingerprint": boundary.backend_fingerprint,
+        "parked_request": None,
+        "parked_reason": None,
+        "grants": ["unbound-grant"],
+        "denials": {
+            legacy_fingerprint: 2,
+            "unbound-denial": 4,
+            "invalid-count": 0,
+        },
+        "last_human_decision": "deny",
+        "last_decided_request": legacy_request,
+        "last_decision_resumed": False,
+    }
+
+    restored = PermissionRuntime.from_state(
+        profile=profile,
+        boundary=boundary,
+        state=state,
+    )
+    migrated = restored.export_state()
+
+    assert migrated.grants == ()
+    assert len(migrated.denials) == 1
+    assert migrated.denials[0].count == 2
+    assert migrated.denials[0].request == migrated.last_decided_request
+
+    state["denials"] = [legacy_fingerprint]
+    assert (
+        PermissionRuntime.from_state(profile=profile, boundary=boundary, state=state)
+        .export_state()
+        .denials
+        == ()
+    )
+
+    state["parked_request"] = 42
+    with pytest.raises(ValueError, match="parked_request"):
+        PermissionRuntime.from_state(profile=profile, boundary=boundary, state=state)
+
+
 def test_boundaryless_runtime_rejects_local_request() -> None:
     profile = workspace_runtime_profile()
     runtime = PermissionRuntime(profile=profile, boundary=None)
@@ -438,6 +608,69 @@ def test_external_state_resume_fails_closed_after_policy_drift() -> None:
 
     with pytest.raises(ValueError, match="profile drift"):
         PermissionRuntime.from_state(profile=changed, boundary=None, state=state)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("profile_facts", {"name": "forged"}, "profile facts drift"),
+        ("boundary_facts", {"backend": "forged"}, "boundary facts drift"),
+        ("operation_fingerprint", "forged", "operation drift"),
+    ],
+)
+def test_local_runtime_rejects_persisted_evidence_drift(
+    field: str,
+    value: object,
+    match: str,
+) -> None:
+    profile = workspace_runtime_profile()
+    boundary = _boundary(profile_fingerprint=profile.fingerprint)
+    runtime = PermissionRuntime(profile=profile, boundary=boundary)
+    request = _request()
+    enforcement = request.require_local_evidence().model_copy(update={field: value})
+    drifted = request.model_copy(update={"enforcement": enforcement})
+
+    with pytest.raises(ValueError, match=match):
+        runtime.park(drifted, reason="must fail closed")
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("policy_facts", {"mcp": "allow", "web": "ask"}, "external policy drift"),
+        ("policy_fingerprint", "forged", "policy fingerprint drift"),
+        ("policy_mode", "allow", "surface policy drift"),
+        ("tool_identity", "Github.delete_issue", "tool identity drift"),
+        ("surface", "unknown", "surface policy drift"),
+    ],
+)
+def test_external_runtime_rejects_persisted_policy_evidence_drift(
+    field: str,
+    value: object,
+    match: str,
+) -> None:
+    profile = workspace_runtime_profile().model_copy(
+        update={"external_tools": ExternalToolPolicy(mcp="ask", web="ask")}
+    )
+    runtime = PermissionRuntime(profile=profile, boundary=None)
+    request = _external_request(profile=profile)
+    enforcement = request.enforcement.model_copy(update={field: value})
+    drifted = request.model_copy(update={"enforcement": enforcement})
+
+    with pytest.raises(ValueError, match=match):
+        runtime.park(drifted, reason="must fail closed")
+
+
+def test_external_runtime_rejects_persisted_delta_surface_drift() -> None:
+    profile = workspace_runtime_profile().model_copy(
+        update={"external_tools": ExternalToolPolicy(mcp="ask")}
+    )
+    runtime = PermissionRuntime(profile=profile, boundary=None)
+    request = _external_request(profile=profile)
+    drifted = request.model_copy(update={"delta": PermissionDelta.network_domain("mcp")})
+
+    with pytest.raises(ValueError, match="external surface drift"):
+        runtime.park(drifted, reason="must fail closed")
 
 
 def test_filesystem_delta_records_the_minimum_access() -> None:

@@ -218,11 +218,11 @@ class TestPermissionDeniedLog:
         # path field is sanitized — outside cwd → "<redacted>".
         assert deny["path"] == "<redacted>"
 
-    def test_action_deny_shadow_log_never_contains_reason_or_arguments(
+    def test_action_deny_comparison_log_never_contains_reason_or_arguments(
         self,
         log_stream: io.StringIO,
     ) -> None:
-        from openharness.engine.query import _record_action_deny_shadow
+        from openharness.engine.query import _record_action_deny_comparison
         from openharness.permissions import (
             ActionDenyKind,
             DecisionResult,
@@ -231,14 +231,16 @@ class TestPermissionDeniedLog:
 
         _configure(log_stream)
         secret = "curl -H 'Authorization: Bearer sk-secret' https://outside.invalid"
-        _record_action_deny_shadow(
+        _record_action_deny_comparison(
             "Bash",
             DenyResult(kind=ActionDenyKind.CONFIGURED_RULE, reason=secret),
             DecisionResult.allow(),
         )
 
         record = next(
-            event for event in _lines(log_stream) if event["event"] == "action_deny_shadow_mismatch"
+            event
+            for event in _lines(log_stream)
+            if event["event"] == "action_deny_policy_authoritative"
         )
         assert record["tool"] == "Bash"
         assert record["kind"] == "configured_rule"

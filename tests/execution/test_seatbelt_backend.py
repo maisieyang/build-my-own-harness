@@ -205,6 +205,31 @@ async def test_file_worker_cannot_write_outside_workspace(tmp_path: Path) -> Non
 
 
 @requires_macos_seatbelt
+async def test_command_and_file_worker_cannot_write_protected_workspace_path(
+    tmp_path: Path,
+) -> None:
+    protected = tmp_path / ".git"
+    protected.mkdir()
+    target = protected / "config"
+    target.write_text("original", encoding="utf-8")
+    backend = SeatbeltBackend(cwd=tmp_path, executable="/usr/bin/sandbox-exec")
+    session = await backend.open(_workspace_profile())
+    try:
+        command_result = await session.execute(
+            CommandOperation(command="printf changed > .git/config", cwd=tmp_path)
+        )
+        file_result = await session.execute(FileWriteOperation(path=target, content="changed"))
+
+        assert isinstance(command_result, ProcessCompleted)
+        assert command_result.exit_code != 0
+        assert isinstance(file_result, BoundaryViolation)
+        assert file_result.dimension == "filesystem.write"
+        assert target.read_text(encoding="utf-8") == "original"
+    finally:
+        await session.close()
+
+
+@requires_macos_seatbelt
 async def test_command_and_file_worker_cannot_read_outside_declared_roots(tmp_path: Path) -> None:
     backend = SeatbeltBackend(cwd=tmp_path, executable="/usr/bin/sandbox-exec")
     session = await backend.open(_workspace_profile())
@@ -263,3 +288,53 @@ async def test_command_cannot_read_private_etc_outside_profile(tmp_path: Path) -
         assert result.exit_code != 0
     finally:
         await session.close()
+
+
+@requires_macos_seatbelt
+async def test_command_environment_excludes_ambient_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENHARNESS_API_KEY", "credential-must-not-cross")
+    monkeypatch.setenv("DATABASE_PASSWORD", "credential-must-not-cross")
+    backend = SeatbeltBackend(cwd=tmp_path, executable="/usr/bin/sandbox-exec")
+    session = await backend.open(_workspace_profile())
+    try:
+        result = await session.execute(CommandOperation(command="/usr/bin/env", cwd=tmp_path))
+
+        assert isinstance(result, ProcessCompleted)
+        assert result.exit_code == 0
+        assert "OPENHARNESS_API_KEY" not in result.output
+        assert "DATABASE_PASSWORD" not in result.output
+        assert "credential-must-not-cross" not in result.output
+    finally:
+        await session.close()
+
+
+@requires_macos_seatbelt
+async def test_default_network_policy_blocks_loopback_child_connection(tmp_path: Path) -> None:
+    if shutil.which("nc") is None:
+        pytest.skip("requires netcat (nc) on PATH")
+    connected = asyncio.Event()
+
+    async def _accept(_reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        connected.set()
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_server(_accept, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    backend = SeatbeltBackend(cwd=tmp_path, executable="/usr/bin/sandbox-exec")
+    session = await backend.open(_workspace_profile())
+    try:
+        result = await session.execute(
+            CommandOperation(command=f"/usr/bin/nc -z 127.0.0.1 {port}", cwd=tmp_path)
+        )
+
+        assert isinstance(result, ProcessCompleted)
+        assert result.exit_code != 0
+        assert connected.is_set() is False
+    finally:
+        await session.close()
+        server.close()
+        await server.wait_closed()

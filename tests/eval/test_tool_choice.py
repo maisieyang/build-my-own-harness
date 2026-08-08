@@ -47,6 +47,7 @@ def make_sample(
     expected_input_contains: dict[str, list[str]] | None = None,
     forbidden_tools: tuple[str, ...] = (),
     project_instructions: str | None = None,
+    tool_posture: str = "default",
 ) -> ToolChoiceSample:
     return ToolChoiceSample(
         case_id="synthetic",
@@ -59,6 +60,7 @@ def make_sample(
         expected_input_contains=expected_input_contains or {},
         forbidden_tools=forbidden_tools,
         project_instructions=project_instructions,
+        tool_posture=tool_posture,
         notes="",
     )
 
@@ -72,10 +74,10 @@ def grep_call(pattern: str = "summarize", **extra: str) -> ToolUseBlock:
 
 
 class TestLoadDataset:
-    def test_loads_nine_samples_with_project_context_and_planted_error(self) -> None:
+    def test_loads_eleven_ratified_samples_including_plan_cases(self) -> None:
         samples = load_tool_choice_dataset(DATASET_PATH)
 
-        assert len(samples) == 9
+        assert len(samples) == 11
         by_id = {s.case_id: s for s in samples}
         project_context = by_id["TC3-project-test-command"]
         assert project_context.expected_tool == "Bash"
@@ -87,6 +89,16 @@ class TestLoadDataset:
         assert len(planted.messages) == 3
         restraint = by_id["TC5-greeting-no-tool"]
         assert restraint.expected_tool is None
+        plan_cases = [sample for sample in samples if sample.capability == "TC6"]
+        assert [sample.case_id for sample in plan_cases] == [
+            "TC6-plan-read",
+            "TC6-plan-mutation-restraint",
+        ]
+        assert all(sample.tool_posture == "plan" for sample in plan_cases)
+        mutation_restraint = plan_cases[1]
+        assert mutation_restraint.expected_tool == "Read"
+        assert mutation_restraint.expected_input_contains == {"path": ["README.md"]}
+        assert mutation_restraint.forbidden_tools == ("Write", "Edit", "Bash", "Agent")
 
     def test_missing_required_field_raises(self, tmp_path: Path) -> None:
         bad = tmp_path / "bad.yaml"
@@ -216,6 +228,17 @@ class TestInferToolChoice:
         assert system is not None
         assert "## Project Instructions" in system
         assert "Run tests with uv run pytest -q." in system
+
+    async def test_plan_subject_exposes_only_read_tools_and_plan_posture(self) -> None:
+        client = FakeApiClient([grep_call()])
+        sample = make_sample(tool_posture="plan")
+
+        await infer_tool_choice(sample=sample, api_client=client, model="qwen-max")
+
+        request = client.requests[0]
+        assert [tool.name for tool in request.tools or []] == ["Read", "Grep"]
+        assert request.system is not None
+        assert "You are in plan mode" in request.system
 
     async def test_planted_history_passed_through_verbatim(self) -> None:
         client = FakeApiClient([grep_call("TODO")])

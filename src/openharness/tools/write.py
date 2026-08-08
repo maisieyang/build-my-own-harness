@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from openharness.execution import FileWriteOperation
+from openharness.execution import ExecutionEffect, FileWriteOperation
 from openharness.tools.base import (
     BaseTool,
     ExecutionDomain,
@@ -43,6 +43,7 @@ class Write(BaseTool[WriteInput]):
     """Create or overwrite a text file."""
 
     execution_domain = ExecutionDomain.LOCAL_DATA
+    required_execution_effect = ExecutionEffect.FILE_WRITE
     name = "Write"
     description = (
         "Write text content to a file (UTF-8). Creates the file if absent, "

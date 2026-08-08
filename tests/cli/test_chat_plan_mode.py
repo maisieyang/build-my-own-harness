@@ -42,6 +42,11 @@ class _CmdArgs(BaseModel):
     command: str
 
 
+class _AgentArgs(BaseModel):
+    description: str
+    prompt: str
+
+
 def _set_minimum_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-fake-test")
     monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://fake.example.com/v1")
@@ -112,6 +117,18 @@ def _write_denied(context: Any, tmp_path: Path) -> bool:
     return result.decision is Decision.DENY  # type: ignore[no-any-return]
 
 
+def _plan_action_denied(context: Any, tool_name: str, args: BaseModel, tmp_path: Path) -> bool:
+    assert context.action_deny_policy is not None
+    return (
+        context.action_deny_policy.evaluate(
+            tool_name,
+            args,
+            ToolExecutionContext(cwd=tmp_path),
+        )
+        is not None
+    )
+
+
 class TestEnterPlanMode:
     def test_plan_turn_clamps_mutating_tools(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -128,19 +145,35 @@ class TestEnterPlanMode:
         assert "plan mode" in result.stdout
         assert len(contexts) == 1
         ctx = contexts[0]
-        # 接线断言:plan 态的 checker 真的 deny Edit/Write/Bash …
-        assert _write_denied(ctx, tmp_path)
-        bash = ctx.permission_checker.evaluate(
-            "Bash", _CmdArgs(command="ls"), ToolExecutionContext(cwd=tmp_path)
+        # The model-facing registry is capability-shaped, not permission-overlaid.
+        assert [tool.name for tool in ctx.tool_registry.list_tools()] == ["Read", "Grep"]
+        assert ctx.dispatch_tool_registry is not None
+        assert {tool.name for tool in ctx.dispatch_tool_registry.list_tools()} >= {
+            "Write",
+            "Bash",
+            "Agent",
+        }
+        assert ctx.permission_checker._permissions.deny == ()
+        # Forged/cached calls still hit the deny-only dispatch guard.
+        assert _plan_action_denied(
+            ctx,
+            "Write",
+            _PathArgs(path=str(tmp_path / "x.py")),
+            tmp_path,
         )
-        assert bash.decision is Decision.DENY
-        # … 而只读工具照常.
-        read = ctx.permission_checker.evaluate(
+        assert _plan_action_denied(ctx, "Bash", _CmdArgs(command="ls"), tmp_path)
+        assert _plan_action_denied(
+            ctx,
+            "Agent",
+            _AgentArgs(description="bypass", prompt="edit files"),
+            tmp_path,
+        )
+        assert not _plan_action_denied(
+            ctx,
             "Read",
             _PathArgs(path=str(tmp_path / "x.py")),
-            ToolExecutionContext(cwd=tmp_path),
+            tmp_path,
         )
-        assert read.decision is Decision.ALLOW
 
     def test_plan_with_trailing_prompt_enters_plan_and_runs_prompt(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -155,7 +188,7 @@ class TestEnterPlanMode:
         assert result.exit_code == 0
         assert "plan mode" in result.stdout
         assert len(contexts) == 1
-        assert _write_denied(contexts[0], tmp_path)
+        assert [tool.name for tool in contexts[0].tool_registry.list_tools()] == ["Read", "Grep"]
         text = "".join(b.text for b in messages[0][-1].content if isinstance(b, TextBlock))
         assert text == "explore the approval behavior"
         assert "plan mode" in contexts[0].system_prompt.lower()
@@ -319,7 +352,12 @@ class TestApprovalMenu:
         result = runner.invoke(cli_module.app, ["chat"])
         assert result.exit_code == 0
         assert len(contexts) == 2
-        assert _write_denied(contexts[1], tmp_path)
+        assert _plan_action_denied(
+            contexts[1],
+            "Write",
+            _PathArgs(path=str(tmp_path / "x.py")),
+            tmp_path,
+        )
         followup = messages[1][-1]
         assert followup.role == "user"
         text = "".join(b.text for b in followup.content if isinstance(b, TextBlock))

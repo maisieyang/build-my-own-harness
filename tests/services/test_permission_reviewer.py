@@ -129,6 +129,22 @@ async def test_reviewer_receives_external_policy_evidence_without_fake_boundary(
     assert "boundary_fingerprint" not in sent
 
 
+async def test_reviewer_prompt_separates_preparation_from_consequential_action() -> None:
+    client = _Client('{"decision":"defer","reason":"needs explicit authorization"}')
+
+    await LlmPermissionReviewer(api_client=client, model="qwen-plus").review(_request())
+
+    assert client.last_request is not None
+    assert client.last_request.system is not None
+    normalized_prompt = " ".join(client.last_request.system.split())
+    assert (
+        "Do not infer authorization for a consequential action from preparatory language"
+        in normalized_prompt
+    )
+    assert "publish" in normalized_prompt
+    assert "DEFER" in normalized_prompt
+
+
 async def test_invalid_or_failed_review_defers_fail_closed() -> None:
     reviewer = LlmPermissionReviewer(api_client=_Client("not json"), model="qwen-plus")
 

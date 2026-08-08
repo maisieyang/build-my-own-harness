@@ -57,7 +57,8 @@ plan> 1
 >>> /goal 执行刚批准的计划；运行 `uv run pytest -m 'not integration' -q`；最多 10 turns 后停止
 ```
 
-`/plan` 在权限层移除写操作工具；批准只返回 default posture，不自动执行。
+`/plan` 从模型可见 catalog 中移除修改与委派能力，并用 deny-only dispatch guard
+拒绝伪造的隐藏调用；批准只返回 default posture，不自动执行。
 `/goal` 会立即开工，并在每个 assistant turn 后交给一个独立、禁用工具的判官，
 依据累积证据判断是否完成。
 
@@ -70,8 +71,8 @@ while True:
     stream = llm.stream(messages)
     tool_calls = parse_tool_calls(stream)
     for call in tool_calls:
-        decision = permission_checker.evaluate(call)
-        result = execute(call) if decision.allowed else deny(call)
+        deny_if_forbidden(call)
+        result = verified_dispatch(call)  # 或 exact approval / durable park
         messages.append(result)
     if stop_reason == "end_turn":
         break
@@ -95,9 +96,10 @@ flowchart LR
 
 控制面的 ownership model 分为四部分：
 
-1. **动作。** Typed streaming 和 tool call 进入 allow/ask/deny 授权层、生命周期
-   hooks 与 external-effect policy；选择 sandbox posture 后，本地 data-plane tools
-   共享同一个已验证的 session boundary。
+1. **动作。** Typed streaming 和 tool call 进入 deny-only hard policy、生命周期
+   hooks 与独立 external-effect policy；选择 verified posture 后，本地与 delegated
+   execution 共享同一个已验证的 session boundary。legacy checker 只保留在未 sandbox
+   的 host 路径。
 2. **证据与状态。** Tool results、compaction、memory 与 snapshots 保存长任务
    恢复所需的可信状态。
 3. **能力。** Skills、commands、mode bundles、MCP、plugins 与 subagents 扩展
@@ -128,12 +130,13 @@ pytest 最后一行结果；模型因此没有真数字可引用，编造了一�
 
 工作模型无权宣布自己的工作正确。`/goal` 是唯一的 completion controller：它
 保留同一段 conversation，并由独立判官决定是否需要继续下一 turn。`--auto`
-仍然是正交的权限姿态，不负责判断完成。
+只选择 exact-request reviewer，`--dry-run` 独立决定工具是否实际执行；两者都不负责判断完成。
 
 ### 交互控制：`/plan` 与 `/goal`
 
-`/plan` 是权限层钳制，不是 prompt 约定：`Edit`、`Write` 与 `Bash` 都被 deny，
-模型也没有批准自己的工具。审批只让 session 回到 default mode。
+`/plan` 是 capability shaping，不是 prompt 约定：模型只收到 read-only、
+non-delegated tools；`Edit`、`Write`、`Bash` 与 `Agent` 不出现在 catalog 中，
+deny-only policy 仍会拒绝伪造或缓存的调用。审批只让 session 回到 default mode。
 
 `/goal <condition>` 会立即开工。每个 assistant turn 之后，harness 会渲染累积
 transcript，并交给一次独立、禁用工具的 LLM 调用：
@@ -305,14 +308,22 @@ uv run ruff format --check
   `allow`，不可信、未知、可修改或破坏性的外部调用仍需要一次精确审批。
 - Hooks 与 plugins 是 opt-in、进程内运行的 trusted control-plane code。它们可以
   拒绝或改写调用，但改写后的最终参数会在 dispatch 前重新授权。
-- Isolation 仍是 opt-in。macOS 上由 Seatbelt backend 覆盖统一的本地 data plane；
+- 普通交互执行的 Isolation 仍是 opt-in。macOS 上由 Seatbelt backend 覆盖统一的本地 data plane；
   Docker 明确保持 command-only backend，未启用 sandbox 的 posture 继续使用 legacy
-  host execution。
+  host execution。自主执行（`--auto`、active Goal 或 headless mode）若暴露的任一本地或
+  delegated capability 缺少 verified boundary coverage，会在第一次模型调用前失败；
+  no-sandbox 的只读 catalog 也不豁免。dry-run 与纯 external/control catalog 不要求本地 boundary。
 - `/goal` judge 具有概率性，只读取 conversation evidence 而不直接读取操作系统
   状态，因此必须 fail closed，并受明确的 turn cap 约束。
-- Permission intent 与 sandbox enforcement 是两份独立 contract：reviewer 只能依据
-  已验证 boundary，并且只能授予一次精确 overlay。无法处理的请求会被持久化 park；
-  `/goal` 会在 judge 之前暂停，只有明确 `/approve` 或 `/deny` 后再 `/resume` 才继续。
+- Permission intent 与 enforcement evidence 是两份独立 contract。每个 exact request
+  只携带一种 closed evidence：local request 绑定 active profile、verified boundary、
+  backend 与最终 operation；external request 绑定 active profile、policy surface、
+  effect/trust facts 与 tool/server identity，不伪造 local sandbox。reviewer 同时获得
+  原始 human authorization context、精确 final arguments、data flow 与最小 delta。
+  local grant 只有在 replacement boundary 证明 same backend 并覆盖目标 effect 后才安装
+  一次 exact overlay；external exact grant 无需 local boundary 也可 review、park、resume，
+  且仍是 one-shot。hard deny 不进入 review。无法裁决的 request 会被持久化 park；
+  `/goal` 在 judge 前暂停，只有明确 `/approve` 或 `/deny` 后再 `/resume` 才继续。
 
 ## 设计留痕
 

@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from openharness.execution import FileEditOperation
+from openharness.execution import ExecutionEffect, FileEditOperation
 from openharness.tools.base import (
     BaseTool,
     ExecutionDomain,
@@ -65,6 +65,7 @@ class Edit(BaseTool[EditInput]):
     """Replace exact-match string(s) in a text file."""
 
     execution_domain = ExecutionDomain.LOCAL_DATA
+    required_execution_effect = ExecutionEffect.FILE_WRITE
     name = "Edit"
     description = (
         "Replace an exact substring (no regex) in a text file. By default "

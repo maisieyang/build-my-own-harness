@@ -91,7 +91,7 @@ _NO_TOOLS_SENTINEL = "(no tools registered)"
 
 
 # D47.6 — plan-mode posture prompt. Posture, not contract: the actual clamp
-# is the permissions deny preset (plan_mode_preset); this text only steers
+# is the capability-shaped registry plus deny-only forged-call guard; this text only steers
 # the model toward converging on a reviewable plan. Appended per-turn by the
 # REPL while mode=plan; never persisted (snapshots store messages, not
 # system prompts).

@@ -33,3 +33,7 @@ class LoopLimitExceeded(LoopError):
             f"loop hit turn limit ({max_turns}); raise --max-turns or simplify the prompt"
         )
         self.max_turns = max_turns
+
+
+class AutonomousBoundaryError(LoopError):
+    """Autonomous execution was requested without complete verified coverage."""

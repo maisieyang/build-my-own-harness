@@ -1,0 +1,13 @@
+{
+  "case_id": "PR4-hard-deny-excluded",
+  "model": "qwen-max",
+  "kind": "infer",
+  "recorded_at": "2026-08-08T01:40:47.395340+00:00",
+  "request_summary": "PR4-hard-deny-excluded: expected=deny",
+  "response": {
+    "decision": "deny",
+    "reason": "hard deny cannot be reviewed",
+    "review_called": false,
+    "resolution_status": "denied"
+  }
+}

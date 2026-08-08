@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from openharness.execution import FileReadOperation
+from openharness.execution import ExecutionEffect, FileReadOperation
 from openharness.tools.base import (
     BaseTool,
     ExecutionDomain,
@@ -54,6 +54,7 @@ class Read(BaseTool[ReadInput]):
     """Read a text file's contents."""
 
     execution_domain = ExecutionDomain.LOCAL_DATA
+    required_execution_effect = ExecutionEffect.FILE_READ
     name = "Read"
     description = (
         "Read a text file. Returns the contents (UTF-8, with replacement "

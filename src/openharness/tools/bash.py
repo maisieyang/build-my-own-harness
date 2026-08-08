@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field
 from openharness.execution import (
     BoundaryViolation,
     CommandOperation,
+    ExecutionEffect,
     ExecutionFailed,
     ProcessCompleted,
     TimedOut,
@@ -88,6 +89,7 @@ class Bash(BaseTool[BashInput]):
     """
 
     execution_domain = ExecutionDomain.LOCAL_DATA
+    required_execution_effect = ExecutionEffect.COMMAND
     name = "Bash"
     description = (
         "Execute a shell command in the project's cwd. Merges stdout/stderr; "

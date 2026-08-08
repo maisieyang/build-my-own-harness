@@ -21,7 +21,9 @@ from openharness.repl import (
     format_status_bar,
     overlay_plan_permissions,
     parse_plan_menu_choice,
+    shape_plan_tool_registry,
 )
+from openharness.tools import create_default_tool_registry
 
 
 class TestSlashMenuHasPlan:
@@ -71,6 +73,30 @@ class TestOverlayPlanPermissions:
     def test_default_no_grant_is_identity(self) -> None:
         base = PermissionRules()
         assert overlay_plan_permissions(base, mode=ChatMode.DEFAULT, grant=None) is base
+
+
+class TestPlanCapabilityShaping:
+    def test_plan_view_exposes_only_read_only_non_delegated_tools(self) -> None:
+        base = create_default_tool_registry()
+        # Prove the domain exclusion is independent of the legacy read-only bit.
+        base.get("Agent").is_read_only = True
+
+        shaped = shape_plan_tool_registry(base)
+
+        assert [tool.name for tool in shaped.list_tools()] == ["Read", "Grep"]
+        assert [schema.name for schema in shaped.to_api_schema()] == ["Read", "Grep"]
+
+    def test_plan_view_does_not_mutate_the_default_registry(self) -> None:
+        base = create_default_tool_registry()
+        expected = [tool.name for tool in base.list_tools()]
+
+        shaped = shape_plan_tool_registry(base)
+
+        assert shaped is not base
+        assert [tool.name for tool in base.list_tools()] == expected
+        assert "Write" in expected
+        assert "Bash" in expected
+        assert "Agent" in expected
 
 
 class TestStatusBarMode:

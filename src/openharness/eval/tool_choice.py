@@ -27,12 +27,17 @@ from openharness.eval.cassette import (
     CassetteMode,
     CassetteStore,
 )
-from openharness.prompts.system import EnvironmentInfo, build_system_prompt
+from openharness.prompts.system import (
+    PLAN_MODE_PROMPT_SECTION,
+    EnvironmentInfo,
+    build_system_prompt,
+)
 from openharness.protocols.content import TextBlock, ToolUseBlock
 from openharness.protocols.messages import ConversationMessage
 from openharness.protocols.requests import ApiMessageRequest
 from openharness.protocols.stream_events import ApiMessageCompleteEvent
-from openharness.tools import create_default_tool_registry
+from openharness.repl import shape_plan_tool_registry
+from openharness.tools import ToolRegistry, create_default_tool_registry
 
 if TYPE_CHECKING:
     from openharness.api.client import SupportsStreamingMessages
@@ -63,6 +68,7 @@ class ToolChoiceSample:
     expected_input_contains: dict[str, list[str]]
     forbidden_tools: tuple[str, ...]
     project_instructions: str | None
+    tool_posture: str
     notes: str
 
 
@@ -85,6 +91,9 @@ def load_tool_choice_dataset(path: Path) -> list[ToolChoiceSample]:
     samples: list[ToolChoiceSample] = []
     for entry in data["samples"]:
         messages = [ConversationMessage.model_validate(m) for m in entry["messages"]]
+        tool_posture = entry.get("tool_posture", "default")
+        if tool_posture not in {"default", "plan"}:
+            raise ValueError(f"invalid tool_posture: {tool_posture!r}")
         samples.append(
             ToolChoiceSample(
                 case_id=entry["case_id"],
@@ -95,6 +104,7 @@ def load_tool_choice_dataset(path: Path) -> list[ToolChoiceSample]:
                 expected_input_contains=entry["expected_input_contains"],
                 forbidden_tools=tuple(entry["forbidden_tools"]),
                 project_instructions=entry.get("project_instructions"),
+                tool_posture=tool_posture,
                 notes=entry["notes"],
             )
         )
@@ -102,7 +112,7 @@ def load_tool_choice_dataset(path: Path) -> list[ToolChoiceSample]:
 
 
 def _build_eval_system_prompt(sample: ToolChoiceSample) -> str:
-    registry = create_default_tool_registry()
+    registry = _registry_for_sample(sample)
     instruction_content = None
     if sample.project_instructions is not None:
         instruction_content = (
@@ -110,11 +120,19 @@ def _build_eval_system_prompt(sample: ToolChoiceSample) -> str:
             "### /workspace/AGENTS.md\n\n"
             f"```md\n{sample.project_instructions}\n```"
         )
-    return build_system_prompt(
+    prompt = build_system_prompt(
         registry.to_api_schema(),
         _EVAL_ENV,
         project_instructions_content=instruction_content,
     )
+    if sample.tool_posture == "plan":
+        prompt = f"{prompt}\n\n{PLAN_MODE_PROMPT_SECTION}"
+    return prompt
+
+
+def _registry_for_sample(sample: ToolChoiceSample) -> ToolRegistry:
+    registry = create_default_tool_registry()
+    return shape_plan_tool_registry(registry) if sample.tool_posture == "plan" else registry
 
 
 async def infer_tool_choice(
@@ -130,7 +148,7 @@ async def infer_tool_choice(
     cases included); the first complete event's content is the decision
     under evaluation.
     """
-    registry = create_default_tool_registry()
+    registry = _registry_for_sample(sample)
     request = ApiMessageRequest(
         model=model,
         max_tokens=max_tokens,

@@ -12,12 +12,13 @@ pytest 断言进 CI:任何改动若破坏了「被测 prompt/描述 ↔ 录制�
 提醒你去做这件事的铃。
 
 Bar 出处(各 dataset_card ratified 值):
-- tool_choice     9/9(全稳定绿)
+- tool_choice     11/11(全稳定绿)
 - skill_trigger   ≥7/9 且 7 稳定绿必须全绿(v2 措辞,ratchet 后)
 - error_feedback  ≥8/9 且 8 稳定绿必须全绿
 - memory_compact  6/6(全稳定绿,B2 / D45)
 - verify_judge    8/8(判官与金标一致 + 抗注入,B3 / D45.2)
 - memory_read     6/6(must-read 契约 + restraint,C4 / 面 #4)
+- permission_review 6/6(exact verdict + reviewer lifecycle,G1 / D52)
 """
 
 from __future__ import annotations
@@ -34,6 +35,11 @@ from openharness.eval.memory_compact import run_memory_compact_eval
 from openharness.eval.memory_compact_scorers import FactRecallScorer, NoiseExclusionScorer
 from openharness.eval.memory_read import run_memory_read_eval
 from openharness.eval.memory_read_scorers import MemorySelectionScorer, ReadDecisionScorer
+from openharness.eval.permission_review import run_permission_review_eval
+from openharness.eval.permission_review_scorers import (
+    PermissionVerdictScorer,
+    ReviewLifecycleScorer,
+)
 from openharness.eval.skill_trigger import run_skill_trigger_eval
 from openharness.eval.skill_trigger_scorers import SlugSelectionScorer, TriggerDecisionScorer
 from openharness.eval.tool_choice import run_tool_choice_eval
@@ -85,8 +91,8 @@ class TestReplayGates:
             cassette_mode="replay",
         )
         passing = _passing_ids(results)
-        assert len(passing) == len(results) == 9, (
-            f"tool_choice bar 9/9 broken: failing={sorted({r.sample.case_id for r in results} - passing)}"
+        assert len(passing) == len(results) == 11, (
+            f"tool_choice bar 11/11 broken: failing={sorted({r.sample.case_id for r in results} - passing)}"
         )
 
     async def test_skill_trigger_replay_holds_bar(self) -> None:
@@ -160,4 +166,19 @@ class TestReplayGates:
         # C4 bar = 6/6 全稳定绿(must-read 契约 + restraint),dataset_card ratify
         assert len(passing) == len(results) == 6, (
             f"memory_read bar 6/6 broken: failing={sorted({r.sample.case_id for r in results} - passing)}"
+        )
+
+    async def test_permission_review_replay_holds_bar(self) -> None:
+        results = await run_permission_review_eval(
+            _ROOT / "permission_review" / "dataset.yaml",
+            [PermissionVerdictScorer(), ReviewLifecycleScorer()],
+            api_client=None,
+            model=_MODEL,
+            cassette_root=_ROOT / "permission_review" / "cassettes",
+            cassette_mode="replay",
+        )
+        passing = _passing_ids(results)
+        assert len(passing) == len(results) == 6, (
+            "permission_review bar 6/6 broken: "
+            f"failing={sorted({r.sample.case_id for r in results} - passing)}"
         )

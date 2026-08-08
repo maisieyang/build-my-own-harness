@@ -143,7 +143,8 @@ class SpawnAgent(BaseTool[SpawnAgentInput]):
         # field unless explicitly overridden — same api_client, same
         # tool_registry, same permission_checker, same hook_registry, same
         # skill_store, same cwd, same model, same max_tokens, same
-        # permission_mode. Only the three fields per D16.2 change.
+        # reviewer/execution postures and the legacy diagnostic mode. Only the
+        # three fields per D16.2 change.
         sub_context = dataclasses.replace(
             parent,
             system_prompt=self._sub_system_prompt
