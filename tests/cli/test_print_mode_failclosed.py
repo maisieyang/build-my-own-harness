@@ -64,8 +64,11 @@ def _tool_completed_lines(stdout: str) -> list[dict]:
 
 class TestPrintModeFailClosedWired:
     def test_headless_verified_boundary_authorizes_contained_write(
-        self, monkeypatch: pytest.MonkeyPatch
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        verified_seatbelt_backend: None,
     ) -> None:
+        del verified_seatbelt_backend
         _set_minimum_env(monkeypatch)
         stub = _StubApiClient(
             events_per_turn=[
@@ -97,8 +100,11 @@ class TestPrintModeFailClosedWired:
         assert all(not ev["is_error"] for ev in completed)
 
     def test_headless_allows_mutating_with_allow_rule(
-        self, monkeypatch: pytest.MonkeyPatch
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        verified_seatbelt_backend: None,
     ) -> None:
+        del verified_seatbelt_backend
         # The canonical workspace profile contains this Write and the verified
         # boundary enforces the same profile.
         _set_minimum_env(monkeypatch)

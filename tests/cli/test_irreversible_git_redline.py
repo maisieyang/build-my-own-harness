@@ -68,8 +68,11 @@ def _tool_completed_lines(stdout: str) -> list[dict]:
 
 class TestIrreversibleGitRedlineEndToEnd:
     def test_git_commit_denied_even_with_bash_allow_and_auto(
-        self, monkeypatch: pytest.MonkeyPatch
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        verified_seatbelt_backend: None,
     ) -> None:
+        del verified_seatbelt_backend
         _set_minimum_env(monkeypatch)
         # The semantic red line must hold under the canonical workspace profile
         # and the exact auto reviewer.
