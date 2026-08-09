@@ -8,6 +8,7 @@ import fnmatch
 import json
 import os
 import secrets
+import shutil
 import signal
 import sys
 from pathlib import Path
@@ -80,34 +81,57 @@ def _filesystem_filter(rule: FilesystemRule, cwd: Path) -> str:
     return f'({selector} "{path}")'
 
 
-def _runtime_read_roots() -> tuple[Path, ...]:
+def _runtime_read_rules() -> tuple[FilesystemRule, ...]:
     """Host paths needed to launch the trusted toolchain under Seatbelt.
 
     These paths are an explicit part of the backend's effective read boundary.
     Keep them limited to executable/library trees and individual runtime files;
     in particular, do not expose broad configuration or device directories.
     """
-    candidates = (
-        Path("/System"),
-        Path("/usr"),
+    subtree_candidates = (
+        Path("/System/Library"),
+        Path("/usr/bin"),
+        Path("/usr/lib"),
+        Path("/usr/libexec"),
+        Path("/usr/share"),
         Path("/bin"),
         Path("/sbin"),
-        Path("/Library"),
-        Path("/opt/homebrew"),
-        Path("/usr/local"),
+        Path("/private/var/select"),
+        Path("/private/var/db/dyld"),
+        Path(sys.prefix),
+        Path(sys.base_prefix),
+        Path(__file__).resolve().parent,
+    )
+    exact_candidates = {
         Path("/dev/null"),
         Path("/dev/random"),
         Path("/dev/urandom"),
         Path("/dev/tty"),
         Path("/dev/ptmx"),
-        Path("/private/var/select"),
-        Path("/private/var/db/dyld"),
-        Path(sys.prefix),
-        Path(sys.base_prefix),
         Path(sys.executable),
-        Path(__file__).resolve().parent,
+    }
+    for executable in ("rg", "uv"):
+        found = shutil.which(executable)
+        if found is not None:
+            exact_candidates.add(Path(found))
+            exact_candidates.add(Path(found).resolve(strict=False))
+    rules = {
+        FilesystemRule(
+            path=str(path.resolve(strict=False)),
+            access=FilesystemAccess.READ,
+            scope=FilesystemScope.SUBTREE,
+        )
+        for path in subtree_candidates
+    }
+    rules.update(
+        FilesystemRule(
+            path=str(path),
+            access=FilesystemAccess.READ,
+            scope=FilesystemScope.EXACT,
+        )
+        for path in exact_candidates
     )
-    return tuple(sorted({path.resolve(strict=False) for path in candidates}, key=str))
+    return tuple(sorted(rules, key=lambda rule: (rule.path, rule.scope.value)))
 
 
 def compile_seatbelt_profile(
@@ -140,7 +164,8 @@ def compile_seatbelt_profile(
         if rule.access in (FilesystemAccess.READ, FilesystemAccess.WRITE)
     )
     readable_paths = {str(_absolute_policy_path(rule.path, cwd)) for rule in readable_rules}
-    runtime_read_paths = {str(path) for path in _runtime_read_roots()}
+    runtime_read_rules = _runtime_read_rules()
+    runtime_read_paths = {rule.path for rule in runtime_read_rules}
     traversal_sources = readable_paths | runtime_read_paths
     traversal_paths = {
         str(parent)
@@ -150,8 +175,8 @@ def compile_seatbelt_profile(
     }
     for path in sorted(traversal_paths):
         lines.append(f'(allow file-read* (literal "{_seatbelt_string(path)}"))')
-    for path in sorted(runtime_read_paths):
-        lines.append(f'(allow file-read* (subpath "{_seatbelt_string(path)}"))')
+    for rule in runtime_read_rules:
+        lines.append(f"(allow file-read* {_filesystem_filter(rule, cwd)})")
     for rule in sorted(readable_rules, key=lambda item: (item.normalized_path(), item.scope.value)):
         lines.append(f"(allow file-read* {_filesystem_filter(rule, cwd)})")
     writable_rules = [
@@ -451,13 +476,16 @@ def _worker_request(operation: DataPlaneOperation) -> dict[str, object] | None:
     if isinstance(operation, FileWriteOperation):
         return {"kind": "write", "path": str(operation.path), "content": operation.content}
     if isinstance(operation, FileEditOperation):
-        return {
+        request: dict[str, object] = {
             "kind": "edit",
             "path": str(operation.path),
             "old_str": operation.old_str,
             "new_str": operation.new_str,
             "replace_all": operation.replace_all,
         }
+        if operation.temp_path is not None:
+            request["temp_path"] = str(operation.temp_path)
+        return request
     if isinstance(operation, FileSearchOperation):
         return {
             "kind": "search",
@@ -570,7 +598,9 @@ class SeatbeltBackend:
             f"{rule.access.value}:{rule.scope.value}:{_absolute_policy_path(rule.path, self._cwd)}"
             for rule in profile.filesystem.rules
         )
-        runtime_read_rules = tuple(f"runtime_read:{path}" for path in _runtime_read_roots())
+        runtime_read_rules = tuple(
+            f"runtime_read:{rule.scope.value}:{rule.path}" for rule in _runtime_read_rules()
+        )
         runtime_write_rules = tuple(f"runtime_write:{path}" for path in _RUNTIME_WRITABLE_PATHS)
         process_rules = [
             "deny-default",

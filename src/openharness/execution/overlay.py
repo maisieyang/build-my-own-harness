@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import fields, is_dataclass
+from dataclasses import fields, is_dataclass, replace
 from pathlib import Path
 
 from openharness.execution.boundary import (
@@ -12,6 +12,7 @@ from openharness.execution.boundary import (
     DataPlaneOperation,
     EnforcedBoundary,
     ExecutionResult,
+    FileEditOperation,
     SandboxBackend,
     SandboxSession,
     SandboxUnavailableError,
@@ -19,6 +20,7 @@ from openharness.execution.boundary import (
 from openharness.permissions.profile import (
     FilesystemAccess,
     FilesystemRule,
+    FilesystemScope,
     NetworkPolicy,
     RuntimePermissionProfile,
 )
@@ -47,8 +49,16 @@ def _operation_fingerprint(operation: DataPlaneOperation) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _edit_temp_path(operation: FileEditOperation, request_id: str) -> Path:
+    return operation.path.parent / (f".{operation.path.name}.openharness-{request_id[:16]}.tmp")
+
+
 def _overlay_profile(
-    profile: RuntimePermissionProfile, delta: PermissionDelta
+    profile: RuntimePermissionProfile,
+    delta: PermissionDelta,
+    *,
+    operation: DataPlaneOperation,
+    request_id: str,
 ) -> RuntimePermissionProfile:
     if delta.kind is PermissionDeltaKind.NETWORK_DOMAIN:
         network = profile.network
@@ -69,10 +79,24 @@ def _overlay_profile(
             in {PermissionFilesystemAccess.READ, PermissionFilesystemAccess.SEARCH}
             else FilesystemAccess.WRITE
         )
-        rules = (
-            *profile.filesystem.rules,
-            FilesystemRule(path=delta.value, access=access),
+        scope = (
+            FilesystemScope.SUBTREE
+            if delta.filesystem_access is PermissionFilesystemAccess.SEARCH
+            else FilesystemScope.EXACT
         )
+        rules: tuple[FilesystemRule, ...] = (
+            *profile.filesystem.rules,
+            FilesystemRule(path=delta.value, access=access, scope=scope),
+        )
+        if isinstance(operation, FileEditOperation) and access is FilesystemAccess.WRITE:
+            rules = (
+                *rules,
+                FilesystemRule(
+                    path=str(_edit_temp_path(operation, request_id)),
+                    access=FilesystemAccess.WRITE,
+                    scope=FilesystemScope.EXACT,
+                ),
+            )
         filesystem = profile.filesystem.model_copy(update={"rules": rules})
         return profile.model_copy(update={"filesystem": filesystem})
     raise ValueError(f"delta {delta.kind.value} cannot be installed by a local sandbox")
@@ -131,7 +155,18 @@ class OneShotOverlaySession:
         if _operation_fingerprint(operation) != expected_operation:
             raise RuntimeError("one-shot permission approval is not for this exact operation")
         delta = request.delta
-        overlay_profile = _overlay_profile(self._profile, delta)
+        overlay_operation = operation
+        if isinstance(operation, FileEditOperation):
+            overlay_operation = replace(
+                operation,
+                temp_path=_edit_temp_path(operation, request.request_id),
+            )
+        overlay_profile = _overlay_profile(
+            self._profile,
+            delta,
+            operation=operation,
+            request_id=request.request_id,
+        )
         support = self._backend.preflight(overlay_profile)
         if not support.supported:
             raise SandboxUnavailableError(
@@ -146,7 +181,7 @@ class OneShotOverlaySession:
                 or not overlay.boundary.covers(operation.required_effect)
             ):
                 raise RuntimeError("overlay boundary verification failed")
-            return await overlay.execute(operation)
+            return await overlay.execute(overlay_operation)
         finally:
             await overlay.close()
 

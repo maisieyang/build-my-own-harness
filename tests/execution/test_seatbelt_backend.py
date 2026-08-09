@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import shutil
 import sys
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
@@ -13,12 +13,14 @@ from openharness.execution import (
     BoundaryViolation,
     CommandOperation,
     ExecutionEffect,
+    FileEditOperation,
     FileReadOperation,
     FileSearchOperation,
     FileWriteOperation,
     OperationCompleted,
     ProcessCompleted,
 )
+from openharness.execution.overlay import OneShotOverlaySession
 from openharness.execution.seatbelt import SeatbeltBackend, compile_seatbelt_profile
 from openharness.permissions import (
     FilesystemAccess,
@@ -27,10 +29,7 @@ from openharness.permissions import (
     NetworkPolicy,
     RuntimePermissionProfile,
 )
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
+from openharness.permissions.runtime import PermissionDelta, PermissionDeltaRequest
 
 requires_macos_seatbelt = pytest.mark.skipif(
     sys.platform != "darwin",
@@ -67,6 +66,15 @@ def test_compiler_allows_workspace_write_but_denies_nested_protected_path(
     assert f'(allow file-write* (subpath "{tmp_path}"))' in profile_text
     assert f'(deny file-read* file-write* (subpath "{tmp_path / ".git"}"))' in profile_text
     assert "(deny network*)" in profile_text
+
+
+def test_compiler_does_not_widen_profile_to_host_configuration_trees(
+    tmp_path: Path,
+) -> None:
+    profile_text = compile_seatbelt_profile(_workspace_profile(), cwd=tmp_path)
+
+    for undeclared_root in ("/Library", "/usr", "/usr/local", "/opt/homebrew"):
+        assert f'(allow file-read* (subpath "{undeclared_root}"))' not in profile_text
 
 
 @requires_macos_seatbelt
@@ -202,6 +210,67 @@ async def test_file_worker_cannot_write_outside_workspace(tmp_path: Path) -> Non
     assert result.requested == str(outside)
     assert not outside.exists()
     await session.close()
+
+
+@requires_macos_seatbelt
+async def test_approved_external_edit_uses_exact_one_shot_atomic_overlay(
+    tmp_path: Path,
+) -> None:
+    profile = _workspace_profile()
+    backend = SeatbeltBackend(cwd=tmp_path, executable="/usr/bin/sandbox-exec")
+    base = await backend.open(profile)
+    session = OneShotOverlaySession(backend=backend, profile=profile, base=base)
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-edit.txt"
+    outside.write_text("old value", encoding="utf-8")
+    operation = FileEditOperation(path=outside, old_str="old", new_str="new")
+    try:
+        crossing = await session.execute(operation)
+        assert isinstance(crossing, BoundaryViolation)
+        request = PermissionDeltaRequest.create(
+            tool_use_id="edit-tool-1",
+            tool_name="Edit",
+            final_arguments={
+                "path": str(outside),
+                "old_str": "old",
+                "new_str": "new",
+                "replace_all": False,
+            },
+            profile=profile,
+            boundary=base.boundary,
+            delta=PermissionDelta.filesystem_path(str(outside)),
+            crossing=crossing,
+        )
+        session.arm(request)
+
+        result = await session.execute(operation)
+
+        assert isinstance(result, OperationCompleted)
+        assert result.is_error is False
+        assert outside.read_text(encoding="utf-8") == "new value"
+        assert not (
+            outside.parent / f".{outside.name}.openharness-{request.request_id[:16]}.tmp"
+        ).exists()
+    finally:
+        outside.unlink(missing_ok=True)
+        await session.close()
+
+
+@requires_macos_seatbelt
+async def test_runtime_support_does_not_expose_library_configuration(
+    tmp_path: Path,
+) -> None:
+    protected = Path("/Library/LaunchDaemons/postgresql-17.plist")
+    if not protected.is_file():
+        pytest.skip("host fixture is not installed")
+    backend = SeatbeltBackend(cwd=tmp_path, executable="/usr/bin/sandbox-exec")
+    session = await backend.open(_workspace_profile())
+    try:
+        result = await session.execute(FileReadOperation(path=protected))
+
+        assert isinstance(result, BoundaryViolation)
+        assert result.dimension == "filesystem.read"
+    finally:
+        await session.close()
 
 
 @requires_macos_seatbelt

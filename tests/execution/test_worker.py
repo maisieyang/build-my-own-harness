@@ -83,6 +83,26 @@ def test_edit_first_all_and_error_paths(tmp_path: Path) -> None:
     assert target.read_text() == "b c"
 
 
+def test_edit_uses_request_bound_atomic_temp_path(tmp_path: Path) -> None:
+    target = tmp_path / "edit.txt"
+    target.write_text("old value")
+    temp = tmp_path / ".edit.txt.openharness-request.tmp"
+
+    result = worker.run(
+        {
+            "kind": "edit",
+            "path": str(target),
+            "old_str": "old",
+            "new_str": "new",
+            "temp_path": str(temp),
+        }
+    )
+
+    assert result["is_error"] is False
+    assert target.read_text() == "new value"
+    assert not temp.exists()
+
+
 @pytest.mark.parametrize(
     ("returncode", "stdout", "stderr", "expected"),
     [

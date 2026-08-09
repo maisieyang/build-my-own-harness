@@ -203,6 +203,11 @@ def test_worker_request_serializes_every_file_operation(tmp_path: Path) -> None:
     assert _worker_request(FileSearchOperation("x", tmp_path))["kind"] == "search"  # type: ignore[index]
     assert _worker_request(CommandOperation("true", tmp_path)) is None
 
+    temp = tmp_path / ".edit.openharness-request.tmp"
+    edit_request = _worker_request(FileEditOperation(tmp_path, "a", "b", temp_path=temp))
+    assert edit_request is not None
+    assert edit_request["temp_path"] == str(temp)
+
 
 @pytest.mark.parametrize(
     ("returncode", "stdout", "stderr", "reason"),

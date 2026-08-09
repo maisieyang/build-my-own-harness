@@ -148,6 +148,7 @@ class FileEditOperation:
     old_str: str
     new_str: str
     replace_all: bool = False
+    temp_path: Path | None = None
 
     @property
     def required_effect(self) -> ExecutionEffect:

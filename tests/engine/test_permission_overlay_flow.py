@@ -520,7 +520,7 @@ def test_boundary_metadata_and_minimum_filesystem_deltas_are_typed() -> None:
     ) == (("sandbox-visible data",), ("example.com:443",))
 
 
-def test_authorization_context_excludes_machine_generated_goal_turns() -> None:
+def test_authorization_context_excludes_machine_generated_control_turns() -> None:
     messages = [
         ConversationMessage(
             role="user",
@@ -537,6 +537,17 @@ def test_authorization_context_excludes_machine_generated_goal_turns() -> None:
         ConversationMessage(
             role="user",
             content=[TextBlock(text="[goal checker] not met: run tests again")],
+        ),
+        ConversationMessage(
+            role="user",
+            content=[
+                TextBlock(
+                    text=(
+                        "[permission decision] The exact request abc was approve. "
+                        "Retry the identical tool arguments once."
+                    )
+                )
+            ],
         ),
     ]
 
