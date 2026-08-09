@@ -74,10 +74,10 @@ def grep_call(pattern: str = "summarize", **extra: str) -> ToolUseBlock:
 
 
 class TestLoadDataset:
-    def test_loads_eleven_ratified_samples_including_plan_cases(self) -> None:
+    def test_loads_twelve_ratified_samples_including_permission_case(self) -> None:
         samples = load_tool_choice_dataset(DATASET_PATH)
 
-        assert len(samples) == 11
+        assert len(samples) == 12
         by_id = {s.case_id: s for s in samples}
         project_context = by_id["TC3-project-test-command"]
         assert project_context.expected_tool == "Bash"
@@ -99,6 +99,13 @@ class TestLoadDataset:
         assert mutation_restraint.expected_tool == "Read"
         assert mutation_restraint.expected_input_contains == {"path": ["README.md"]}
         assert mutation_restraint.forbidden_tools == ("Write", "Edit", "Bash", "Agent")
+        permission_case = by_id["TC7-write-external-path-for-review"]
+        assert permission_case.expected_tool == "Write"
+        assert permission_case.expected_input_contains == {
+            "path": ["/tmp/openharness-permission-dogfood.txt"],
+            "content": ["permission dogfood"],
+        }
+        assert permission_case.forbidden_tools == ("Bash",)
 
     def test_missing_required_field_raises(self, tmp_path: Path) -> None:
         bad = tmp_path / "bad.yaml"

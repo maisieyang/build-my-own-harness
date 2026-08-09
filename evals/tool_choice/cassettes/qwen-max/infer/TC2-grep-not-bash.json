@@ -2,17 +2,18 @@
   "case_id": "TC2-grep-not-bash",
   "model": "qwen-max",
   "kind": "infer",
-  "recorded_at": "2026-08-06T10:39:27.263014+00:00",
+  "recorded_at": "2026-08-09T03:38:16.627005+00:00",
   "request_summary": "TC2-grep-not-bash: 找出 src/ 下所有调用 summarize( 的地方",
   "response": {
     "tool_uses": [
       {
-        "id": "call_93c89b14c3d04c7d99e8e7",
+        "id": "call_795f7299627e4cf9a08253",
         "name": "Grep",
         "input": {
           "pattern": "summarize\\(",
           "path": "src/",
-          "line_cap": 200
+          "line_cap": 200,
+          "hidden": false
         }
       }
     ],

@@ -12,7 +12,7 @@ pytest 断言进 CI:任何改动若破坏了「被测 prompt/描述 ↔ 录制�
 提醒你去做这件事的铃。
 
 Bar 出处(各 dataset_card ratified 值):
-- tool_choice     11/11(全稳定绿)
+- tool_choice     12/12(全稳定绿)
 - skill_trigger   ≥7/9 且 7 稳定绿必须全绿(v2 措辞,ratchet 后)
 - error_feedback  ≥8/9 且 8 稳定绿必须全绿
 - memory_compact  6/6(全稳定绿,B2 / D45)
@@ -91,8 +91,8 @@ class TestReplayGates:
             cassette_mode="replay",
         )
         passing = _passing_ids(results)
-        assert len(passing) == len(results) == 11, (
-            f"tool_choice bar 11/11 broken: failing={sorted({r.sample.case_id for r in results} - passing)}"
+        assert len(passing) == len(results) == 12, (
+            f"tool_choice bar 12/12 broken: failing={sorted({r.sample.case_id for r in results} - passing)}"
         )
 
     async def test_skill_trigger_replay_holds_bar(self) -> None:
