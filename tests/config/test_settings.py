@@ -300,7 +300,7 @@ class TestSandboxFields:
         monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-x")
         monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://x/v1")
         settings = Settings()
-        assert settings.sandbox_enabled is False  # default: host execution
+        assert settings.sandbox_enabled is False  # default: local/delegated fail closed
         assert settings.sandbox_backend == "seatbelt"
         assert settings.sandbox_image == "python:3.12-slim"
         assert settings.sandbox_memory == "1g"

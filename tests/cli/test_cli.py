@@ -1326,7 +1326,9 @@ class TestSandboxFlags:
         result = runner.invoke(cli_module.app, ["ask", "hi", "--no-sandbox"])
         assert result.exit_code == 0
         ctx = captured.context
-        # HostExecution wins because --no-sandbox CLI flag overrides env.
+        # The override removes the verified boundary. HostExecution remains an
+        # inert substrate placeholder; verified dispatch refuses local tools.
+        assert ctx.sandbox_session is None  # type: ignore[attr-defined]
         assert isinstance(ctx.execution_env, HostExecution)  # type: ignore[attr-defined]
 
 

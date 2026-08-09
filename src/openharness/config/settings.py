@@ -627,10 +627,10 @@ class Settings(BaseSettings):
     sandbox_enabled: bool = Field(
         default=False,
         description=(
-            "Enable the Docker sandbox substrate for Bash. When true, "
-            "Bash commands execute inside a per-query container with the "
-            "cwd bind-mounted read-write and no network by default. When "
-            "false (default), Bash runs on the host via HostExecution. "
+            "Install the configured verified boundary for local and delegated "
+            "tools. When true, the selected backend enforces the canonical "
+            "permission profile. When false (default), no verified local "
+            "boundary is installed, so local and delegated execution fails closed. "
             "Env var: OPENHARNESS_SANDBOX_ENABLED. Overridden by the "
             "``--sandbox`` / ``--no-sandbox`` CLI flag."
         ),
