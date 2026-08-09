@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hashlib import sha1
 from pathlib import Path
 
@@ -27,7 +27,6 @@ from openharness.execution import (
 from openharness.permissions import (
     PermissionDelta,
     PermissionDeltaRequest,
-    PermissionMode,
     PermissionRuntime,
     workspace_runtime_profile,
 )
@@ -62,10 +61,10 @@ class _StubContext:
     permission_checker etc. unnecessary for the serializer)."""
 
     model: str = "qwen-plus"
-    permission_mode: PermissionMode = PermissionMode.DEFAULT
     system_prompt: str | None = "test prompt"
     max_tokens: int = 1024
     permission_runtime: PermissionRuntime | None = None
+    runtime_permission_profile: object = field(default_factory=workspace_runtime_profile)
 
 
 def _permission_runtime() -> PermissionRuntime:
@@ -257,32 +256,33 @@ class TestSerializeSnapshot:
             messages=_sample_messages(),
             context=_StubContext(),  # type: ignore[arg-type]
         )
-        for field in (
+        assert set(out) == {
             "version",
             "schema",
             "created_at",
             "git_head",
             "cwd",
             "model",
-            "permission_mode",
+            "permission_profile_fingerprint",
             "system_prompt",
             "max_tokens",
             "messages",
             "tool_metadata",
             "extra",
-        ):
-            assert field in out, f"missing field {field!r}"
+        }
 
-    def test_permission_mode_serialized_as_string(self, tmp_path: Path) -> None:
+    def test_canonical_profile_fingerprint_is_single_written(self, tmp_path: Path) -> None:
+        context = _StubContext()
         out = _serialize_snapshot(
             cwd=tmp_path,
             tool_metadata={},
             messages=[],
-            context=_StubContext(permission_mode=PermissionMode.AUTO),  # type: ignore[arg-type]
+            context=context,  # type: ignore[arg-type]
         )
-        # enum.value, not repr — keeps the JSON portable across Python versions
-        assert out["permission_mode"] == "auto"
-        assert isinstance(out["permission_mode"], str)
+        assert out["permission_profile_fingerprint"] == (
+            context.runtime_permission_profile.fingerprint  # type: ignore[attr-defined]
+        )
+        assert "permission_mode" not in out
 
     def test_permission_runtime_state_persists_exact_park_fingerprints(
         self, tmp_path: Path
@@ -321,13 +321,24 @@ class TestSerializeSnapshot:
         )
 
         state = out["extra"]["permission_runtime"]
+        assert set(state) == {
+            "schema_version",
+            "profile_fingerprint",
+            "parked_request",
+            "parked_reason",
+            "grants",
+            "denials",
+            "request_id_aliases",
+            "last_human_decision",
+            "last_decided_request",
+            "last_decision_resumed",
+        }
+        assert state["schema_version"] == 2
         assert state["profile_fingerprint"] == profile.fingerprint
-        assert state["boundary_fingerprint"] == boundary.fingerprint
-        assert state["backend_fingerprint"] == boundary.backend_fingerprint
         assert state["parked_request"]["request_id"] == request.request_id
         assert state["parked_request"]["request_fingerprint"] == request.request_fingerprint
         assert state["parked_request"]["grant_fingerprint"] == request.grant_fingerprint
-        assert state["parked_request"]["backend"] == "test"
+        assert state["parked_request"]["enforcement"]["backend"] == "test"
 
 
 def test_permission_decision_amends_current_snapshot_without_rotating(
@@ -375,7 +386,8 @@ def test_permission_decision_amends_current_snapshot_without_rotating(
     runtime.approve_parked(request.request_id)
     assert update_permission_runtime_snapshot(cwd=tmp_path, runtime=runtime) is not None
     loaded = load_snapshot(tmp_path)
-    assert request.grant_fingerprint in loaded["extra"]["permission_runtime"]["grants"]
+    grants = loaded["extra"]["permission_runtime"]["grants"]
+    assert [grant["grant_fingerprint"] for grant in grants] == [request.grant_fingerprint]
 
 
 class TestPermissionRuntimeSnapshotAmendmentFailures:
@@ -720,7 +732,7 @@ class TestLoadSnapshotStalenessLogs:
             "git_head": "deadbee",  # 7 chars, looks like a real SHA
             "cwd": str(tmp_path.resolve()),
             "model": "qwen-plus",
-            "permission_mode": "default",
+            "permission_profile_fingerprint": workspace_runtime_profile().fingerprint,
             "system_prompt": "test",
             "max_tokens": 1024,
             "messages": [],

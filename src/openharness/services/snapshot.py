@@ -18,18 +18,18 @@ two file families don't collide):
     ├── current.json          # SINGLE file per project, overwritten
     └── history/              # reserved for Phase 13+ rotation
 
-JSON schema (v1, locked verbatim — see ``SNAPSHOT_SCHEMA``):
+JSON schema (v2 — see ``SNAPSHOT_SCHEMA``):
 
 .. code-block:: json
 
     {
-      "version": 1,
-      "schema": "openharness.snapshot.v1",
+      "version": 2,
+      "schema": "openharness.snapshot.v2",
       "created_at": "ISO 8601",
       "git_head": "abc1234" or null,
       "cwd": "/absolute/path",
       "model": "...",
-      "permission_mode": "default",
+      "permission_profile_fingerprint": "...",
       "system_prompt": "...",
       "max_tokens": 1024,
       "messages": [...pydantic-serialized ConversationMessage...],
@@ -74,8 +74,8 @@ if TYPE_CHECKING:
 _logger = get_logger("snapshot")
 
 
-SNAPSHOT_VERSION = 1
-SNAPSHOT_SCHEMA = "openharness.snapshot.v1"
+SNAPSHOT_VERSION = 2
+SNAPSHOT_SCHEMA = "openharness.snapshot.v2"
 _GIT_REV_PARSE_TIMEOUT_S = 1.0
 
 
@@ -291,9 +291,8 @@ def _serialize_snapshot(
     each ContentBlock subtype carries its ``type`` discriminator so
     the discriminated union reconstructs correctly on load.
 
-    ``permission_mode`` serialized as enum **value** (string), not
-    the enum repr — so JSON consumers (and a future v2 → v1 reader)
-    don't need access to the Python enum class.
+    v2 single-writes the canonical profile fingerprint. Invocation postures are
+    deliberately not persisted because they are not authorization intent.
     """
     permission_runtime = getattr(context, "permission_runtime", None)
     extra: dict[str, Any] = {}
@@ -306,7 +305,7 @@ def _serialize_snapshot(
         "git_head": _current_git_head(cwd),
         "cwd": str(cwd),
         "model": context.model,
-        "permission_mode": context.permission_mode.value,
+        "permission_profile_fingerprint": context.runtime_permission_profile.fingerprint,
         "system_prompt": context.system_prompt or "",
         "max_tokens": context.max_tokens,
         "messages": [m.model_dump(mode="json") for m in messages],

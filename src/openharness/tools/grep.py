@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from openharness.execution import FileSearchOperation
+from openharness.execution import ExecutionEffect, FileSearchOperation
 from openharness.tools.base import (
     BaseTool,
     ExecutionDomain,
@@ -67,6 +67,7 @@ class Grep(BaseTool[GrepInput]):
     """Search file contents using ripgrep."""
 
     execution_domain = ExecutionDomain.LOCAL_DATA
+    required_execution_effect = ExecutionEffect.FILE_SEARCH
     name = "Grep"
     description = (
         "Search file contents (regex). Returns matching lines with file:line "

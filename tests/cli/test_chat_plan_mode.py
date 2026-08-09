@@ -2,8 +2,7 @@
 
 驱动方式沿 test_chat.py house 式:stub ``input``(非 TTY legacy 路径,
 菜单同样从这里读)+ 捕获 ``run_query`` 的 ``QueryContext``.接线断言
-直接对捕获的 ``context.permission_checker.evaluate`` 发真调用——比读
-私有属性稳,也正是 D47 T2 acceptance 要的"plan 态工具调用实际走 deny".
+直接检查 capability-shaped catalog 和 deny-only forged-call guard.
 """
 
 from __future__ import annotations
@@ -14,7 +13,6 @@ from pydantic import BaseModel
 from typer.testing import CliRunner
 
 import openharness.cli as cli_module
-from openharness.permissions import Decision
 from openharness.protocols.content import TextBlock
 from openharness.protocols.messages import ConversationMessage
 from openharness.protocols.stream_events import (
@@ -40,6 +38,11 @@ class _PathArgs(BaseModel):
 
 class _CmdArgs(BaseModel):
     command: str
+
+
+class _AgentArgs(BaseModel):
+    description: str
+    prompt: str
 
 
 def _set_minimum_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -103,13 +106,16 @@ def _install_capture(
     return contexts, messages
 
 
-def _write_denied(context: Any, tmp_path: Path) -> bool:
-    result = context.permission_checker.evaluate(
-        "Write",
-        _PathArgs(path=str(tmp_path / "x.py")),
-        ToolExecutionContext(cwd=tmp_path),
+def _plan_action_denied(context: Any, tool_name: str, args: BaseModel, tmp_path: Path) -> bool:
+    assert context.action_deny_policy is not None
+    return (
+        context.action_deny_policy.evaluate(
+            tool_name,
+            args,
+            ToolExecutionContext(cwd=tmp_path),
+        )
+        is not None
     )
-    return result.decision is Decision.DENY  # type: ignore[no-any-return]
 
 
 class TestEnterPlanMode:
@@ -128,19 +134,34 @@ class TestEnterPlanMode:
         assert "plan mode" in result.stdout
         assert len(contexts) == 1
         ctx = contexts[0]
-        # 接线断言:plan 态的 checker 真的 deny Edit/Write/Bash …
-        assert _write_denied(ctx, tmp_path)
-        bash = ctx.permission_checker.evaluate(
-            "Bash", _CmdArgs(command="ls"), ToolExecutionContext(cwd=tmp_path)
+        # The model-facing registry is capability-shaped, not permission-overlaid.
+        assert [tool.name for tool in ctx.tool_registry.list_tools()] == ["Read", "Grep"]
+        assert ctx.dispatch_tool_registry is not None
+        assert {tool.name for tool in ctx.dispatch_tool_registry.list_tools()} >= {
+            "Write",
+            "Bash",
+            "Agent",
+        }
+        # Forged/cached calls still hit the deny-only dispatch guard.
+        assert _plan_action_denied(
+            ctx,
+            "Write",
+            _PathArgs(path=str(tmp_path / "x.py")),
+            tmp_path,
         )
-        assert bash.decision is Decision.DENY
-        # … 而只读工具照常.
-        read = ctx.permission_checker.evaluate(
+        assert _plan_action_denied(ctx, "Bash", _CmdArgs(command="ls"), tmp_path)
+        assert _plan_action_denied(
+            ctx,
+            "Agent",
+            _AgentArgs(description="bypass", prompt="edit files"),
+            tmp_path,
+        )
+        assert not _plan_action_denied(
+            ctx,
             "Read",
             _PathArgs(path=str(tmp_path / "x.py")),
-            ToolExecutionContext(cwd=tmp_path),
+            tmp_path,
         )
-        assert read.decision is Decision.ALLOW
 
     def test_plan_with_trailing_prompt_enters_plan_and_runs_prompt(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -155,7 +176,7 @@ class TestEnterPlanMode:
         assert result.exit_code == 0
         assert "plan mode" in result.stdout
         assert len(contexts) == 1
-        assert _write_denied(contexts[0], tmp_path)
+        assert [tool.name for tool in contexts[0].tool_registry.list_tools()] == ["Read", "Grep"]
         text = "".join(b.text for b in messages[0][-1].content if isinstance(b, TextBlock))
         assert text == "explore the approval behavior"
         assert "plan mode" in contexts[0].system_prompt.lower()
@@ -232,8 +253,13 @@ class TestApprovalMenu:
         assert "convert the approved plan into a concrete /goal condition" in all_text
         assert "runnable verification commands" in all_text
         assert "stop bounds" in all_text
-        # deny 钳制已撤(交互 DEFAULT 姿态 in-cwd 写恢复 ALLOW).
-        assert not _write_denied(contexts[1], tmp_path)
+        # deny clamp is gone; default mode's semantic guard does not deny a normal write.
+        assert not _plan_action_denied(
+            contexts[1],
+            "Write",
+            _PathArgs(path=str(tmp_path / "x.py")),
+            tmp_path,
+        )
         # follow-up turn 的 system prompt 不再带 plan 姿态.
         assert "plan mode" not in contexts[1].system_prompt.lower()
         # D47 T4: 姿态注入是 turn 级 system prompt,不落进消息历史(历史是
@@ -258,10 +284,12 @@ class TestApprovalMenu:
         result = runner.invoke(cli_module.app, ["chat"])
         assert result.exit_code == 0
         assert len(contexts) == 2  # plan / user-authored follow-up
-        follow_rules = contexts[1].permission_checker._permissions
-        assert "Edit(*)" not in follow_rules.allow
-        assert follow_rules.deny == ()  # plan deny 也不残留
-        assert not _write_denied(contexts[1], tmp_path)
+        assert not _plan_action_denied(
+            contexts[1],
+            "Write",
+            _PathArgs(path=str(tmp_path / "x.py")),
+            tmp_path,
+        )
 
     def test_discard_returns_to_default(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -277,7 +305,12 @@ class TestApprovalMenu:
         assert "discarded" in result.stdout
         assert len(contexts) == 2
         # 放弃后回地面:钳制撤除,无自动执行 turn(第二个 turn 是用户消息).
-        assert not _write_denied(contexts[1], tmp_path)
+        assert not _plan_action_denied(
+            contexts[1],
+            "Write",
+            _PathArgs(path=str(tmp_path / "x.py")),
+            tmp_path,
+        )
 
     def test_invalid_menu_input_reprompts(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_minimum_env(monkeypatch)
@@ -319,7 +352,12 @@ class TestApprovalMenu:
         result = runner.invoke(cli_module.app, ["chat"])
         assert result.exit_code == 0
         assert len(contexts) == 2
-        assert _write_denied(contexts[1], tmp_path)
+        assert _plan_action_denied(
+            contexts[1],
+            "Write",
+            _PathArgs(path=str(tmp_path / "x.py")),
+            tmp_path,
+        )
         followup = messages[1][-1]
         assert followup.role == "user"
         text = "".join(b.text for b in followup.content if isinstance(b, TextBlock))

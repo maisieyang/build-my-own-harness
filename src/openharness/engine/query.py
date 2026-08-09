@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, ValidationError
 
 from openharness.api.errors import OpenHarnessApiError, PromptTooLongFailure
-from openharness.engine.errors import LoopLimitExceeded
+from openharness.engine.errors import AutonomousBoundaryError, LoopLimitExceeded
 from openharness.engine.messages import (
     append_assistant_message,
     append_tool_results,
@@ -60,14 +60,15 @@ from openharness.observability import (
     sanitize_path,
 )
 from openharness.permissions import (
-    Decision,
-    DecisionResult,
+    ActionDenyKind,
+    DenyResult,
+    ExecutionPosture,
     ExternalToolMode,
+    LocalBoundaryEvidence,
     PermissionDelta,
     PermissionDeltaKind,
     PermissionDeltaRequest,
     PermissionFilesystemAccess,
-    PermissionMode,
     PermissionResolutionStatus,
 )
 from openharness.protocols import (
@@ -217,7 +218,7 @@ def extract_authorization_context(
         for block in message.content:
             if not isinstance(block, TextBlock) or not block.text.strip():
                 continue
-            if block.text.startswith(("[goal set] ", "[goal checker] ")):
+            if block.text.startswith(("[goal set] ", "[goal checker] ", "[permission decision] ")):
                 continue
             context.append(block.text)
     return tuple(context)
@@ -244,6 +245,11 @@ async def run_query(
       + ``output_len`` (output content itself is **not** logged per D13.6)
     - ``loop_limit_exceeded`` (warning) — before raising ``LoopLimitExceeded``
     """
+    # This gate precedes compaction and the first API request: autonomous
+    # local/delegated execution must never ask a model to act before its
+    # runtime boundary has proved complete coverage.
+    _require_autonomous_boundary(context)
+
     # Defensive copy: the caller's list must not be mutated even though the
     # messages helpers (engine.messages) all return new lists.
     messages = list(initial_messages)
@@ -498,11 +504,11 @@ async def run_query(
                     )
                     t0 = time.monotonic()
 
-                    # D12.5: DRY_RUN bypasses both permission_checker and
-                    # execute(), emitting a synthetic "would call X with Y"
+                    # DRY_RUN bypasses authorization review and execute(),
+                    # emitting a synthetic "would call X with Y"
                     # result so the LLM sees the loop progressing but no side
                     # effects occur.
-                    if context.permission_mode is PermissionMode.DRY_RUN:
+                    if context.execution_posture is ExecutionPosture.DRY_RUN:
                         output = f"would call {tool_use.name} with {tool_use.input}"
                         is_error = False
                     else:
@@ -534,7 +540,7 @@ async def run_query(
                     )
                     violation = (
                         outcome.metadata.get("boundary_violation")
-                        if context.permission_mode is not PermissionMode.DRY_RUN
+                        if context.execution_posture is not ExecutionPosture.DRY_RUN
                         else None
                     )
                     if isinstance(violation, dict):
@@ -584,6 +590,11 @@ async def run_query(
                     and context.permission_runtime.parked_request is not None
                 ):
                     parked = context.permission_runtime.parked_request
+                    local_evidence = (
+                        parked.enforcement
+                        if isinstance(parked.enforcement, LocalBoundaryEvidence)
+                        else None
+                    )
                     await _maybe_write_turn_end_metadata(context, messages)
                     yield PermissionParkedEvent(
                         request_id=parked.request_id,
@@ -592,13 +603,24 @@ async def run_query(
                         delta_kind=parked.delta.kind.value,
                         delta_value=parked.delta.value,
                         profile_fingerprint=parked.profile_fingerprint,
-                        boundary_fingerprint=parked.boundary_fingerprint,
-                        backend=parked.backend,
-                        backend_fingerprint=parked.backend_fingerprint,
+                        enforcement=parked.enforcement.model_dump(mode="json"),
+                        boundary_fingerprint=(
+                            local_evidence.boundary_fingerprint
+                            if local_evidence is not None
+                            else None
+                        ),
+                        backend=local_evidence.backend if local_evidence is not None else None,
+                        backend_fingerprint=(
+                            local_evidence.backend_fingerprint
+                            if local_evidence is not None
+                            else None
+                        ),
                         final_arguments=parked.final_arguments,
                         data_sources=parked.data_sources,
                         data_destinations=parked.data_destinations,
-                        boundary_facts=parked.boundary_facts,
+                        boundary_facts=(
+                            local_evidence.boundary_facts if local_evidence is not None else None
+                        ),
                         reason=context.permission_runtime.parked_reason or "human review required",
                         messages=messages,
                     )
@@ -621,7 +643,7 @@ async def _dispatch_one(
     Recovery paths (all return ``is_error=True``, output names the failure):
     - Tool not in registry
     - Pydantic ValidationError on the tool's input model
-    - Permission checker returns ``Decision.DENY`` or ``Decision.ASK`` 不通过
+    - Canonical profile/boundary cannot authorize the execution domain
     - PreToolUse hook returns deny
     - Tool itself returns ``ToolResult(is_error=True)``
 
@@ -630,7 +652,8 @@ async def _dispatch_one(
     ``ToolError`` after firing OnError chain (one-level).
     """
     try:
-        tool = context.tool_registry.get(tool_use.name)
+        dispatch_registry = context.dispatch_tool_registry or context.tool_registry
+        tool = dispatch_registry.get(tool_use.name)
     except KeyError:
         return _outcome((f"tool not found: {tool_use.name}", True))
 
@@ -639,10 +662,19 @@ async def _dispatch_one(
     except ValidationError as exc:
         return _outcome((f"invalid input for {tool_use.name}: {exc}", True))
 
-    permission = context.permission_checker.evaluate(tool_use.name, args, exec_context)
-    permission_failure = _permission_failure(permission, tool_use.name, context.permission_mode)
-    if permission_failure is not None:
-        return _outcome(permission_failure)
+    action_deny = _evaluate_action_deny_policy(
+        context,
+        tool_name=tool_use.name,
+        args=args,
+        exec_context=exec_context,
+    )
+    verified_dispatch, verified_failure = _verified_dispatch_authorization(tool, context)
+    if action_deny is not None:
+        return _outcome((f"action denied: {action_deny.reason}", True))
+    if verified_failure is not None:
+        return _outcome(verified_failure)
+    if not verified_dispatch:
+        return _outcome((f"authorization denied: no canonical authority for {tool.name}", True))
 
     # PreToolUse hook chain — can deny / modify input / observe.
     # Hooks run AFTER AuthZ so they can't bypass framework safety baseline.
@@ -668,12 +700,21 @@ async def _dispatch_one(
             # first check above protects hooks from seeing calls already denied
             # by the framework; this second check makes the final arguments the
             # ones that are actually authorized immediately before execution.
-            permission = context.permission_checker.evaluate(tool_use.name, args, exec_context)
-            permission_failure = _permission_failure(
-                permission, tool_use.name, context.permission_mode
+            action_deny = _evaluate_action_deny_policy(
+                context,
+                tool_name=tool_use.name,
+                args=args,
+                exec_context=exec_context,
             )
-            if permission_failure is not None:
-                return _outcome(permission_failure)
+            verified_dispatch, verified_failure = _verified_dispatch_authorization(tool, context)
+            if action_deny is not None:
+                return _outcome((f"action denied: {action_deny.reason}", True))
+            if verified_failure is not None:
+                return _outcome(verified_failure)
+            if not verified_dispatch:
+                return _outcome(
+                    (f"authorization denied: no canonical authority for {tool.name}", True)
+                )
 
     external_failure = await _external_effect_failure(
         tool,
@@ -817,7 +858,7 @@ async def _resolve_local_boundary_violation(
         tool_name=tool.name,
         final_arguments=args.model_dump(mode="json"),
         profile=runtime.profile,
-        boundary=runtime.boundary,
+        boundary=runtime.require_local_boundary(),
         delta=delta,
         crossing=violation,
         data_sources=data_sources,
@@ -904,7 +945,8 @@ async def _external_effect_failure(
     kind = tool.external_effect_kind
     if surface is None or kind is None:
         return "external effect denied: tool has incomplete external policy metadata", True
-    mode = getattr(context.external_tool_policy, surface.value)
+    external_policy = context.runtime_permission_profile.external_tools
+    mode = getattr(external_policy, surface.value)
     if mode is ExternalToolMode.DENY:
         return f"external effect denied by {surface.value} policy: {tool.name}", True
     requires_call_approval = (
@@ -925,12 +967,17 @@ async def _external_effect_failure(
                 f"({kind.value}, trust={tool.trust_source}): {tool.name}",
                 True,
             )
-        request = PermissionDeltaRequest.create(
+        request = PermissionDeltaRequest.create_external(
             tool_use_id=tool_use.id,
             tool_name=tool.name,
             final_arguments=args.model_dump(mode="json"),
             profile=runtime.profile,
-            boundary=runtime.boundary,
+            policy=external_policy,
+            surface=surface.value,
+            effect_kind=kind.value,
+            trust_source=tool.trust_source,
+            tool_identity=tool.name,
+            server_identity=tool.external_server_identity,
             delta=PermissionDelta.external_tool(surface.value),
             crossing=BoundaryViolation(
                 dimension=f"external.{surface.value}",
@@ -957,25 +1004,113 @@ async def _external_effect_failure(
     return None
 
 
-def _permission_failure(
-    permission: DecisionResult,
+def _evaluate_action_deny_policy(
+    context: QueryContext,
+    *,
     tool_name: str,
-    mode: PermissionMode,
-) -> tuple[str, bool] | None:
-    """Translate a checker result into the dispatch recovery payload.
+    args: BaseModel,
+    exec_context: ToolExecutionContext,
+) -> DenyResult | None:
+    """Evaluate the authoritative deny-only policy, failing closed."""
+    policy = context.action_deny_policy
+    if policy is None:
+        return None
+    try:
+        return policy.evaluate(tool_name, args, exec_context)
+    except Exception as exc:
+        # Do not log the exception message: a third-party implementation may
+        # embed arguments. Policy failure cannot safely authorize execution.
+        logger.warning(
+            "action_deny_policy_failed",
+            tool=tool_name,
+            error_type=type(exc).__name__,
+        )
+        return DenyResult(
+            kind=ActionDenyKind.POLICY_FAILURE,
+            reason="action policy evaluation failed",
+        )
 
-    Kept in one helper so both the model-authored input and any hook-modified
-    final input receive byte-identical DENY/ASK semantics.
+
+def _verified_dispatch_authorization(
+    tool: BaseTool[Any],
+    context: QueryContext,
+) -> tuple[bool, tuple[str, bool] | None]:
+    """Require verified local dispatch for every local or delegated tool.
+
+    Once a sandbox session is present, local execution must be justified by
+    its reported verified boundary. Any drift or incomplete coverage denies;
+    it never falls back to unverified host execution.
     """
-    if permission.decision is Decision.DENY:
-        reason = permission.reason or tool_name
-        return f"permission denied: {reason}", True
-    if permission.decision is Decision.ASK:
-        if mode is PermissionMode.AUTO:
-            return None
-        reason = permission.reason or tool_name
-        return (
-            f"permission denied (requires confirmation): {reason}; rerun with --auto to allow",
+    if tool.execution_domain in {
+        ExecutionDomain.EXTERNAL_EFFECT,
+        ExecutionDomain.TRUSTED_CONTROL,
+    }:
+        # These domains have their own canonical authority: external policy or
+        # explicitly trusted in-process control. Neither is a local data-plane
+        # containment question.
+        return True, None
+    if tool.execution_domain not in {
+        ExecutionDomain.LOCAL_DATA,
+        ExecutionDomain.DELEGATED_RUNTIME,
+    }:
+        return False, None
+    session = context.sandbox_session
+    if session is None:
+        return True, (
+            "verified dispatch denied: local execution requires a verified sandbox boundary",
             True,
         )
-    return None
+
+    boundary = session.boundary
+    if not boundary.is_verified:
+        return True, ("verified dispatch denied: sandbox boundary is unverified", True)
+    profile = context.runtime_permission_profile
+    if profile is not None and boundary.profile_fingerprint != profile.fingerprint:
+        return True, ("verified dispatch denied: runtime profile drift", True)
+    enforced = context.enforced_boundary
+    if enforced is not None and boundary.fingerprint != enforced.fingerprint:
+        return True, ("verified dispatch denied: sandbox boundary drift", True)
+    if tool.execution_domain is ExecutionDomain.DELEGATED_RUNTIME:
+        registry = context.dispatch_tool_registry or context.tool_registry
+        for delegated_tool in registry.list_tools():
+            if delegated_tool.execution_domain is not ExecutionDomain.LOCAL_DATA:
+                continue
+            delegated_effect = delegated_tool.required_execution_effect
+            if delegated_effect is None:
+                return True, (
+                    f"verified dispatch denied: delegated tool {delegated_tool.name} "
+                    "has no declared sandbox effect",
+                    True,
+                )
+            if not boundary.covers(delegated_effect):
+                return True, (
+                    f"verified dispatch denied: delegated tool {delegated_tool.name} "
+                    f"lacks {delegated_effect.value} coverage",
+                    True,
+                )
+        return True, None
+
+    effect = tool.required_execution_effect
+    if effect is None:
+        return True, ("verified dispatch denied: tool has no declared sandbox effect", True)
+    if not boundary.covers(effect):
+        return True, (f"verified dispatch denied: boundary does not cover {effect.value}", True)
+    return True, None
+
+
+def _require_autonomous_boundary(context: QueryContext) -> None:
+    if not context.autonomous or context.execution_posture is ExecutionPosture.DRY_RUN:
+        return
+    for tool in context.tool_registry.list_tools():
+        if tool.execution_domain not in {
+            ExecutionDomain.LOCAL_DATA,
+            ExecutionDomain.DELEGATED_RUNTIME,
+        }:
+            continue
+        verified, failure = _verified_dispatch_authorization(tool, context)
+        if not verified:
+            raise AutonomousBoundaryError(
+                f"autonomous tool {tool.name} requires a verified sandbox boundary"
+            )
+        if failure is not None:
+            raise AutonomousBoundaryError(f"autonomous tool {tool.name}: {failure[0]}")

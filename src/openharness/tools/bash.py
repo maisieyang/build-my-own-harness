@@ -24,7 +24,7 @@ Behavior contract(unchanged across the P7-T3 refactor):
 - ``exit_code`` and ``duration_ms`` go to ``metadata`` (D9.5).
 
 Per D9.4: **no deny-list at this layer**. Bash trusts what it receives.
-P2-T6 ``PermissionChecker`` enforces safety one layer up.
+The canonical verified-dispatch boundary enforces safety one layer up.
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field
 from openharness.execution import (
     BoundaryViolation,
     CommandOperation,
+    ExecutionEffect,
     ExecutionFailed,
     ProcessCompleted,
     TimedOut,
@@ -88,6 +89,7 @@ class Bash(BaseTool[BashInput]):
     """
 
     execution_domain = ExecutionDomain.LOCAL_DATA
+    required_execution_effect = ExecutionEffect.COMMAND
     name = "Bash"
     description = (
         "Execute a shell command in the project's cwd. Merges stdout/stderr; "

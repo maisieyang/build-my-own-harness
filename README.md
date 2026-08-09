@@ -61,7 +61,8 @@ plan> 1
 >>> /goal Implement the approved plan; run `uv run pytest -m 'not integration' -q`; stop after 10 turns
 ```
 
-`/plan` removes mutation tools at the permission layer. Approval returns control
+`/plan` removes mutation and delegation capabilities from the model-visible
+catalog. A deny-only dispatch guard rejects forged hidden calls. Approval returns control
 to the default posture but does not auto-execute. `/goal` starts work and asks
 an independent, tool-disabled judge to assess the accumulated evidence after
 each assistant turn.
@@ -75,8 +76,8 @@ while True:
     stream = llm.stream(messages)
     tool_calls = parse_tool_calls(stream)
     for call in tool_calls:
-        decision = permission_checker.evaluate(call)
-        result = execute(call) if decision.allowed else deny(call)
+        deny_if_forbidden(call)
+        result = verified_dispatch(call)  # or exact approval / durable park
         messages.append(result)
     if stop_reason == "end_turn":
         break
@@ -91,7 +92,7 @@ flowchart LR
     C --> E["Agent engine"]
     E <--> M["OpenAI-compatible model"]
     E --> P["Permission profile, verified boundary, and hooks"]
-    P --> X["Seatbelt, Docker command backend, or legacy host"]
+    P --> X["Seatbelt or Docker command boundary"]
     E <--> S["Compaction, snapshots, and memory"]
     C --> V["Independent /goal judge"]
     V -->|"checker feedback"| E
@@ -100,10 +101,10 @@ flowchart LR
 
 The ownership model has four parts:
 
-1. **Actions.** Typed streaming and tool calls feed an allow/ask/deny
-   authorization layer, lifecycle hooks, external-effect policy, and—when the
-   sandbox posture is selected—one verified session boundary shared by the
-   local data-plane tools.
+1. **Actions.** Typed streaming and tool calls feed a deny-only hard policy,
+   lifecycle hooks, independent external-effect policy, and—when the verified
+   posture is selected—one session boundary shared by local and delegated
+   execution. Without a verified boundary, those domains fail closed.
 2. **Evidence and state.** Tool results, compaction, memory, and snapshots
    preserve enough trustworthy state for long tasks to recover.
 3. **Capabilities.** Skills, commands, mode bundles, MCP servers, plugins, and
@@ -142,13 +143,15 @@ and [`src/openharness/tools/bash.py`](./src/openharness/tools/bash.py).
 
 The working model is not allowed to declare its own work correct. `/goal` is
 the single completion controller: it preserves one conversation and asks an
-independent judge to decide whether another turn is needed. `--auto` remains an
-orthogonal permission posture; it does not decide completion.
+independent judge to decide whether another turn is needed. `--auto` selects an
+exact-request reviewer; `--dry-run` independently controls whether tools execute.
+Neither posture decides completion.
 
 ### Interactive control: `/plan` and `/goal`
 
-`/plan` is a permission-layer clamp, not a prompt convention: `Edit`, `Write`,
-and `Bash` are denied, and the model has no tool that can approve itself.
+`/plan` is capability shaping, not a prompt convention: only read-only,
+non-delegated tools are sent to the model. `Edit`, `Write`, `Bash`, and `Agent`
+are absent, while a deny-only policy still rejects forged or cached calls.
 Approval only returns the session to default mode.
 
 `/goal <condition>` starts work immediately. After each assistant turn, the
@@ -299,6 +302,20 @@ already running under Seatbelt: macOS does not allow nested `sandbox-exec`
 boundaries. Inside the REPL, use `/permissions` to confirm that the installed
 boundary reports `macos-seatbelt sandbox-exec (verified)`.
 
+### Permission model
+
+`permission_profile` is the single configured authorization intent for local
+filesystem, network, environment, process, and external-tool surfaces. The
+sandbox backend translates that intent into an installed boundary and reports
+verifiable facts; configuration alone is never treated as proof of enforcement.
+`--auto` chooses the reviewer for exact deltas, while `--dry-run` independently
+chooses whether calls execute. They can be combined.
+
+Legacy `permission_mode`, `permissions.allow/deny/ask`, `deny_paths`, and
+sandbox-owned network/external policy fields are rejected at startup with a
+canonical replacement. Unrepresentable rules must be rewritten explicitly;
+the migration path never widens authority.
+
 ### Project instructions
 
 OpenHarness owns the loading mechanism; the project where `oh` is started owns
@@ -363,13 +380,17 @@ uv run ruff format --check
 - Hooks and plugins are opt-in trusted, in-process control-plane code. They can
   enforce or rewrite a call, but rewritten final arguments are authorized again
   before dispatch.
-- Isolation remains opt-in. On macOS the Seatbelt backend covers the unified
+- Isolation remains opt-in at startup. On macOS the Seatbelt backend covers the unified
   local data plane with a deny-by-default policy, same-sandbox-only process
   signals, explicit workspace/profile roots, and reported toolchain read
   dependencies. Docker remains an explicitly command-only backend; existing
   protected control paths are read-only binds and missing ones are reserved by
   read-only mounts so the reported boundary cannot be created around later. A
-  non-sandbox posture retains legacy host execution.
+  non-sandbox posture cannot execute local or delegated tools. Autonomous execution
+  (`--auto`, an active Goal, or headless mode) fails before the first model call
+  if any exposed local/delegated capability lacks verified boundary coverage;
+  a no-sandbox read-only catalog is not exempt. Dry-run and pure external/control
+  catalogs do not require a local boundary.
 - Domain-restricted network access is mediated by the managed proxy. Plain HTTP
   binds the `Host` header to the checked absolute URL; public HTTPS CONNECT
   binds cleartext TLS SNI to the checked authority and fails closed when that
@@ -377,15 +398,19 @@ uv run ruff format --check
   explicit profile choices.
 - The `/goal` judge is probabilistic, reads conversation evidence rather than
   operating-system state, fails closed, and is bounded by an explicit turn cap.
-- Permission intent and sandbox enforcement are separate contracts: reviewers
-  receive the original human authorization context, complete active profile,
-  verified boundary facts, exact final arguments, and minimal delta. They can
-  grant one exact overlay only after the replacement boundary proves the same
-  backend and covers the requested effect. Hard denies and unrepresentable
-  boundary violations never reach review. Requests a reviewer cannot resolve
-  are durably parked; the terminal and `/permissions` show their arguments,
-  delta, data flow, and boundary before `/approve` or `/deny`. `/goal` pauses
-  before its judge and resumes only after an explicit decision plus `/resume`.
+- Permission intent and enforcement evidence are separate contracts. Every
+  exact request carries one closed evidence variant: local requests bind the
+  active profile, verified boundary, backend, and final operation; external
+  requests bind the active profile, policy surface, effect/trust facts, and
+  tool/server identity without claiming a local sandbox. Reviewers also receive
+  the original human authorization context, exact final arguments, data flow,
+  and minimal delta. Local grants install one exact overlay only after the
+  replacement boundary proves the same backend and covers the requested
+  effect; external exact grants can be reviewed, parked, and resumed without a
+  local boundary and remain one-shot. Hard denies never reach review. Requests
+  a reviewer cannot resolve are durably parked before `/approve` or `/deny`;
+  `/goal` pauses before its judge and resumes only after an explicit decision
+  plus `/resume`.
 
 ## Design record
 

@@ -84,9 +84,14 @@ def _write(request: dict[str, Any]) -> dict[str, object]:
     )
 
 
-def _atomic_write(path: Path, content: str) -> None:
-    fd, raw_temp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    temp = Path(raw_temp)
+def _atomic_write(path: Path, content: str, *, temp_path: Path | None = None) -> None:
+    if temp_path is None:
+        fd, raw_temp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+        temp = Path(raw_temp)
+    else:
+        temp = temp_path
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(temp, flags, 0o600)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             stream.write(content)
@@ -114,7 +119,9 @@ def _edit(request: dict[str, Any]) -> dict[str, object]:
     replace_all = bool(request.get("replace_all", False))
     count = original.count(old) if replace_all else 1
     updated = original.replace(old, str(request["new_str"]), -1 if replace_all else 1)
-    _atomic_write(path, updated)
+    raw_temp_path = request.get("temp_path")
+    temp_path = Path(str(raw_temp_path)) if raw_temp_path is not None else None
+    _atomic_write(path, updated, temp_path=temp_path)
     return _success(
         f"replaced {count} occurrence(s) in {path}",
         replacements=count,

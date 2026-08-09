@@ -18,20 +18,25 @@ loop runs in <1ms.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import dataclasses
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from engine.conftest import _AllowAllChecker, _StubApiClient
+from engine.conftest import _StubApiClient
 from openharness.engine.context import QueryContext
+from openharness.execution import BoundaryVerification, EnforcedBoundary, ExecutionEffect
+from openharness.permissions import PermissionRuntime, workspace_runtime_profile
 from openharness.protocols import ApiMessageCompleteEvent
 from openharness.tools import SpawnAgent, SpawnAgentInput, ToolRegistry
 from openharness.tools.base import ToolExecutionContext
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from pathlib import Path
 
-    from openharness.protocols import ApiStreamEvent
+    from openharness.execution import SandboxSession
+    from openharness.protocols import ApiStreamEvent, ConversationMessage
 
 
 # --------------------------------------------------------------------------- #
@@ -95,7 +100,6 @@ def _make_parent_context(
     return QueryContext(
         api_client=_StubApiClient(events_per_turn),
         tool_registry=ToolRegistry(),  # no need to register tools for these tests
-        permission_checker=_AllowAllChecker(),
         system_prompt="parent prompt",
         cwd=tmp_path,
         model="qwen-plus",
@@ -195,7 +199,7 @@ class TestSpawnAgentHappyPath:
 
     async def test_sub_agent_inherits_parent_fields(self, tmp_path: Path) -> None:
         # Sub-agent's QueryContext must inherit api_client / tool_registry /
-        # permission_checker / cwd / model from parent. We verify the
+        # canonical profile/boundary / cwd / model from parent. We verify the
         # captured request's model matches the parent's.
         parent_ctx = _make_parent_context(
             events_per_turn=[[_end_turn_with_text("ok")]],
@@ -215,6 +219,63 @@ class TestSpawnAgentHappyPath:
         assert len(stub.captured_requests) == 1
         # Sub-agent used the same model as the parent.
         assert stub.captured_requests[0].model == "qwen-plus"
+
+    async def test_g0_sub_agent_inherits_verified_permission_runtime(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Pin the delegated-runtime coverage path before G7 tightens it."""
+        profile = workspace_runtime_profile()
+        boundary = EnforcedBoundary(
+            profile_fingerprint=profile.fingerprint,
+            backend="g0-recording",
+            backend_version="1",
+            covered_effects=(
+                ExecutionEffect.COMMAND,
+                ExecutionEffect.FILE_READ,
+                ExecutionEffect.FILE_WRITE,
+                ExecutionEffect.FILE_SEARCH,
+            ),
+            verification=BoundaryVerification.VERIFIED,
+        )
+        runtime = PermissionRuntime(profile=profile, boundary=boundary)
+        sandbox_session = cast("SandboxSession", object())
+        parent_ctx = dataclasses.replace(
+            _make_parent_context(
+                events_per_turn=[],
+                tmp_path=tmp_path,
+            ),
+            sandbox_session=sandbox_session,
+            runtime_permission_profile=profile,
+            enforced_boundary=boundary,
+            permission_runtime=runtime,
+        )
+        captured: list[QueryContext] = []
+
+        async def _capture_context(
+            messages: list[ConversationMessage],
+            context: QueryContext,
+        ) -> AsyncIterator[ApiStreamEvent]:
+            del messages
+            captured.append(context)
+            yield _end_turn_with_text("ok")
+
+        monkeypatch.setattr("openharness.tools.spawn_agent.run_query", _capture_context)
+
+        result = await SpawnAgent().execute(
+            SpawnAgentInput(description="capture", prompt="capture"),
+            ToolExecutionContext(cwd=tmp_path, parent_query=parent_ctx),
+        )
+
+        assert result.is_error is False
+        assert len(captured) == 1
+        child = captured[0]
+        assert child.tool_registry is parent_ctx.tool_registry
+        assert child.sandbox_session is sandbox_session
+        assert child.runtime_permission_profile is profile
+        assert child.enforced_boundary is boundary
+        assert child.permission_runtime is runtime
 
     async def test_sub_agent_system_prompt_override(self, tmp_path: Path) -> None:
         parent_ctx = _make_parent_context(
@@ -330,7 +391,6 @@ class TestSpawnAgentLoopLimit:
                 ],
             ),
             tool_registry=registry,
-            permission_checker=_AllowAllChecker(),
             system_prompt="",
             cwd=tmp_path,
             model="qwen-plus",

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from engine.conftest import _AllowAllChecker, _StubApiClient
+from engine.conftest import _StubApiClient
 from openharness.protocols import (
     ApiMessageCompleteEvent,
     ConversationMessage,
@@ -64,7 +64,6 @@ async def test_query_context_and_run_query_compose_via_public_path() -> None:
     ctx = QueryContext(
         api_client=client,
         tool_registry=ToolRegistry(),
-        permission_checker=_AllowAllChecker(),
         system_prompt="",
         cwd=Path("/tmp"),
         model="qwen-plus",

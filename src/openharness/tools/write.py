@@ -3,13 +3,10 @@
 Creates or overwrites a text file. Per D9.1:relative paths resolve
 against ``context.cwd``;absolute paths are used as-is.
 
-The **project-root scope guard** that used to live in this file is gone
-as of P3-T3.3f. The Tier 3 mode-based check in
-:class:`TierBasedPermissionChecker` runs before ``execute`` and returns
-``DecisionResult.ask`` for paths outside cwd —— single-point enforcement,
-framework-side, with ASK semantics that ``--auto`` can override.
-Same migration as Edit;principle (avoid double-defense, single source of
-truth for boundary policy) is universal.
+The **project-root scope guard** that used to live in this file is gone.
+The canonical profile is installed and verified as a sandbox boundary before
+``execute``; an exact delta can be reviewed without turning tool-local path
+checks into a second authorization system.
 """
 
 from __future__ import annotations
@@ -20,7 +17,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from openharness.execution import FileWriteOperation
+from openharness.execution import ExecutionEffect, FileWriteOperation
 from openharness.tools.base import (
     BaseTool,
     ExecutionDomain,
@@ -43,6 +40,7 @@ class Write(BaseTool[WriteInput]):
     """Create or overwrite a text file."""
 
     execution_domain = ExecutionDomain.LOCAL_DATA
+    required_execution_effect = ExecutionEffect.FILE_WRITE
     name = "Write"
     description = (
         "Write text content to a file (UTF-8). Creates the file if absent, "
@@ -65,7 +63,7 @@ class Write(BaseTool[WriteInput]):
             return tool_result_from_operation(sandbox_result)
 
         # P3-T3.3f:project-root scope check moved to AuthZ Tier 3
-        # (TierBasedPermissionChecker) — Write no longer double-checks here.
+        # The verified dispatch boundary is authoritative; Write does not duplicate it.
         # Same migration as Edit;principle (single-point enforcement) is universal.
         if path.exists() and path.is_dir():
             return ToolResult(

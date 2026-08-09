@@ -1,7 +1,7 @@
 """``Bundle`` dataclass + ``parse_bundle`` frontmatter parser — P5d-T1.
 
 Per ``decisions/17-phase-5d-boundary.md`` D19.1 / D19.2:a bundle is a
-markdown file with YAML frontmatter declaring up to 4 cross-layer
+markdown file with YAML frontmatter declaring up to 3 cross-layer
 overrides. All override fields are optional — a bundle with only
 ``system_prompt`` is valid.
 
@@ -15,9 +15,6 @@ overrides. All override fields are optional — a bundle with only
       Never modify files.
     tools:
       whitelist: [Read, Grep, LoadSkill]
-    deny_paths:
-      - secrets/**
-      - "*.env"
     hooks:
       - audit_log
       - deny_writes
@@ -25,7 +22,7 @@ overrides. All override fields are optional — a bundle with only
 
 P8 refactor: the duplicated outer scaffolding lives in
 :mod:`openharness.markdown_store`. This module keeps the
-:class:`Bundle` dataclass + the bundle-specific 4-layer field
+:class:`Bundle` dataclass + the bundle-specific 3-layer field
 extraction only.
 """
 
@@ -45,15 +42,13 @@ _logger = get_logger("bundles")
 
 @dataclass(frozen=True)
 class Bundle:
-    """A 4-layer composition unit discovered from the filesystem.
+    """A 3-layer composition unit discovered from the filesystem.
 
     Field semantics(per D19.1):
 
     - ``system_prompt``:override ``QueryContext.system_prompt`` (Layer 1)
     - ``tools_whitelist``:if non-empty,wrap registry to expose only
       these tool names (Layer 2)
-    - ``deny_paths``:additional patterns merged into ``Settings.deny_paths``
-      for AuthZ Tier 2 (Layer 3)
     - ``hook_names``:names of hooks from ``BUILTIN_HOOKS`` to register
       on this query (Layer 3)
     """
@@ -62,7 +57,6 @@ class Bundle:
     description: str
     system_prompt: str | None
     tools_whitelist: tuple[str, ...] | None
-    deny_paths: tuple[str, ...]
     hook_names: tuple[str, ...]
     source_path: Path
 
@@ -123,14 +117,18 @@ def parse_bundle(path: Path) -> Bundle | None:
                 return None
             whitelist = tuple(wl_raw)
 
-    # Layer 3a: optional deny_paths (list of strings).
-    dp_raw = parsed.get("deny_paths", [])
-    if not isinstance(dp_raw, list) or not all(isinstance(p, str) for p in dp_raw):
-        _logger.warning("bundle_invalid_deny_paths", source_path=str(path), name=name)
+    # Removed authorization overlays must fail visibly. Ignoring this field
+    # would silently widen a bundle that its author believed was constrained.
+    if "deny_paths" in parsed:
+        _logger.warning(
+            "bundle_legacy_deny_paths",
+            source_path=str(path),
+            name=name,
+            replacement="permission_profile.filesystem.rules",
+        )
         return None
-    deny_paths = tuple(dp_raw)
 
-    # Layer 3b: optional hooks (list of strings).
+    # Layer 3: optional hooks (list of strings).
     hooks_raw = parsed.get("hooks", [])
     if not isinstance(hooks_raw, list) or not all(isinstance(h, str) for h in hooks_raw):
         _logger.warning("bundle_invalid_hooks", source_path=str(path), name=name)
@@ -143,7 +141,6 @@ def parse_bundle(path: Path) -> Bundle | None:
             description=description,
             system_prompt=system_prompt,
             tools_whitelist=whitelist,
-            deny_paths=deny_paths,
             hook_names=hook_names,
             source_path=path,
         )

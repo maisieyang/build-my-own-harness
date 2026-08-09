@@ -12,11 +12,13 @@ from openharness.execution import (
     CommandOperation,
     EnforcedBoundary,
     ExecutionEffect,
+    FileEditOperation,
     OneShotOverlaySession,
     OperationCompleted,
 )
 from openharness.permissions import (
     FilesystemAccess,
+    FilesystemScope,
     PermissionDelta,
     PermissionDeltaRequest,
     PermissionFilesystemAccess,
@@ -226,6 +228,81 @@ async def test_filesystem_read_overlay_does_not_expand_to_write() -> None:
     await session.execute(operation)
 
     assert backend.opened[0].profile.filesystem.rules[0].access is FilesystemAccess.READ
+
+
+@pytest.mark.asyncio
+async def test_edit_overlay_grants_only_target_and_request_bound_atomic_tempfile() -> None:
+    class _EditSession(_Session):
+        executed_operation: object | None = None
+
+        @property
+        def boundary(self) -> EnforcedBoundary:
+            return EnforcedBoundary(
+                profile_fingerprint=self.profile.fingerprint,
+                backend="fake",
+                backend_version="1",
+                covered_effects=(ExecutionEffect.FILE_WRITE,),
+                verification=BoundaryVerification.VERIFIED,
+            )
+
+        async def execute(self, operation: object) -> OperationCompleted:
+            self.executed_operation = operation
+            return await super().execute(operation)
+
+    class _EditViolation(_EditSession):
+        async def execute(self, operation: object) -> BoundaryViolation:
+            del operation
+            self.calls += 1
+            return BoundaryViolation(
+                dimension="filesystem.write",
+                requested="/outside/note.txt",
+                evidence="outside base profile",
+            )
+
+    class _EditBackend(_Backend):
+        async def open(self, profile: RuntimePermissionProfile) -> _Session:
+            session = _EditSession(profile)
+            self.opened.append(session)
+            return session
+
+    profile = RuntimePermissionProfile(name="base")
+    base = _EditViolation(profile)
+    backend = _EditBackend()
+    session = OneShotOverlaySession(backend=backend, profile=profile, base=base)
+    operation = FileEditOperation(
+        path=Path("/outside/note.txt"),
+        old_str="old",
+        new_str="new",
+    )
+    crossing = await session.execute(operation)
+    assert isinstance(crossing, BoundaryViolation)
+    request = PermissionDeltaRequest.create(
+        tool_use_id="edit-tool-1",
+        tool_name="Edit",
+        final_arguments={
+            "path": "/outside/note.txt",
+            "old_str": "old",
+            "new_str": "new",
+            "replace_all": False,
+        },
+        profile=profile,
+        boundary=base.boundary,
+        delta=PermissionDelta.filesystem_path("/outside/note.txt"),
+        crossing=crossing,
+    )
+    session.arm(request)
+
+    await session.execute(operation)
+
+    executed = backend.opened[0]
+    rules = executed.profile.filesystem.rules
+    assert rules[0].path == "/outside/note.txt"
+    assert rules[0].scope is FilesystemScope.EXACT
+    expected_temp = operation.path.parent / f".note.txt.openharness-{request.request_id[:16]}.tmp"
+    assert rules[1].path == str(expected_temp)
+    assert rules[1].scope is FilesystemScope.EXACT
+    assert isinstance(executed.executed_operation, FileEditOperation)
+    assert executed.executed_operation.temp_path == expected_temp
 
 
 @pytest.mark.asyncio

@@ -233,7 +233,7 @@ class TestToolDispatchTrustSourceField:
     async def test_trust_source_field_for_local_tool(self, log_stream: io.StringIO) -> None:
         from typing import cast
 
-        from engine.conftest import _AllowAllChecker, _StubApiClient
+        from engine.conftest import _StubApiClient
         from openharness.api import SupportsStreamingMessages  # noqa: TC001
         from openharness.engine import QueryContext, run_query
         from openharness.protocols.content import TextBlock
@@ -278,7 +278,6 @@ class TestToolDispatchTrustSourceField:
         ctx = QueryContext(
             api_client=cast("SupportsStreamingMessages", stub),
             tool_registry=registry,
-            permission_checker=_AllowAllChecker(),
             system_prompt="t",
             cwd=Path("/tmp"),
             model="qwen-plus",
@@ -301,7 +300,7 @@ class TestToolDispatchTrustSourceField:
         reflects the trust whitelist at construction time."""
         from typing import cast
 
-        from engine.conftest import _AllowAllChecker, _StubApiClient
+        from engine.conftest import _StubApiClient
         from openharness.api import SupportsStreamingMessages  # noqa: TC001
         from openharness.engine import QueryContext, run_query
         from openharness.mcp import McpClient, McpToolAdapter
@@ -353,7 +352,6 @@ class TestToolDispatchTrustSourceField:
             ctx = QueryContext(
                 api_client=cast("SupportsStreamingMessages", stub),
                 tool_registry=registry,
-                permission_checker=_AllowAllChecker(),
                 system_prompt="t",
                 cwd=Path("/tmp"),
                 model="qwen-plus",

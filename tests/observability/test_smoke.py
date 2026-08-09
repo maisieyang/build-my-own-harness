@@ -37,7 +37,7 @@ from openharness.protocols.content import TextBlock
 from openharness.protocols.messages import ConversationMessage
 from openharness.protocols.stream_events import ApiMessageCompleteEvent
 from openharness.protocols.usage import UsageSnapshot
-from openharness.tools import ToolRegistry
+from openharness.tools import ExecutionDomain, ToolRegistry
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -114,7 +114,10 @@ def _fake_tool_registry() -> ToolRegistry:
     from tools.conftest import _FakeTool
 
     registry = ToolRegistry()
-    registry.register(_FakeTool())
+    tool = _FakeTool()
+    # Synthetic in-process fixture: observability is the subject under test.
+    tool.execution_domain = ExecutionDomain.TRUSTED_CONTROL
+    registry.register(tool)
     return registry
 
 

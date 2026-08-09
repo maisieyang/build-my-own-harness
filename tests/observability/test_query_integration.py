@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
-from engine.conftest import _AllowAllChecker, _StubApiClient
+from engine.conftest import _StubApiClient
 from openharness.engine.context import QueryContext
 from openharness.engine.errors import LoopLimitExceeded
 from openharness.engine.query import run_query
@@ -130,7 +130,6 @@ def _make_context(
     return QueryContext(
         api_client=cast("SupportsStreamingMessages", api_client),
         tool_registry=tool_registry,
-        permission_checker=_AllowAllChecker(),
         system_prompt="test harness",
         cwd=cwd if cwd is not None else Path("/tmp"),
         model="qwen-plus",
@@ -334,7 +333,7 @@ class TestToolInputSanitization:
             path: str
 
         class _PathTool(BaseTool[PathInput]):
-            execution_domain = ExecutionDomain.LOCAL_DATA
+            execution_domain = ExecutionDomain.TRUSTED_CONTROL
             name = "PathTool"
             description = "Stub"
             input_model = PathInput
@@ -406,7 +405,7 @@ class TestToolInputSanitization:
             command: str
 
         class _CmdTool(BaseTool[CmdInput]):
-            execution_domain = ExecutionDomain.LOCAL_DATA
+            execution_domain = ExecutionDomain.TRUSTED_CONTROL
             name = "CmdTool"
             description = "Stub"
             input_model = CmdInput

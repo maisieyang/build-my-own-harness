@@ -9,7 +9,7 @@ assistant text, and returns it as a single :class:`ToolResult`.
 
 The cross-cutting invariant: this is the **third tenant test** of
 Phase 3's abstraction (after MCP / Skills). Engine dispatch loop /
-permission checker / hook chain / observability layer all see ``Agent``
+authorization boundary / hook chain / observability layer all see ``Agent``
 exactly like they see ``Read`` — the fact that ``execute`` internally
 re-enters ``run_query`` is an implementation detail of this one
 ``BaseTool`` subclass.
@@ -141,9 +141,10 @@ class SpawnAgent(BaseTool[SpawnAgentInput]):
 
         # 3. Build sub-context. ``dataclasses.replace`` inherits every parent
         # field unless explicitly overridden — same api_client, same
-        # tool_registry, same permission_checker, same hook_registry, same
+        # tool_registry, same canonical profile/boundary, same hook_registry, same
         # skill_store, same cwd, same model, same max_tokens, same
-        # permission_mode. Only the three fields per D16.2 change.
+        # reviewer/execution postures. Only the
+        # three fields per D16.2 change.
         sub_context = dataclasses.replace(
             parent,
             system_prompt=self._sub_system_prompt

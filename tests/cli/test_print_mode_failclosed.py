@@ -1,18 +1,4 @@
-"""loop-runtime L2 · review-fix [1] — headless fail-closed must be WIRED (RED).
-
-The L2 unit tests construct ``TierBasedPermissionChecker(..., headless=True)``
-directly, so they never exercised the CLI wiring. The high-effort code review
-found the central guarantee inert: `oh -p` builds the checker with the default
-``headless=False`` (cli.py:833 passes no ``headless=``), so a mutating tool with
-no allow rule is ALLOWED in production despite the plan promising fail-closed.
-
-These end-to-end tests drive the real ``ask`` command via CliRunner (only the
-API client is stubbed) and assert through ``--output-format stream-json`` —
-``-p`` text mode prints only the final turn's text, but stream-json emits every
-``tool_completed`` event, so the permission-denied tool result is observable.
-
-Should be RED now: [1] (no headless wiring) + [5] (permissions env crashes load).
-"""
+"""Headless contained writes execute through a verified boundary."""
 
 from __future__ import annotations
 
@@ -77,10 +63,12 @@ def _tool_completed_lines(stdout: str) -> list[dict]:
 
 
 class TestPrintModeFailClosedWired:
-    def test_headless_denies_mutating_without_allow(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # The central L2 guarantee: `oh -p` + mutating Write + no allow rule
-        # → the tool is DENIED (fail-closed), surfaced as a tool_completed
-        # error carrying the fail-closed reason.
+    def test_headless_verified_boundary_authorizes_contained_write(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        verified_seatbelt_backend: None,
+    ) -> None:
+        del verified_seatbelt_backend
         _set_minimum_env(monkeypatch)
         stub = _StubApiClient(
             events_per_turn=[
@@ -94,23 +82,32 @@ class TestPrintModeFailClosedWired:
         with runner.isolated_filesystem():
             result = runner.invoke(
                 cli_module.app,
-                ["ask", "-p", "--output-format", "stream-json", "write notes.txt"],
+                [
+                    "ask",
+                    "-p",
+                    "--sandbox",
+                    "--sandbox-backend",
+                    "seatbelt",
+                    "--output-format",
+                    "stream-json",
+                    "write notes.txt",
+                ],
             )
 
         assert result.exit_code == 0, result.stderr
         completed = _tool_completed_lines(result.stdout)
         assert completed, "expected a tool_completed event in stream-json output"
-        assert any(ev["is_error"] and "fail-closed" in ev["output"] for ev in completed), (
-            f"expected a fail-closed denial, got: {completed}"
-        )
+        assert all(not ev["is_error"] for ev in completed)
 
     def test_headless_allows_mutating_with_allow_rule(
-        self, monkeypatch: pytest.MonkeyPatch
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        verified_seatbelt_backend: None,
     ) -> None:
-        # With an explicit allow rule (set via the documented env var, which
-        # must parse — exercises [5] too), the same Write is permitted.
+        del verified_seatbelt_backend
+        # The canonical workspace profile contains this Write and the verified
+        # boundary enforces the same profile.
         _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("OPENHARNESS_PERMISSIONS__ALLOW", "Write(*)")
         stub = _StubApiClient(
             events_per_turn=[
                 [_write_tool_use_turn(path="notes.txt")],
@@ -123,7 +120,16 @@ class TestPrintModeFailClosedWired:
         with runner.isolated_filesystem():
             result = runner.invoke(
                 cli_module.app,
-                ["ask", "-p", "--output-format", "stream-json", "write notes.txt"],
+                [
+                    "ask",
+                    "-p",
+                    "--sandbox",
+                    "--sandbox-backend",
+                    "seatbelt",
+                    "--output-format",
+                    "stream-json",
+                    "write notes.txt",
+                ],
             )
 
         assert result.exit_code == 0, result.stderr

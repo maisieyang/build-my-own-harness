@@ -49,7 +49,8 @@ class TestBareEntry:
         assert result.exit_code == 0
         # Same defaults as an argless ``oh chat`` invocation.
         assert captured["model_override"] is None
-        assert captured["permission_mode_override"] is None
+        assert captured["reviewer_posture_override"] is None
+        assert captured["execution_posture_override"] is None
         assert captured["sandbox_backend_override"] is None
         assert captured["resume"] is False
 

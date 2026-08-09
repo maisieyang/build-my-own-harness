@@ -11,7 +11,6 @@ Constraints (enforced by the `read-only` bundle, not by prompt
 discipline alone):
 
 - You can ONLY use Read / Grep — no Write / Edit / Bash.
-- `secrets/**` and `*.env` are blocked at the permission layer.
 - Every tool dispatch is logged with `event=audit_tool_complete`
   (run with `OPENHARNESS_LOG_FORMAT=json` to see).
 

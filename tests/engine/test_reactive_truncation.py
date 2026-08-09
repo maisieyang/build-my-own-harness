@@ -24,7 +24,6 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
-from engine.conftest import _AllowAllChecker
 from openharness.api.errors import PromptTooLongFailure
 from openharness.engine.context import QueryContext
 from openharness.engine.query import _REACTIVE_TRUNCATE_MAX, run_query
@@ -120,7 +119,6 @@ def _make_context(client: object) -> QueryContext:
     return QueryContext(
         api_client=cast("SupportsStreamingMessages", client),
         tool_registry=ToolRegistry(),
-        permission_checker=_AllowAllChecker(),
         system_prompt="t",
         cwd=Path("/tmp"),
         model="qwen-plus",

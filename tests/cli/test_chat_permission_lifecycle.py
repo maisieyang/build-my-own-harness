@@ -245,12 +245,26 @@ def test_chat_resume_refuses_boundary_drift_and_missing_sandbox(
     from openharness.permissions import PermissionRuntime
 
     runtime = PermissionRuntime(profile=session.profile, boundary=session.boundary)
+    request = PermissionDeltaRequest.create(
+        tool_use_id="tool-local",
+        tool_name="Bash",
+        final_arguments={"command": "curl https://example.com"},
+        profile=session.profile,
+        boundary=session.boundary,
+        delta=PermissionDelta.network_domain("example.com"),
+        crossing=BoundaryViolation(
+            dimension="network.domain",
+            requested="example.com:443",
+            evidence="not in allowlist",
+        ),
+    )
+    runtime.park(request, reason="local approval pending")
     snapshot = _snapshot_with_runtime(runtime)
     monkeypatch.setattr(cli_module, "_load_resume_snapshot", lambda *a, **kw: snapshot)
 
     missing = CliRunner().invoke(cli_module.app, ["chat", "--resume"])
     assert missing.exit_code == 1
-    assert "no verified sandbox boundary" in missing.stderr
+    assert "local boundary" in missing.stderr
 
     monkeypatch.setenv("OPENHARNESS_SANDBOX_ENABLED", "true")
     drifted = _Session()
@@ -269,4 +283,4 @@ def test_chat_resume_refuses_boundary_drift_and_missing_sandbox(
     monkeypatch.setattr(cli_module, "_open_sandbox_session", _open)
     drift = CliRunner().invoke(cli_module.app, ["chat", "--resume"])
     assert drift.exit_code == 1
-    assert "boundary drift" in drift.stderr
+    assert "drift" in drift.stderr

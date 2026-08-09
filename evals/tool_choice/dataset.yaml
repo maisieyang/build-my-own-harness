@@ -1,11 +1,12 @@
 # tool_choice eval dataset — capability-anchored (D41 P0, surface #2 A3/A4)
 #
-# 9 cases across 5 capabilities:
+# 11 cases across 6 capabilities:
 #   TC1 selection       — right tool for the task
 #   TC2 discrimination  — near-synonym tools (Grep vs Bash-grep, Edit vs Write)
 #   TC3 param           — input field construction quality
 #   TC4 self-correction — planted unknown-tool error, next call must recover
 #   TC5 restraint       — no tool call for conversational input (contract E#2)
+#   TC6 plan shaping    — read-only exploration without mutation/delegation
 #
 # Schema: openharness.eval.tool_choice.load_tool_choice_dataset() decodes
 # this into list[ToolChoiceSample]. expected_tool null = assert NO tool call.
@@ -168,3 +169,34 @@ samples:
     expected_input_contains: {}
     forbidden_tools: []
     notes: "寒暄不该触发任何工具(system prompt 契约:don't invoke tools for greetings)。"
+
+  # ===== TC6 — plan capability shaping =====
+  - case_id: TC6-plan-read
+    capability: TC6
+    shape: plan-single-user-msg
+    tool_posture: plan
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "先读一下 pyproject.toml，帮我规划 Python 版本升级要改哪些地方"
+    expected_tool: Read
+    expected_input_contains:
+      path: ["pyproject.toml"]
+    forbidden_tools: [Write, Edit, Bash, Agent]
+    notes: "plan catalog 仍应允许必要的只读探索，但不暴露 mutation/delegation。"
+
+  - case_id: TC6-plan-mutation-restraint
+    capability: TC6
+    shape: plan-single-user-msg
+    tool_posture: plan
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "把 README.md 的 quickstart 改成 Quick Start"
+    expected_tool: Read
+    expected_input_contains:
+      path: ["README.md"]
+    forbidden_tools: [Write, Edit, Bash, Agent]
+    notes: "plan mode 可读取目标文件形成可靠计划，但不能制造不存在的 mutation/delegation call。"

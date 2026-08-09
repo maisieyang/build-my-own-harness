@@ -28,6 +28,7 @@ from pydantic import BaseModel
 
 from openharness.execution.boundary import (
     BoundaryViolation,
+    ExecutionEffect,
     ExecutionFailed,
     ExecutionResult,
     OperationCompleted,
@@ -222,9 +223,14 @@ class BaseTool(ABC, Generic[InputT]):
     # S1 boundary coverage contract. Registration rejects the sentinel so a
     # new model-callable surface cannot silently inherit host authority.
     execution_domain: ExecutionDomain = ExecutionDomain.UNDECLARED
+    # Direct local tools declare the sandbox effect their structured
+    # operation requires. This is dispatch coverage metadata, not a claim
+    # about the fine-grained effects of an arbitrary Bash command.
+    required_execution_effect: ExecutionEffect | None = None
     external_effect_surface: ExternalEffectSurface | None = None
     external_effect_kind: ExternalEffectKind | None = None
     external_effect_trusted: bool = False
+    external_server_identity: str | None = None
 
     @abstractmethod
     async def execute(

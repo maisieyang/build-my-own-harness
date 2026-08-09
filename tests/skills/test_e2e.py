@@ -22,7 +22,6 @@ import inspect
 from typing import TYPE_CHECKING, Any
 
 from openharness.engine import QueryContext, run_query
-from openharness.permissions import DecisionResult
 from openharness.prompts import EnvironmentInfo, build_system_prompt
 from openharness.protocols import (
     ApiMessageCompleteEvent,
@@ -37,10 +36,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
 
-    from pydantic import BaseModel
-
     from openharness.protocols import ApiMessageRequest, ApiStreamEvent
-    from openharness.tools.base import ToolExecutionContext
 
 
 # --------------------------------------------------------------------------- #
@@ -70,17 +66,6 @@ class _StubLlmClient:
         self._turn += 1
         for event in events:
             yield event
-
-
-class _AllowAllChecker:
-    def evaluate(
-        self,
-        tool_name: str,
-        args: BaseModel,
-        context: ToolExecutionContext,
-    ) -> DecisionResult:
-        del tool_name, args, context
-        return DecisionResult.allow()
 
 
 # --------------------------------------------------------------------------- #
@@ -182,7 +167,6 @@ class TestSkillsEndToEnd:
         context = QueryContext(
             api_client=client,
             tool_registry=registry,
-            permission_checker=_AllowAllChecker(),
             system_prompt=system_prompt,
             cwd=tmp_path,
             model="qwen-plus",
@@ -259,7 +243,6 @@ class TestSkillsEndToEnd:
         context = QueryContext(
             api_client=client,
             tool_registry=registry,
-            permission_checker=_AllowAllChecker(),
             system_prompt=system_prompt,
             cwd=tmp_path,
             model="qwen-plus",
@@ -317,8 +300,6 @@ class TestCrossCuttingInvariant:
     """
 
     _PROTECTED_MODULES = (
-        "openharness.permissions.checker",
-        "openharness.permissions.tier_based",
         "openharness.hooks.executor",
         "openharness.engine.query",
         "openharness.observability.logging",

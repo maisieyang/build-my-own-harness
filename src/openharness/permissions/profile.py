@@ -28,6 +28,13 @@ class FilesystemAccess(str, Enum):
     DENY = "deny"
 
 
+class FilesystemScope(str, Enum):
+    """Whether a filesystem rule targets one path or an entire subtree."""
+
+    EXACT = "exact"
+    SUBTREE = "subtree"
+
+
 def _normalize_policy_path(value: str) -> str:
     normalized = posixpath.normpath(value.replace("\\", "/"))
     if normalized == "":
@@ -38,6 +45,7 @@ def _normalize_policy_path(value: str) -> str:
 class FilesystemRule(_FrozenModel):
     path: str = Field(min_length=1)
     access: FilesystemAccess
+    scope: FilesystemScope = FilesystemScope.SUBTREE
 
     def normalized_path(self) -> str:
         return _normalize_policy_path(self.path)
@@ -49,16 +57,17 @@ class FilesystemPolicy(_FrozenModel):
 
     @model_validator(mode="after")
     def reject_conflicting_rules(self) -> FilesystemPolicy:
-        seen: dict[str, FilesystemAccess] = {}
+        seen: dict[tuple[str, FilesystemScope], FilesystemAccess] = {}
         for rule in self.rules:
             path = rule.normalized_path()
-            previous = seen.get(path)
+            key = (path, rule.scope)
+            previous = seen.get(key)
             if previous is not None and previous is not rule.access:
                 raise ValueError(
-                    f"conflicting filesystem rules for {path!r}: "
+                    f"conflicting filesystem rules for {path!r} ({rule.scope.value}): "
                     f"{previous.value} and {rule.access.value}"
                 )
-            seen[path] = rule.access
+            seen[key] = rule.access
         return self
 
 
@@ -161,13 +170,14 @@ class RuntimePermissionProfile(_FrozenModel):
     def normalized(self) -> dict[str, Any]:
         """Return deterministic, order-insensitive policy data."""
         data = self.model_dump(mode="json")
-        data["filesystem"]["rules"] = sorted(
-            (
-                {"path": rule.normalized_path(), "access": rule.access.value}
-                for rule in self.filesystem.rules
-            ),
-            key=lambda item: (item["path"], item["access"]),
-        )
+        normalized_rules = {
+            (rule.normalized_path(), rule.access.value, rule.scope.value)
+            for rule in self.filesystem.rules
+        }
+        data["filesystem"]["rules"] = [
+            {"path": path, "access": access, "scope": scope}
+            for path, access, scope in sorted(normalized_rules)
+        ]
         data["network"]["allow_domains"] = _sorted_unique(self.network.allow_domains, lower=True)
         data["network"]["deny_domains"] = _sorted_unique(self.network.deny_domains, lower=True)
         data["network"]["allow_unix_sockets"] = _sorted_unique(self.network.allow_unix_sockets)

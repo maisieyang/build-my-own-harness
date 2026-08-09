@@ -36,8 +36,6 @@ class TestPhase6CrossCuttingInvariant:
     """
 
     _PROTECTED_MODULES = (
-        "openharness.permissions.checker",
-        "openharness.permissions.tier_based",
         "openharness.hooks.executor",
         "openharness.hooks.registry",
         "openharness.mcp.client",

@@ -29,11 +29,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.history import FileHistory
 
-from openharness.permissions.rules import (
-    PermissionRules,
-    plan_mode_preset,
-)
-from openharness.tools import ExternalEffectSurface
+from openharness.tools import ExecutionDomain, ExternalEffectSurface, ToolRegistry
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -48,7 +44,6 @@ if TYPE_CHECKING:
         RuntimePermissionProfile,
     )
     from openharness.protocols.messages import ConversationMessage
-    from openharness.tools import ExecutionDomain
 
 
 @dataclass(frozen=True)
@@ -107,10 +102,8 @@ BUILTIN_SLASH_COMMANDS: tuple[SlashCommand, ...] = (
 class ChatMode(Enum):
     """REPL posture: the ground state vs the plan-mode clamp (D47).
 
-    Deliberately NOT a :class:`~openharness.permissions.PermissionMode` value —
-    plan mode is a rules-preset overlay ("收编为规则预设" stance, D47.1), and
-    it lives only in REPL memory (D47.7: not persisted; a dead session falls
-    back to the ground state).
+    Plan mode is a tool-catalog clamp, not authorization intent. It lives only
+    in REPL memory; a dead session falls back to the ground state.
     """
 
     DEFAULT = "default"
@@ -123,6 +116,21 @@ class PlanMenuChoice(Enum):
     APPROVE = "1"
     KEEP_PLANNING = "2"
     DISCARD = "3"
+
+
+def shape_plan_tool_registry(base: ToolRegistry) -> ToolRegistry:
+    """Return the model-visible plan catalog without widening authority.
+
+    Plan mode exposes only read-only, non-delegated tools. The returned view
+    contains the original tool instances so execution behavior stays
+    identical, while the caller retains the full registry for forged-call
+    detection at dispatch.
+    """
+    shaped = ToolRegistry()
+    for tool in base.list_tools():
+        if tool.is_read_only and tool.execution_domain is not ExecutionDomain.DELEGATED_RUNTIME:
+            shaped.register(tool)
+    return shaped
 
 
 # Rendered by the harness after every assistant turn while in plan mode.
@@ -171,25 +179,6 @@ def parse_plan_menu_choice(raw: str) -> PlanMenuChoice | None:
         if stripped == choice.value:
             return choice
     return None
-
-
-def overlay_plan_permissions(
-    base: PermissionRules,
-    *,
-    mode: ChatMode,
-    grant: PlanMenuChoice | None,
-) -> PermissionRules:
-    """Turn-scoped permission overlay for the plan state machine.
-
-    - ``mode=PLAN`` → append :func:`plan_mode_preset` to ``deny`` (the clamp;
-      engine precedence deny > allow keeps it authoritative over any allow).
-    - Anything else → ``base`` unchanged (identity, so the ground state stays
-      byte-for-byte on the pre-plan code path).
-    """
-    del grant
-    if mode is ChatMode.PLAN:
-        return base.model_copy(update={"deny": (*base.deny, *plan_mode_preset())})
-    return base
 
 
 # --------------------------------------------------------------------------- #
@@ -464,14 +453,12 @@ def format_permissions_status(
     external_surfaces: Mapping[ExternalEffectSurface, tuple[str, ...]],
     mcp_server_postures: Mapping[str, str],
     trusted_control_status: Mapping[str, str],
-    legacy_mode: str,
     parked_request: PermissionDeltaRequest | None = None,
 ) -> str:
     """Render configured permission intent separately from enforced facts.
 
-    S1 intentionally has no compiler wired into execution yet.  Reporting
-    ``none`` is therefore a security property: the UI must not imply that a
-    configured profile, Docker class, or legacy mode has become enforcement.
+    Configured intent and installed enforcement are shown separately so the UI
+    never implies that an unverified profile has become runtime authority.
     """
     lines = ["Configured intent"]
     if profile is None:
@@ -479,7 +466,6 @@ def format_permissions_status(
     else:
         lines.append(f"  canonical profile: {profile.name}")
         lines.append(f"  profile fingerprint: {profile.fingerprint[:12]}")
-    lines.append(f"  legacy mode: {legacy_mode}")
     lines.append(
         "  external policy (independent of local sandbox): "
         f"mcp={external_policy.mcp.value}, web={external_policy.web.value}, "

@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from engine.conftest import _AllowAllChecker, _StubApiClient
+from engine.conftest import _StubApiClient
 from openharness.engine.context import QueryContext
 from openharness.engine.errors import LoopLimitExceeded
 from openharness.engine.query import run_query
@@ -39,6 +39,8 @@ from openharness.protocols import (
 from openharness.tools import ExecutionDomain, ToolRegistry
 
 if TYPE_CHECKING:
+    from pydantic import BaseModel
+
     from openharness.api import OpenAICompatibleApiClient
     from openharness.protocols import ApiStreamEvent
 
@@ -85,7 +87,6 @@ def _make_context(
     return QueryContext(
         api_client=cast("OpenAICompatibleApiClient", api_client),
         tool_registry=tool_registry if tool_registry is not None else ToolRegistry(),
-        permission_checker=_AllowAllChecker(),
         system_prompt="you are a test harness",
         cwd=Path("/tmp"),
         model="qwen-plus",
@@ -347,6 +348,91 @@ class TestRunQueryRecoveryPaths:
         assert completed.is_error is True
         assert "tool not found: Ghost" in completed.output
 
+    async def test_forged_hidden_tool_is_denied_by_action_policy_before_execution(
+        self,
+    ) -> None:
+        from openharness.permissions import ActionDenyKind, DenyResult
+        from openharness.tools import ToolExecutionContext
+
+        class _PlanPolicy:
+            def evaluate(
+                self,
+                tool_name: str,
+                args: BaseModel,
+                context: ToolExecutionContext,
+            ) -> DenyResult | None:
+                del args, context
+                if tool_name == "Fake":
+                    return DenyResult(
+                        kind=ActionDenyKind.PLAN_CAPABILITY,
+                        reason="tool is not exposed in plan mode",
+                    )
+                return None
+
+        client = _StubApiClient(
+            events_per_turn=[
+                [_fake_tool_use_event(tool_input={"value": "must not execute"})],
+                [_end_turn_event()],
+            ],
+        )
+        visible_registry = ToolRegistry()
+        dispatch_registry = _registry_with_fake_tool()
+        context = _make_context(api_client=client, tool_registry=visible_registry)
+        context = dataclasses.replace(
+            context,
+            dispatch_tool_registry=dispatch_registry,
+            action_deny_policy=_PlanPolicy(),
+        )
+
+        events = [
+            event
+            async for event in run_query(
+                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+                context,
+            )
+        ]
+
+        assert client.captured_requests[0].tools is None
+        completed = next(
+            event for event in events if isinstance(event, ToolExecutionCompletedEvent)
+        )
+        assert completed.is_error is True
+        assert completed.output == "action denied: tool is not exposed in plan mode"
+
+    async def test_action_policy_failure_denies_instead_of_failing_open(self) -> None:
+        class _BrokenPolicy:
+            def evaluate(self, *_args: object, **_kwargs: object) -> None:
+                raise RuntimeError("sensitive arguments must not reach logs")
+
+        client = _StubApiClient(
+            events_per_turn=[
+                [_fake_tool_use_event(tool_input={"value": "must not execute"})],
+                [_end_turn_event()],
+            ],
+        )
+        context = _make_context(
+            api_client=client,
+            tool_registry=_registry_with_fake_tool(),
+        )
+        context = dataclasses.replace(
+            context,
+            action_deny_policy=_BrokenPolicy(),  # type: ignore[arg-type]
+        )
+
+        events = [
+            event
+            async for event in run_query(
+                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+                context,
+            )
+        ]
+
+        completed = next(
+            event for event in events if isinstance(event, ToolExecutionCompletedEvent)
+        )
+        assert completed.output == "action denied: action policy evaluation failed"
+        assert completed.is_error is True
+
     async def test_validation_error_returns_error_result(self) -> None:
         # FakeInput requires `value: str`. Send something missing it.
         client = _StubApiClient(
@@ -373,47 +459,12 @@ class TestRunQueryRecoveryPaths:
         assert completed.is_error is True
         assert "invalid input for Fake" in completed.output
 
-    async def test_permission_denied_returns_error_result(self) -> None:
-        from engine.conftest import _DenyChecker
-
-        client = _StubApiClient(
-            events_per_turn=[
-                [_fake_tool_use_event(tool_input={"value": "x"})],
-                [_end_turn_event()],
-            ],
-        )
-        # Override the AllowAll fixture with the deny checker.
-        ctx = _make_context(
-            api_client=client,
-            tool_registry=_registry_with_fake_tool(),
-        )
-        # dataclass.replace would also work but we have direct construction.
-        import dataclasses
-
-        ctx = dataclasses.replace(ctx, permission_checker=_DenyChecker())
-
-        events = [
-            event
-            async for event in run_query(
-                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
-                ctx,
-            )
-        ]
-        completed = next(
-            event for event in events if isinstance(event, ToolExecutionCompletedEvent)
-        )
-        assert completed.is_error is True
-        # P3-T3.3d:reason now comes from DecisionResult,not the tool name.
-        # _DenyChecker stub returns "stub denial for test" as the reason.
-        assert "permission denied" in completed.output
-        assert "stub denial for test" in completed.output
-
     async def test_tool_returning_is_error_passes_through(self) -> None:
         from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
         from tools.conftest import FakeInput
 
         class _ErroringFake(BaseTool[FakeInput]):
-            execution_domain = ExecutionDomain.LOCAL_DATA
+            execution_domain = ExecutionDomain.TRUSTED_CONTROL
             name = "Fake"
             description = "Always returns is_error=True."
             input_model = FakeInput
@@ -524,7 +575,7 @@ class TestRunQueryProgrammingErrorPropagation:
         from tools.conftest import FakeInput
 
         class _CrashingFake(BaseTool[FakeInput]):
-            execution_domain = ExecutionDomain.LOCAL_DATA
+            execution_domain = ExecutionDomain.TRUSTED_CONTROL
             name = "Fake"
             description = "Crashes mid-execution -- should propagate."
             input_model = FakeInput
@@ -568,7 +619,7 @@ class TestRunQueryDryRunMode:
     async def test_dry_run_skips_execute_and_emits_synthetic_completion(
         self,
     ) -> None:
-        from openharness.permissions import PermissionMode
+        from openharness.permissions import ExecutionPosture
         from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
         from tools.conftest import FakeInput
 
@@ -597,7 +648,7 @@ class TestRunQueryDryRunMode:
             ],
         )
         ctx = _make_context(api_client=client, tool_registry=registry)
-        ctx = dataclasses.replace(ctx, permission_mode=PermissionMode.DRY_RUN)
+        ctx = dataclasses.replace(ctx, execution_posture=ExecutionPosture.DRY_RUN)
 
         events = [
             event
@@ -617,7 +668,7 @@ class TestRunQueryDryRunMode:
         # A "rm -rf /" command would normally hit DenyListChecker; under
         # DRY_RUN we never even consult the checker -- the synthetic
         # "would call" path runs instead.
-        from openharness.permissions import DenyListChecker, PermissionMode
+        from openharness.permissions import ExecutionPosture
         from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
         from tools.conftest import FakeInput
 
@@ -647,8 +698,7 @@ class TestRunQueryDryRunMode:
         ctx = _make_context(api_client=client, tool_registry=registry)
         ctx = dataclasses.replace(
             ctx,
-            permission_checker=DenyListChecker(),
-            permission_mode=PermissionMode.DRY_RUN,
+            execution_posture=ExecutionPosture.DRY_RUN,
         )
 
         events = [
@@ -669,7 +719,7 @@ class TestRunQueryDryRunMode:
         # D12.4: AUTO is reserved for Phase 3 (skip interactive confirmation).
         # In Phase 2 it must behave identically to DEFAULT — pass through to
         # permission_checker + tool.execute().
-        from openharness.permissions import PermissionMode
+        from openharness.permissions import ReviewerPosture
 
         client = _StubApiClient(
             events_per_turn=[
@@ -681,7 +731,7 @@ class TestRunQueryDryRunMode:
             api_client=client,
             tool_registry=_registry_with_fake_tool(),
         )
-        ctx = dataclasses.replace(ctx, permission_mode=PermissionMode.AUTO)
+        ctx = dataclasses.replace(ctx, reviewer_posture=ReviewerPosture.AUTO)
 
         events = [
             event

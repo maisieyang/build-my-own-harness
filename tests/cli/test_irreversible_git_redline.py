@@ -68,12 +68,14 @@ def _tool_completed_lines(stdout: str) -> list[dict]:
 
 class TestIrreversibleGitRedlineEndToEnd:
     def test_git_commit_denied_even_with_bash_allow_and_auto(
-        self, monkeypatch: pytest.MonkeyPatch
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        verified_seatbelt_backend: None,
     ) -> None:
+        del verified_seatbelt_backend
         _set_minimum_env(monkeypatch)
-        # Explicit Bash(*) allow AND --auto (AUTO permission mode) -- the
-        # red line must hold through both.
-        monkeypatch.setenv("OPENHARNESS_PERMISSIONS__ALLOW", "Bash(*)")
+        # The semantic red line must hold under the canonical workspace profile
+        # and the exact auto reviewer.
         stub = _StubApiClient(
             events_per_turn=[
                 [_git_commit_turn()],
@@ -86,7 +88,17 @@ class TestIrreversibleGitRedlineEndToEnd:
         with runner.isolated_filesystem():
             result = runner.invoke(
                 cli_module.app,
-                ["ask", "-p", "--auto", "--output-format", "stream-json", "commit my changes"],
+                [
+                    "ask",
+                    "-p",
+                    "--auto",
+                    "--sandbox",
+                    "--sandbox-backend",
+                    "seatbelt",
+                    "--output-format",
+                    "stream-json",
+                    "commit my changes",
+                ],
             )
 
         assert result.exit_code == 0, result.stderr

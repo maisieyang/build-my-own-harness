@@ -69,7 +69,10 @@ class _BigOutputTool(BaseTool[_BigInput]):
     name = "BigOutput"
     description = "Returns a deliberately oversized string."
     input_model = _BigInput
-    execution_domain = ExecutionDomain.LOCAL_DATA
+    # Synthetic in-process fixture: compaction is the subject, not local data
+    # plane enforcement. TRUSTED_CONTROL keeps autonomous-boundary semantics
+    # honest without preventing this fixture from producing a large payload.
+    execution_domain = ExecutionDomain.TRUSTED_CONTROL
 
     async def execute(
         self,

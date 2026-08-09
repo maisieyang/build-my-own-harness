@@ -16,7 +16,6 @@ from unittest.mock import Mock
 
 import pytest
 
-from engine.conftest import _AllowAllChecker
 from openharness.api import OpenAICompatibleApiClient
 from openharness.engine.context import QueryContext
 from openharness.tools import ToolRegistry
@@ -37,7 +36,6 @@ def context() -> QueryContext:
     return QueryContext(
         api_client=_stub_client(),
         tool_registry=ToolRegistry(),
-        permission_checker=_AllowAllChecker(),
         system_prompt="you are a test harness",
         cwd=Path("/tmp"),
         model="qwen-plus",
@@ -48,13 +46,8 @@ class TestQueryContext:
     def test_required_fields_round_trip(self, context: QueryContext) -> None:
         assert context.system_prompt == "you are a test harness"
         assert context.cwd == Path("/tmp")
-        # Both D7.2 hand-offs now cashed:
-        # - tool_registry tightened to ToolRegistry in P2-T2.2e
-        # - permission_checker tightened to PermissionChecker Protocol in P2-T4.4c
+        # The registry is a concrete runtime collaborator.
         assert isinstance(context.tool_registry, ToolRegistry)
-        # Protocol structural type — no runtime isinstance check, but the
-        # binding itself satisfies the type contract.
-        assert hasattr(context.permission_checker, "evaluate")
 
     def test_max_turns_default_matches_boundary_contract(self, context: QueryContext) -> None:
         # decisions/06-phase-2-boundary.md D6.1: hybrid loop exit, 20 default.
@@ -64,7 +57,6 @@ class TestQueryContext:
         ctx = QueryContext(
             api_client=_stub_client(),
             tool_registry=ToolRegistry(),
-            permission_checker=_AllowAllChecker(),
             system_prompt="",
             cwd=Path("/tmp"),
             model="qwen-plus",
@@ -119,7 +111,6 @@ class TestSkillStoreField:
         ctx = QueryContext(
             api_client=_stub_client(),
             tool_registry=ToolRegistry(),
-            permission_checker=_AllowAllChecker(),
             system_prompt="",
             cwd=tmp_path,
             model="qwen-plus",
@@ -160,7 +151,6 @@ class TestAgentDepthFields:
         ctx = QueryContext(
             api_client=_stub_client(),
             tool_registry=ToolRegistry(),
-            permission_checker=_AllowAllChecker(),
             system_prompt="",
             cwd=tmp_path,
             model="qwen-plus",
@@ -193,7 +183,6 @@ class TestExecutionEnvField:
         ctx = QueryContext(
             api_client=_stub_client(),
             tool_registry=ToolRegistry(),
-            permission_checker=_AllowAllChecker(),
             system_prompt="",
             cwd=tmp_path,
             model="qwen-plus",

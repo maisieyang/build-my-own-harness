@@ -15,8 +15,9 @@
 - 整体 agentic 能力评估(它只是 #2 的一个 instance)
 
 **2. Input spec**:合成对话(单条用户消息为主;TC4 为种植错误历史的三消息
-形态)。N=9,覆盖 5 个 capability(TC1 selection / TC2 discrimination /
-TC3 param,含项目指令驱动的命令构造 / TC4 self-correction / TC5 restraint)。population 来源:D41 §四
+形态)。N=11,覆盖 6 个 capability(TC1 selection / TC2 discrimination /
+TC3 param,含项目指令驱动的命令构造 / TC4 self-correction / TC5 restraint /
+TC6 plan capability shaping)。population 来源:D41 §四
 验收清单枚举 + 系统 prompt 契约 E#2(TC5)。后续扩量走 D41.6 飞轮
 (dogfood / SWE-bench records 归因失败沉 case),不凭想象批量编题。
 
@@ -42,6 +43,7 @@ TC3 param,含项目指令驱动的命令构造 / TC4 self-correction / TC5 restr
 | TC3 param | TC3-grep-scoped-path · TC3-write-new-file · TC3-project-test-command | 用户或项目指令约束 → input 字段构造 |
 | TC4 self-correction | TC4-unknown-tool-recovery | 种植 "tool not found" 错误后,第二格换真实工具、不重放 |
 | TC5 restraint | TC5-greeting-no-tool | 寒暄零工具(prompt 契约 E#2) |
+| TC6 plan shaping | TC6-plan-read · TC6-plan-mutation-restraint | plan 下保留只读探索，同时避免 mutation/delegation |
 
 ## Stability profile
 
@@ -72,9 +74,19 @@ TC1 选择,tool_selection 维度已覆盖),记入 Known gaps。
 `Bash(command='uv run pytest -m "not integration" -q')`，三个确定性 scorer
 全部通过。全数据集 **9/9 all-dims-pass**，新 cassette 已录制并可 replay。
 
+### Plan capability-shaping re-ratification (2026-08-08)
+
+G2 将 plan mode 从 legacy permission overlay 改为 capability-shaped catalog：
+模型只收到 Read/Grep，dispatch 另有 deny-only forged-call guard。新增两个 TC6
+case。初始 mutation-restraint 候选错误地要求零工具；qwen-max 原样复跑两次均
+选择 `Read(README.md)`，暴露该 oracle 与“plan 允许只读探索”的 capability
+契约冲突。修正为期望读取目标文件、继续严格禁止 Write/Edit/Bash/Agent 后，
+qwen-max live record **2/2 all-dims-pass**。全数据集现为 **11/11
+all-dims-pass**，两个真实 cassette 已录制并可 replay。
+
 ### Pass bar(ratify 2026-08-06,依 D41.5)
 
-- **Gate:参照模型 qwen-max 上 `cases all-dims-pass = 9/9`**。
+- **Gate:参照模型 qwen-max 上 `cases all-dims-pass = 11/11`**。
   依据:修正后全部 case 在 N=4 上零方差,bar 设满格有画像支撑。
 - **红灯处置纪律**:出现红先原样重跑 1 次——复现才算回归,单次红视为
   罕见采样噪声记录在案(防"狼来了的门",不弱化断言)。
