@@ -44,8 +44,11 @@ class Write(BaseTool[WriteInput]):
     name = "Write"
     description = (
         "Write text content to a file (UTF-8). Creates the file if absent, "
-        "overwrites if present. Refuses to write outside the project root. "
-        "The parent directory must already exist; use Bash 'mkdir -p' if not."
+        "overwrites if present. An absolute path is valid input; preserve the "
+        "user-requested path. A verified boundary crossing is reviewable: call "
+        "Write with the exact arguments so the harness can produce an exact "
+        "permission request. Do not use Bash or silently choose another path to "
+        "bypass a boundary. The parent directory must already exist."
     )
     input_model = WriteInput
 

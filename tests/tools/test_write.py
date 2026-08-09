@@ -32,6 +32,14 @@ def _ctx(cwd: Path) -> ToolExecutionContext:
     return ToolExecutionContext(cwd=cwd)
 
 
+def test_description_exposes_reviewable_absolute_paths_without_bash_bypass() -> None:
+    description = Write.description.lower()
+    assert "refuses to write outside the project root" not in description
+    assert "absolute path" in description
+    assert "permission" in description
+    assert "do not use bash" in description
+
+
 class TestWriteHappyPath:
     async def test_creates_new_file_with_bytes_count(self, tool: Write, tmp_path: Path) -> None:
         target = tmp_path / "fresh.txt"
@@ -64,19 +72,19 @@ class TestWriteHappyPath:
 
 
 class TestWriteScopeGuardMovedToAuthZ:
-    """P3-T3.3f:Write's project-root self-check moved to AuthZ Tier 3.
+    """Write's project-root self-check moved to the verified boundary.
 
     Direct ``execute`` calls now write where they're told;
-    :class:`TierBasedPermissionChecker` is the framework-side enforcement
-    (tested in ``tests/permissions/test_tier_based_checker.py::TestTier3ModeBased``).
-    These tests confirm the new behavior — Write no longer self-rejects.
+    the canonical profile and sandbox are the framework-side enforcement.
+    These tests confirm Write no longer self-rejects before an exact delta can
+    be reviewed.
     """
 
     async def test_absolute_path_outside_cwd_no_longer_self_rejects(
         self, tool: Write, tmp_path: Path
     ) -> None:
         # Write to /tmp/escape.txt under tmp_path cwd — used to be rejected.
-        # Now Write happily writes; AuthZ Tier 3 is the production gate.
+        # Now Write happily writes; the verified boundary is the production gate.
         target = Path("/tmp/openharness-test-escape.txt")
         try:
             result = await tool.execute(
@@ -92,7 +100,7 @@ class TestWriteScopeGuardMovedToAuthZ:
         self, tool: Write, tmp_path: Path
     ) -> None:
         # cwd is tmp_path/inner; "../escape.txt" used to fail in Write.
-        # Now Write writes; AuthZ Tier 3 prevents this in production.
+        # Now Write writes; the verified boundary protects this in production.
         inner = tmp_path / "inner"
         inner.mkdir()
         result = await tool.execute(

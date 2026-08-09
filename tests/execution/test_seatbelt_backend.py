@@ -26,6 +26,7 @@ from openharness.permissions import (
     FilesystemAccess,
     FilesystemPolicy,
     FilesystemRule,
+    FilesystemScope,
     NetworkPolicy,
     RuntimePermissionProfile,
 )
@@ -75,6 +76,29 @@ def test_compiler_does_not_widen_profile_to_host_configuration_trees(
 
     for undeclared_root in ("/Library", "/usr", "/usr/local", "/opt/homebrew"):
         assert f'(allow file-read* (subpath "{undeclared_root}"))' not in profile_text
+
+
+def test_compiler_preserves_read_traversal_for_lexical_symlink_ancestors(
+    tmp_path: Path,
+) -> None:
+    profile = RuntimePermissionProfile(
+        name="tmp-exact-write",
+        filesystem=FilesystemPolicy(
+            rules=(
+                FilesystemRule(
+                    path="/tmp/permission-dogfood.txt",
+                    access=FilesystemAccess.WRITE,
+                    scope=FilesystemScope.EXACT,
+                ),
+            )
+        ),
+    )
+
+    profile_text = compile_seatbelt_profile(profile, cwd=tmp_path)
+
+    assert '(allow file-read* (literal "/tmp"))' in profile_text
+    assert '(allow file-read* (subpath "/tmp"))' not in profile_text
+    assert '(allow file-write* (subpath "/tmp"))' not in profile_text
 
 
 @requires_macos_seatbelt
@@ -210,6 +234,44 @@ async def test_file_worker_cannot_write_outside_workspace(tmp_path: Path) -> Non
     assert result.requested == str(outside)
     assert not outside.exists()
     await session.close()
+
+
+@requires_macos_seatbelt
+async def test_approved_external_write_creates_file_with_exact_one_shot_overlay(
+    tmp_path: Path,
+) -> None:
+    profile = _workspace_profile()
+    backend = SeatbeltBackend(cwd=tmp_path, executable="/usr/bin/sandbox-exec")
+    base = await backend.open(profile)
+    session = OneShotOverlaySession(backend=backend, profile=profile, base=base)
+    outside = Path("/tmp") / f"{tmp_path.name}-outside-write.txt"
+    outside.unlink(missing_ok=True)
+    operation = FileWriteOperation(path=outside, content="permission dogfood")
+    try:
+        crossing = await session.execute(operation)
+        assert isinstance(crossing, BoundaryViolation)
+        request = PermissionDeltaRequest.create(
+            tool_use_id="write-tool-1",
+            tool_name="Write",
+            final_arguments={
+                "path": str(outside),
+                "content": "permission dogfood",
+            },
+            profile=profile,
+            boundary=base.boundary,
+            delta=PermissionDelta.filesystem_path(str(outside)),
+            crossing=crossing,
+        )
+        session.arm(request)
+
+        result = await session.execute(operation)
+
+        assert isinstance(result, OperationCompleted)
+        assert result.is_error is False
+        assert outside.read_text(encoding="utf-8") == "permission dogfood"
+    finally:
+        outside.unlink(missing_ok=True)
+        await session.close()
 
 
 @requires_macos_seatbelt

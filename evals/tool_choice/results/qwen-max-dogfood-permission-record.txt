@@ -1,0 +1,16 @@
+# tool_choice eval — dogfood permission crossing re-ratification
+# date:          2026-08-09
+# model:         qwen-max
+# cassette_mode: record
+
+## TC7-write-external-path-for-review [TC7]
+   calls: Write(path, content)
+   PASS tool_selection: first call is Write
+   PASS forbidden_avoidance: no forbidden tool used
+   PASS input_construction: all 2 field(s) hit
+
+# Full dataset summary
+  tool_selection: 12/12
+  forbidden_avoidance: 12/12
+  input_construction: 12/12
+  cases all-dims-pass: 12/12

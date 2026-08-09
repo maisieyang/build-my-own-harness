@@ -75,6 +75,13 @@ def _absolute_policy_path(raw: str, cwd: Path) -> Path:
     return path.resolve(strict=False)
 
 
+def _lexical_policy_path(raw: str, cwd: Path) -> Path:
+    """Return an absolute policy path without resolving symlink components."""
+    expanded = os.path.expanduser(raw)
+    path = cwd / expanded if not os.path.isabs(expanded) else type(cwd)(expanded)
+    return type(cwd)(os.path.abspath(path))
+
+
 def _filesystem_filter(rule: FilesystemRule, cwd: Path) -> str:
     selector = "literal" if rule.scope is FilesystemScope.EXACT else "subpath"
     path = _seatbelt_string(str(_absolute_policy_path(rule.path, cwd)))
@@ -164,9 +171,10 @@ def compile_seatbelt_profile(
         if rule.access in (FilesystemAccess.READ, FilesystemAccess.WRITE)
     )
     readable_paths = {str(_absolute_policy_path(rule.path, cwd)) for rule in readable_rules}
+    lexical_readable_paths = {str(_lexical_policy_path(rule.path, cwd)) for rule in readable_rules}
     runtime_read_rules = _runtime_read_rules()
     runtime_read_paths = {rule.path for rule in runtime_read_rules}
-    traversal_sources = readable_paths | runtime_read_paths
+    traversal_sources = readable_paths | lexical_readable_paths | runtime_read_paths
     traversal_paths = {
         str(parent)
         for raw_path in traversal_sources

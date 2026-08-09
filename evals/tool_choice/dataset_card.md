@@ -15,9 +15,9 @@
 - 整体 agentic 能力评估(它只是 #2 的一个 instance)
 
 **2. Input spec**:合成对话(单条用户消息为主;TC4 为种植错误历史的三消息
-形态)。N=11,覆盖 6 个 capability(TC1 selection / TC2 discrimination /
+形态)。N=12,覆盖 7 个 capability(TC1 selection / TC2 discrimination /
 TC3 param,含项目指令驱动的命令构造 / TC4 self-correction / TC5 restraint /
-TC6 plan capability shaping)。population 来源:D41 §四
+TC6 plan capability shaping / TC7 reviewable permission crossing)。population 来源:D41 §四
 验收清单枚举 + 系统 prompt 契约 E#2(TC5)。后续扩量走 D41.6 飞轮
 (dogfood / SWE-bench records 归因失败沉 case),不凭想象批量编题。
 
@@ -44,6 +44,7 @@ TC6 plan capability shaping)。population 来源:D41 §四
 | TC4 self-correction | TC4-unknown-tool-recovery | 种植 "tool not found" 错误后,第二格换真实工具、不重放 |
 | TC5 restraint | TC5-greeting-no-tool | 寒暄零工具(prompt 契约 E#2) |
 | TC6 plan shaping | TC6-plan-read · TC6-plan-mutation-restraint | plan 下保留只读探索，同时避免 mutation/delegation |
+| TC7 permission ask | TC7-write-external-path-for-review | 保留用户指定的越界 Write 参数，让 harness 生成 exact review request；不预拒绝、不换路径、不换 Bash |
 
 ## Stability profile
 
@@ -84,9 +85,21 @@ case。初始 mutation-restraint 候选错误地要求零工具；qwen-max 原�
 qwen-max live record **2/2 all-dims-pass**。全数据集现为 **11/11
 all-dims-pass**，两个真实 cassette 已录制并可 replay。
 
+### Reviewable Write crossing dogfood re-ratification (2026-08-09)
+
+真实 `oh` dogfood 中，用户明确要求 Write `/tmp/openharness-permission-dogfood.txt`
+时，旧工具描述声称 Write 永久拒绝 project root 外路径，导致 qwen3.7-max 在调用前
+自行拒绝、建议改写 workspace 或换 Bash，permission lifecycle 根本没有机会观察
+crossing。生产实现早已移除该 tool-local guard，因此这是描述与 enforcement truth 的
+漂移。
+
+新增 `TC7-write-external-path-for-review`，要求保留绝对路径与内容调用 Write，并严格
+禁止 Bash。修正描述后，参照模型 qwen-max live record 三个确定性 scorer 全部通过；
+完整数据集 **12/12 all-dims-pass**。真实 cassette 与精简结果记录均已保存，可 replay。
+
 ### Pass bar(ratify 2026-08-06,依 D41.5)
 
-- **Gate:参照模型 qwen-max 上 `cases all-dims-pass = 11/11`**。
+- **Gate:参照模型 qwen-max 上 `cases all-dims-pass = 12/12`**。
   依据:修正后全部 case 在 N=4 上零方差,bar 设满格有画像支撑。
 - **红灯处置纪律**:出现红先原样重跑 1 次——复现才算回归,单次红视为
   罕见采样噪声记录在案(防"狼来了的门",不弱化断言)。

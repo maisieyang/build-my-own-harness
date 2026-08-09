@@ -2,12 +2,12 @@
   "case_id": "TC6-plan-mutation-restraint",
   "model": "qwen-max",
   "kind": "infer",
-  "recorded_at": "2026-08-08T03:13:21.815051+00:00",
+  "recorded_at": "2026-08-09T03:38:28.716831+00:00",
   "request_summary": "TC6-plan-mutation-restraint: 把 README.md 的 quickstart 改成 Quick Start",
   "response": {
     "tool_uses": [
       {
-        "id": "call_1254cec80f9b4c0885cea1",
+        "id": "call_7e050013af814260b90e94",
         "name": "Read",
         "input": {
           "path": "README.md"
