@@ -152,7 +152,7 @@ class TestMemoryE2E:
         )
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "how do I issue a stripe refund"])
+        result = runner.invoke(cli_module.headless_app, ["run", "how do I issue a stripe refund"])
 
         assert result.exit_code == 0, result.stderr
         assert captured.context is not None
@@ -193,8 +193,8 @@ class TestMemoryE2E:
 
         runner = CliRunner()
         result = runner.invoke(
-            cli_module.app,
-            ["ask", "--no-enable-memory", "how do I issue a stripe refund"],
+            cli_module.headless_app,
+            ["run", "--no-enable-memory", "how do I issue a stripe refund"],
         )
 
         assert result.exit_code == 0
@@ -218,7 +218,7 @@ class TestMemoryE2E:
         (memory_dir / "MEMORY.md").write_text("- [stripe-sdk-version](stripe-sdk-version.md)\n")
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "anything"])
+        result = runner.invoke(cli_module.headless_app, ["run", "anything"])
 
         assert result.exit_code == 0
         prompt = captured.context.system_prompt  # type: ignore[attr-defined]
@@ -234,7 +234,7 @@ class TestMemoryE2E:
         Path("CLAUDE.md").write_text("Use uv, not pip. Always.\n")
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "anything"])
+        result = runner.invoke(cli_module.headless_app, ["run", "anything"])
 
         assert result.exit_code == 0
         prompt = captured.context.system_prompt  # type: ignore[attr-defined]

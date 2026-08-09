@@ -1,6 +1,6 @@
 """Interactive REPL input layer — recognition over recall.
 
-``oh chat`` has carried a full slash-command system since Phase 5b/18
+The ``oh`` REPL has carried a full slash-command system since Phase 5b/18
 (built-ins → CommandStore → SkillStore, D38.1), but discovery was gated
 on recalling ``/help`` first. This module adds the *affordance*: typing
 ``/`` pops a completion menu of everything dispatchable, a persistent

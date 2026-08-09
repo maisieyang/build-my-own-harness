@@ -1,4 +1,4 @@
-"""``oh bench swebench`` — CLI wiring (D40 T6).
+"""``oh dev bench swebench`` command wiring.
 
 Command bodies are thin shells over the tested library layer
 (``fetch_dataset`` / ``load_instances`` / ``run_batch``); everything with
@@ -22,14 +22,11 @@ from openharness.swebench.model import load_instances
 from openharness.swebench.runner import RunConfig
 
 bench_app = typer.Typer(
-    help="Benchmark adapters — drive the shipped `oh` CLI over public benchmarks.",
+    help="Run benchmark adapters.",
     no_args_is_help=True,
 )
 swebench_app = typer.Typer(
-    help=(
-        "SWE-bench Lite adapter (decisions/40): fetch the dataset, run "
-        "instances headless, emit sb-cli-ready predictions.jsonl."
-    ),
+    help="Fetch and run SWE-bench Lite cases.",
     no_args_is_help=True,
 )
 bench_app.add_typer(swebench_app, name="swebench")
@@ -41,8 +38,8 @@ _DATASET_FILE = _ROOT / "dataset" / "swe-bench-lite-test.jsonl"
 def _pin_config(cli_model: str | None) -> tuple[str | None, dict[str, str] | None]:
     """Pin the batch's model AND endpoint/key explicitly (D40.8 fidelity).
 
-    The child ``oh ask`` runs with the workspace as cwd, where the
-    project ``./.env`` is invisible — its settings would silently drift
+    The private runtime process runs with the workspace as cwd, where the project
+    ``./.env`` is invisible — its settings would silently drift
     to the user-global ``~/.openharness/.env`` layer, and the records
     would lie about what actually ran. So: resolve the settings chain
     ONCE here at bench cwd (the layers the user sees when launching),
@@ -86,7 +83,7 @@ def fetch(
     dataset: str = typer.Option(
         "princeton-nlp/SWE-bench_Lite",
         "--dataset",
-        help="HF dataset id (swap for a SWE-bench-Live slice in M2).",
+        help="Hugging Face dataset id.",
     ),
     split: str = typer.Option("test", "--split", help="Dataset split."),
 ) -> None:
@@ -122,12 +119,12 @@ def run(
         None,
         "--model",
         "-m",
-        help="Model passthrough to `oh ask --model`; default = configured model.",
+        help="Model override for each internal benchmark run; default = configured model.",
     ),
     sandbox: bool = typer.Option(
         False,
         "--sandbox",
-        help="Enable the Docker sandbox AND allow Bash(*) for the run (D40.6).",
+        help="Enable the Docker sandbox and allow Bash for the run.",
     ),
     timeout: float = typer.Option(
         1800.0,
@@ -139,7 +136,7 @@ def run(
         "--max-turns",
         min=1,
         help=(
-            "Agent-loop turn cap passed to `oh ask --max-turns` (default 40: "
+            "Agent-loop turn cap for each internal benchmark run (default 40: "
             "小批 showed real fixes at 8-19 turns against oh's 20 default)."
         ),
     ),

@@ -306,7 +306,7 @@ class PluginLoader:
 
     The two-phase pattern (``discover`` then ``fan_out``) mirrors the
     bootstrap split:CLI calls ``discover()`` early to learn what's
-    available + present in ``oh plugins list``, then calls ``fan_out()``
+    available + present in ``oh inspect plugins list``, then calls ``fan_out()``
     only when ``Settings.enable_plugins`` is True to actually install
     components.
 
@@ -336,7 +336,7 @@ class PluginLoader:
         Thin wrapper around :meth:`discover_with_format`; drops the
         format tag so callers that only need ``PluginManifest`` (the
         bulk of Phase 9 + CLI fan-out paths) stay byte-identical.
-        ``oh plugins list`` (P19-T3) consumes the with-format variant.
+        ``oh inspect plugins list`` consumes the with-format variant.
         """
         return {name: manifest for name, (manifest, _fmt) in self.discover_with_format().items()}
 

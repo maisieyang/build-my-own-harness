@@ -2,7 +2,7 @@
 
 User-facing UX shortcut: markdown files in ``~/.openharness/commands/`` or
 ``<cwd>/.openharness/commands/`` define ``/cmd`` shortcuts. When the user
-invokes ``oh ask "/review last commit"``, the CLI looks up ``review.md``,
+submits ``/review last commit`` in a session, the harness looks up ``review.md``,
 substitutes ``{args}``, and the resolved body becomes the user message
 that ``run_query`` receives.
 

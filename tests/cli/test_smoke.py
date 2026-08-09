@@ -1,17 +1,11 @@
-"""CLI smoke tests -- verify the command surface is wired up.
-
-These are the cheapest possible checks: ``oh --help`` and ``oh ask
---help`` both return zero and mention the expected commands/options.
-They guarantee that the Typer app stays importable and registers the
-``ask`` subcommand even after later refactors.
-"""
+"""CLI smoke tests for the public front door and private headless adapter."""
 
 from __future__ import annotations
 
 from typer.testing import CliRunner
 
 from openharness import Settings, __version__
-from openharness.cli import app
+from openharness.cli import app, headless_app
 
 
 def test_top_level_help_returns_zero() -> None:
@@ -19,13 +13,13 @@ def test_top_level_help_returns_zero() -> None:
     result = runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
-    assert "ask" in result.stdout
+    assert "ask" not in result.stdout
     assert "OpenHarness" in result.stdout
 
 
 def test_ask_help_lists_flags() -> None:
     runner = CliRunner()
-    result = runner.invoke(app, ["ask", "--help"])
+    result = runner.invoke(headless_app, ["run", "--help"])
 
     assert result.exit_code == 0
     # Typer 0.13+ renders help via rich with ANSI escape codes + line-

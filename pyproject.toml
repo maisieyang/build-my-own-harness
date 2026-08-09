@@ -95,7 +95,6 @@ dependencies = [
 
 [project.scripts]
 oh = "openharness.cli:main"
-openharness = "openharness.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/maisieyang/build-my-own-harness"
@@ -234,16 +233,11 @@ markers = [
 [tool.coverage.run]
 source = ["src/openharness"]
 branch = true
-# __main__.py is the `python -m openharness` entry shim — 3 lines of
-# imports + `main()` call. Not unit-testable; the integration path is
-# already covered by tests/cli/test_cli.py invoking the Typer app.
-#
 # eval/ is an experimental subsystem (the eval substrate + its two
 # consumers) — still stabilizing, intentionally not yet under the coverage
 # gate. Excluded so the gate reflects the stable core; revisit when eval
 # graduates from experimental.
 omit = [
-    "src/openharness/__main__.py",
     "src/openharness/eval/*",
     # swebench/ is the benchmark adapter (decisions/40 D40.1) — same
     # experimental posture as eval/: tests run in CI, excluded from the

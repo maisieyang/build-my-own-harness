@@ -151,7 +151,7 @@ class TestCliBootstrapWithMcp:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hello"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hello"])
         assert result.exit_code == 0, result.stderr
 
         # The captured request's tool catalog includes our MCP tools.
@@ -185,7 +185,7 @@ class TestCliBootstrapWithMcp:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
         # CLI succeeds even with one bad server.
         assert result.exit_code == 0, result.stderr
 
@@ -208,7 +208,7 @@ class TestCliBootstrapWithMcp:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
         assert result.exit_code == 0
 
         # Only the default built-ins, no MCP-namespaced tools.

@@ -1,11 +1,10 @@
-"""Headless invocation of the shipped ``oh`` CLI for one instance (D40.2).
+"""Private headless runtime invocation for one SWE-bench instance.
 
-The benchmark exercises the exact artifact users run — ``oh ask -p
---output-format json`` as a subprocess — never an in-process import that
-would bypass the CLI layer, the headless permission posture, or the
-loop-runtime wiring. The subprocess seam (``Invoker``) and the patch seam
-(``Extractor``) are injectable so unit tests need neither a real model nor
-real git.
+The adapter calls the harness's internal non-interactive function in an
+isolated child process. It does not depend on, or add branches to, the public
+``oh`` command surface. The process boundary preserves per-instance cwd/env
+isolation and wall-clock timeout behavior. ``Invoker`` and ``Extractor`` stay
+injectable so unit tests need neither a real model nor real git.
 
 Env posture per D40.5 + D40.6: write tools allowed by rule, Bash only
 under ``--sandbox``, memory/snapshot forced off so neither the diff nor
@@ -15,18 +14,19 @@ the context is contaminated by harness state.
 from __future__ import annotations
 
 import json
+import multiprocessing
 import os
-import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from openharness.swebench.prompt import build_prompt
 from openharness.swebench.workspace import WorkspaceError, extract_patch
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+    from multiprocessing.connection import Connection
     from pathlib import Path
 
     from openharness.swebench.model import SWEBenchInstance
@@ -43,17 +43,19 @@ class RunConfig:
     # astropy-14182 died on the cap. 40 gives headroom without letting a
     # stuck run burn tokens forever (the wall-clock timeout still bounds it).
     max_turns: int = 40
-    oh_command: tuple[str, ...] = ("oh",)
 
 
 @dataclass(frozen=True)
 class Invocation:
-    """Everything the subprocess seam needs — argv form, no shell."""
+    """Typed inputs passed to the private headless runtime process."""
 
-    argv: list[str]
+    prompt: str
     cwd: Path
     env: dict[str, str]
     timeout_s: float
+    model: str | None
+    sandbox: bool
+    max_turns: int
 
 
 @dataclass(frozen=True)
@@ -91,27 +93,6 @@ class InstanceRunResult:
     detail: str | None = None
 
 
-def build_argv(prompt: str, config: RunConfig) -> list[str]:
-    """Assemble the headless ``oh ask`` argv (D40.2 / D40.7 single-shot)."""
-    argv = [
-        *config.oh_command,
-        "ask",
-        prompt,
-        "-p",
-        "--output-format",
-        "json",
-        "--no-skills",
-        "--no-commands",
-        "--max-turns",
-        str(config.max_turns),
-    ]
-    if config.model is not None:
-        argv += ["--model", config.model]
-    if config.sandbox:
-        argv.append("--sandbox")
-    return argv
-
-
 def build_env(base_env: Mapping[str, str], *, sandbox: bool) -> dict[str, str]:
     """Headless permission posture (D40.6) + harness-state isolation (D40.5).
 
@@ -129,22 +110,97 @@ def build_env(base_env: Mapping[str, str], *, sandbox: bool) -> dict[str, str]:
     return env
 
 
-def default_invoker(invocation: Invocation) -> InvocationResult:
-    """Real subprocess invoker — exercised end-to-end by the T7 smoke."""
+def _invoke_headless_child(invocation: Invocation, connection: Connection) -> None:
+    """Child-process target that calls the internal runtime function directly."""
+    import contextlib
+    import io
+
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    exit_code = 0
     try:
-        proc = subprocess.run(
-            invocation.argv,
-            cwd=invocation.cwd,
-            env=invocation.env,
-            capture_output=True,
-            text=True,
-            timeout=invocation.timeout_s,
+        os.chdir(invocation.cwd)
+        os.environ.clear()
+        os.environ.update(invocation.env)
+
+        # Lazy import avoids a cli -> swebench.cli -> runner import cycle.
+        from click.exceptions import Exit
+
+        from openharness.cli import _run_headless_command
+
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            try:
+                _run_headless_command(
+                    prompt=invocation.prompt,
+                    model=invocation.model,
+                    max_tokens=8192,
+                    auto=False,
+                    dry_run=False,
+                    print_mode=True,
+                    output_format="json",
+                    max_turns=invocation.max_turns,
+                    isolate=False,
+                    log_level=None,
+                    log_format=None,
+                    tool_result_cap=None,
+                    no_auto_truncate=False,
+                    no_skills=True,
+                    no_commands=True,
+                    sandbox=invocation.sandbox,
+                    sandbox_backend=None,
+                    sandbox_image=None,
+                    sandbox_memory=None,
+                    sandbox_cpus=None,
+                    sandbox_runtime=None,
+                    enable_plugin_hooks=None,
+                    enable_plugins=None,
+                    enable_memory=False,
+                    enable_web=False,
+                    compact_threshold=None,
+                    no_auto_compact=False,
+                    resume=False,
+                    resume_id=None,
+                    llm_focus_state=False,
+                )
+            except Exit as exc:
+                exit_code = exc.exit_code
+    except BaseException as exc:  # child must always report a result
+        exit_code = 1
+        stderr.write(f"Internal headless runtime failed: {exc}\n")
+    finally:
+        connection.send(
+            InvocationResult(
+                exit_code=exit_code,
+                stdout=stdout.getvalue(),
+                stderr=stderr.getvalue(),
+            )
         )
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout.decode() if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-        stderr = exc.stderr.decode() if isinstance(exc.stderr, bytes) else (exc.stderr or "")
-        return InvocationResult(exit_code=None, stdout=stdout, stderr=stderr)
-    return InvocationResult(exit_code=proc.returncode, stdout=proc.stdout, stderr=proc.stderr)
+        connection.close()
+
+
+def default_invoker(invocation: Invocation) -> InvocationResult:
+    """Run the internal headless API in a timeout-bounded child process."""
+    context = multiprocessing.get_context("spawn")
+    receive, send = context.Pipe(duplex=False)
+    process = context.Process(target=_invoke_headless_child, args=(invocation, send))
+    process.start()
+    send.close()
+    process.join(invocation.timeout_s)
+    if process.is_alive():
+        process.terminate()
+        process.join()
+        receive.close()
+        return InvocationResult(exit_code=None, stdout="", stderr="timed out")
+    if receive.poll():
+        result = cast("InvocationResult", receive.recv())
+        receive.close()
+        return result
+    receive.close()
+    return InvocationResult(
+        exit_code=process.exitcode if process.exitcode not in (None, 0) else 1,
+        stdout="",
+        stderr="non-interactive runtime exited without a result",
+    )
 
 
 def _parse_envelope(stdout: str) -> dict[str, Any] | None:
@@ -188,10 +244,13 @@ def run_instance(
     prompt = build_prompt(instance, executable=config.sandbox)
     env = build_env(os.environ if base_env is None else base_env, sandbox=config.sandbox)
     invocation = Invocation(
-        argv=build_argv(prompt, config),
+        prompt=prompt,
         cwd=workspace,
         env=env,
         timeout_s=config.timeout_s,
+        model=config.model,
+        sandbox=config.sandbox,
+        max_turns=config.max_turns,
     )
 
     start = time.monotonic()
@@ -221,7 +280,7 @@ def run_instance(
 
     envelope = _parse_envelope(result.stdout)
     if envelope is None:
-        # "Request failed (HTTP ..." is the oh CLI's rendering of every
+        # "Request failed (HTTP ..." is the headless runtime's rendering of every
         # API-layer death (transport disconnects, 4xx/5xx). Environment
         # noise must not be lumped with parse problems in the taxonomy.
         api_failed = "Request failed (HTTP" in result.stderr

@@ -27,7 +27,7 @@ Sub-units land incrementally (see ``tasks/phase-9-plan.md``):
   YAML parser
 - P9-T2: ``PluginLoader.discover`` + ``fan_out`` to 5 stores
 - P9-T3: ``Settings.enable_plugins`` + CLI bootstrap integration
-- P9-T4: ``oh plugins list / show / install / remove`` CLI subcommands
+- P9-T4: plugin filesystem operations and read-only CLI inspection
 - P9-T5: End-to-end smoke + retro
 """
 

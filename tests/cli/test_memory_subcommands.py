@@ -116,14 +116,14 @@ class TestMemoryList:
         files manually."""
         _seed_required_env(monkeypatch)
         runner = CliRunner(env={"COLUMNS": "200"})
-        result = runner.invoke(app, ["memory", "list"])
+        result = runner.invoke(app, ["state", "memory", "list"])
         assert result.exit_code == 0
         assert "(no memories yet)" in result.stdout
 
     def test_empty_store_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _seed_required_env(monkeypatch)
         runner = CliRunner(env={"COLUMNS": "200"})
-        result = runner.invoke(app, ["memory", "list", "--format", "json"])
+        result = runner.invoke(app, ["state", "memory", "list", "--format", "json"])
         assert result.exit_code == 0
         assert json.loads(result.stdout) == []
 
@@ -136,7 +136,7 @@ class TestMemoryList:
         _seed_memory(memory_dir, name="stripe-sdk", description="Stripe SDK 8.x")
         _seed_memory(memory_dir, name="charge-bug", id_="01HCHARGE000", body="b")
         runner = CliRunner(env={"COLUMNS": "200"})
-        result = runner.invoke(app, ["memory", "list"])
+        result = runner.invoke(app, ["state", "memory", "list"])
         assert result.exit_code == 0
         assert "stripe-sdk" in result.stdout
         assert "charge-bug" in result.stdout
@@ -149,7 +149,7 @@ class TestMemoryList:
         memory_dir = get_project_memory_dir(Path.cwd())
         _seed_memory(memory_dir, name="alpha", description="first", use_count=2)
         runner = CliRunner(env={"COLUMNS": "200"})
-        result = runner.invoke(app, ["memory", "list", "--format", "json"])
+        result = runner.invoke(app, ["state", "memory", "list", "--format", "json"])
         assert result.exit_code == 0
         data = json.loads(result.stdout)
         assert len(data) == 1
@@ -171,7 +171,7 @@ class TestMemoryList:
         _seed_memory(memory_dir, name="alpha", id_="01HA000000")
         _seed_memory(memory_dir, name="Beta", id_="01HB000000")
         runner = CliRunner(env={"COLUMNS": "200"})
-        result = runner.invoke(app, ["memory", "list", "--format", "json"])
+        result = runner.invoke(app, ["state", "memory", "list", "--format", "json"])
         data = json.loads(result.stdout)
         # Case-insensitive alphabetical: alpha, Beta, zebra
         assert [m["name"] for m in data] == ["alpha", "Beta", "zebra"]
@@ -201,7 +201,7 @@ class TestMemoryList:
             type_="user",
         )
         runner = CliRunner(env={"COLUMNS": "200"})
-        result = runner.invoke(app, ["memory", "list"])
+        result = runner.invoke(app, ["state", "memory", "list"])
         assert result.exit_code == 0
         assert "legacy-pref" in result.stdout
         assert "user-role-and-values" in result.stdout
@@ -218,7 +218,7 @@ class TestMemoryList:
         memory_dir = get_project_memory_dir(Path.cwd())
         _seed_memory(memory_dir, name=long_name)
         runner = CliRunner(env={"COLUMNS": "200"})
-        result = runner.invoke(app, ["memory", "list"])
+        result = runner.invoke(app, ["state", "memory", "list"])
         assert result.exit_code == 0
         # Truncated form ends with the ellipsis char
         assert "a" * 39 + "…" in result.stdout
@@ -237,7 +237,7 @@ class TestMemoryList:
         memory_dir.mkdir(parents=True, exist_ok=True)
         (memory_dir / "bad.md").write_text("not even frontmatter\n")
         runner = CliRunner(env={"COLUMNS": "200"})
-        result = runner.invoke(app, ["memory", "list"])
+        result = runner.invoke(app, ["state", "memory", "list"])
         assert result.exit_code == 0
         assert "good" in result.stdout
         # malformed file doesn't surface
@@ -247,7 +247,7 @@ class TestMemoryShow:
     def test_unknown_when_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _seed_required_env(monkeypatch)
         runner = CliRunner(env={"COLUMNS": "200"})
-        result = runner.invoke(app, ["memory", "show", "missing"])
+        result = runner.invoke(app, ["state", "memory", "show", "missing"])
         assert result.exit_code == 1
         assert "Unknown memory" in result.stderr
         assert "(none" in result.stderr
@@ -259,7 +259,7 @@ class TestMemoryShow:
         memory_dir = get_project_memory_dir(Path.cwd())
         _seed_memory(memory_dir, name="stripe-sdk", body="Stripe content")
         runner = CliRunner(env={"COLUMNS": "200"})
-        result = runner.invoke(app, ["memory", "show", "stripe-sdk"])
+        result = runner.invoke(app, ["state", "memory", "show", "stripe-sdk"])
         assert result.exit_code == 0
         # Full file content printed — frontmatter + body
         assert "stripe-sdk" in result.stdout
@@ -279,7 +279,7 @@ class TestMemoryShow:
         )
         runner = CliRunner(env={"COLUMNS": "200"})
         # Lookup by id (not name)
-        result = runner.invoke(app, ["memory", "show", "01HCANONICAL"])
+        result = runner.invoke(app, ["state", "memory", "show", "01HCANONICAL"])
         assert result.exit_code == 0
         assert "stripe-sdk" in result.stdout
 
@@ -291,7 +291,7 @@ class TestMemoryShow:
         _seed_memory(memory_dir, name="alpha")
         _seed_memory(memory_dir, name="beta", id_="01HB")
         runner = CliRunner(env={"COLUMNS": "200"})
-        result = runner.invoke(app, ["memory", "show", "missing"])
+        result = runner.invoke(app, ["state", "memory", "show", "missing"])
         assert result.exit_code == 1
         assert "alpha" in result.stderr
         assert "beta" in result.stderr
@@ -301,7 +301,7 @@ class TestMemoryPath:
     def test_prints_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _seed_required_env(monkeypatch)
         runner = CliRunner(env={"COLUMNS": "200"})
-        result = runner.invoke(app, ["memory", "path"])
+        result = runner.invoke(app, ["state", "memory", "path"])
         assert result.exit_code == 0
         # Output is the path itself
         path = result.stdout.strip()
@@ -315,7 +315,7 @@ class TestMemoryPath:
         # path so user knows where to drop files.
         _seed_required_env(monkeypatch)
         runner = CliRunner(env={"COLUMNS": "200"})
-        result = runner.invoke(app, ["memory", "path"])
+        result = runner.invoke(app, ["state", "memory", "path"])
         assert result.exit_code == 0
         # The HOME-isolated dir definitely doesn't exist yet
         from pathlib import Path
@@ -327,6 +327,6 @@ class TestMemoryPath:
         # Determinism: two invocations from same cwd → same dir
         _seed_required_env(monkeypatch)
         runner = CliRunner(env={"COLUMNS": "200"})
-        r1 = runner.invoke(app, ["memory", "path"])
-        r2 = runner.invoke(app, ["memory", "path"])
+        r1 = runner.invoke(app, ["state", "memory", "path"])
+        r2 = runner.invoke(app, ["state", "memory", "path"])
         assert r1.stdout == r2.stdout

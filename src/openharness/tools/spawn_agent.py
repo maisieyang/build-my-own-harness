@@ -127,7 +127,7 @@ class SpawnAgent(BaseTool[SpawnAgentInput]):
                 output="SpawnAgent invoked outside an active query context",
             )
 
-        # 2. Depth check (D16.5). Top-level oh ask runs at depth 0; default cap
+        # 2. Depth check (D16.5). Top-level runs start at depth 0; default cap
         # of 3 supports supervisor → research → leaf chains. Refusal surfaces
         # to the parent LLM as is_error=True so it can adapt (errors-as-payload).
         if parent.agent_depth + 1 > parent.max_agent_depth:

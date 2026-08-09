@@ -1,7 +1,7 @@
 """``McpClientPool`` — N-server orchestration — P5-T4.
 
 Per ``decisions/11`` D15.4 (failure handling) + D15.6 (trust whitelist):
-manages N MCP servers per ``oh ask`` invocation. Start all in parallel,
+manages N MCP servers per non-interactive invocation. Start all in parallel,
 collect their tool catalogs into a single list of ``McpToolAdapter``,
 shut down on exit. Failures are **isolated**:one bad server doesn't
 kill the pool — its tools just don't get registered, and the surviving
@@ -20,7 +20,7 @@ Failure semantics (D15.4 per failure mode):
 
 - **Init failure** (server's subprocess won't spawn or refuses
   ``initialize``):pool logs a warning, marks the server dead, **does not
-  raise**. Other servers continue. ``oh ask`` doesn't crash on one bad MCP.
+  raise**. Other servers continue. One bad MCP cannot crash the run.
 - **Mid-call failure / transport break** (subprocess dies after init):
   the adapter's first call returns ``ToolResult(is_error=True)`` (handled
   in T3 by ``McpToolAdapter.execute`` catching ``McpCallError``). The pool
@@ -28,7 +28,7 @@ Failure semantics (D15.4 per failure mode):
   ``McpClient`` reference; if the client is dead, calls fail.
 - **Once-per-query auto-respawn** is deferred from Phase 5 boundary to a
   future iteration. The Phase 5 simpler model: bad server stays bad for
-  the rest of the query. Reasoning: server crashes inside one ``oh ask``
+  the rest of the query. Reasoning: a server crash inside one run
   are rare; mid-query respawn would need substantial concurrency logic.
 
   D15.4 boundary text explicitly states "bounded once-per-query respawn"

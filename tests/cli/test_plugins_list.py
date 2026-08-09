@@ -68,12 +68,14 @@ def _write_oh_plugin(name: str, *, version: str = "1.0.0", description: str = "t
 
 class TestEmptyCatalog:
     def test_empty_text_prints_no_plugins_installed(self) -> None:
-        result = CliRunner().invoke(cli_module.app, ["plugins", "list"])
+        result = CliRunner().invoke(cli_module.app, ["inspect", "plugins", "list"])
         assert result.exit_code == 0
         assert "(no plugins installed)" in result.stdout
 
     def test_empty_json_prints_empty_array(self) -> None:
-        result = CliRunner().invoke(cli_module.app, ["plugins", "list", "--format", "json"])
+        result = CliRunner().invoke(
+            cli_module.app, ["inspect", "plugins", "list", "--format", "json"]
+        )
         assert result.exit_code == 0
         assert json.loads(result.stdout) == []
 
@@ -86,7 +88,7 @@ class TestEmptyCatalog:
 class TestTextRendering:
     def test_header_row_has_five_columns(self) -> None:
         _write_cc_plugin("alpha-plugin", skills=["s1", "s2"])
-        result = CliRunner().invoke(cli_module.app, ["plugins", "list"])
+        result = CliRunner().invoke(cli_module.app, ["inspect", "plugins", "list"])
         assert result.exit_code == 0
         first_line = result.stdout.splitlines()[0]
         for header in ("NAME", "FORMAT", "VERSION", "SKILLS", "MCP_SERVERS"):
@@ -96,7 +98,7 @@ class TestTextRendering:
         _write_cc_plugin("zebra-plugin", skills=["a"])
         _write_cc_plugin("alpha-plugin", skills=["b", "c"])
         _write_oh_plugin("mango-plugin")
-        result = CliRunner().invoke(cli_module.app, ["plugins", "list"])
+        result = CliRunner().invoke(cli_module.app, ["inspect", "plugins", "list"])
         assert result.exit_code == 0
         lines = result.stdout.splitlines()[1:]  # skip header
         names = [line.split()[0] for line in lines if line.strip()]
@@ -105,7 +107,7 @@ class TestTextRendering:
     def test_format_column_shows_cc_or_oh(self) -> None:
         _write_cc_plugin("my-cc")
         _write_oh_plugin("my-oh")
-        result = CliRunner().invoke(cli_module.app, ["plugins", "list"])
+        result = CliRunner().invoke(cli_module.app, ["inspect", "plugins", "list"])
         assert result.exit_code == 0
         lines = result.stdout.splitlines()
         cc_row = next(line for line in lines if "my-cc" in line)
@@ -115,7 +117,7 @@ class TestTextRendering:
 
     def test_skills_count_reflects_directory_scan(self) -> None:
         _write_cc_plugin("counted", skills=["a", "b", "c", "d"])
-        result = CliRunner().invoke(cli_module.app, ["plugins", "list"])
+        result = CliRunner().invoke(cli_module.app, ["inspect", "plugins", "list"])
         assert result.exit_code == 0
         row = next(line for line in result.stdout.splitlines() if "counted" in line)
         # SKILLS column shows 4
@@ -131,7 +133,9 @@ class TestJsonRendering:
     def test_json_schema_per_plugin(self) -> None:
         _write_cc_plugin("p1", version="2.3.4", skills=["s1", "s2"])
         _write_oh_plugin("p2", version="5.6.7")
-        result = CliRunner().invoke(cli_module.app, ["plugins", "list", "--format", "json"])
+        result = CliRunner().invoke(
+            cli_module.app, ["inspect", "plugins", "list", "--format", "json"]
+        )
         assert result.exit_code == 0
         payload = json.loads(result.stdout)
         assert isinstance(payload, list)
@@ -174,7 +178,9 @@ class TestDualManifestPluginRendering:
             "name: dual\nversion: 1-oh\ndescription: oh\n",
             encoding="utf-8",
         )
-        result = CliRunner().invoke(cli_module.app, ["plugins", "list", "--format", "json"])
+        result = CliRunner().invoke(
+            cli_module.app, ["inspect", "plugins", "list", "--format", "json"]
+        )
         assert result.exit_code == 0
         payload = json.loads(result.stdout)
         assert len(payload) == 1
@@ -199,7 +205,9 @@ class TestD39_9_McpJsonReporting:
             '{"mcpServers": {"x": {"type": "http", "url": "https://example"}}}',
             encoding="utf-8",
         )
-        result = CliRunner().invoke(cli_module.app, ["plugins", "list", "--format", "json"])
+        result = CliRunner().invoke(
+            cli_module.app, ["inspect", "plugins", "list", "--format", "json"]
+        )
         assert result.exit_code == 0
         payload = json.loads(result.stdout)
         assert payload[0]["mcp_servers_count"] == 0
@@ -227,7 +235,7 @@ class TestNoFanOutSideEffect:
 
         monkeypatch.setattr(PluginLoader, "fan_out", _spy_fan_out)  # type: ignore[attr-defined]
 
-        result = CliRunner().invoke(cli_module.app, ["plugins", "list"])
+        result = CliRunner().invoke(cli_module.app, ["inspect", "plugins", "list"])
         assert result.exit_code == 0
         assert call_log == []
 
@@ -238,12 +246,12 @@ class TestNoFanOutSideEffect:
 
 
 class TestHelpWiring:
-    def test_plugins_subapp_listed_in_main_help(self) -> None:
-        result = CliRunner().invoke(cli_module.app, ["--help"])
+    def test_plugins_subapp_listed_in_inspect_help(self) -> None:
+        result = CliRunner().invoke(cli_module.app, ["inspect", "--help"])
         assert result.exit_code == 0
         assert "plugins" in result.stdout
 
     def test_plugins_list_listed_in_subapp_help(self) -> None:
-        result = CliRunner().invoke(cli_module.app, ["plugins", "--help"])
+        result = CliRunner().invoke(cli_module.app, ["inspect", "plugins", "--help"])
         assert result.exit_code == 0
         assert "list" in result.stdout

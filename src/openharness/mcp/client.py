@@ -15,7 +15,7 @@ The wrapper adds:
 
 - **Init timeout** (5 s default per Phase 5 boundary sub-decision):
   ``session.initialize()`` is wrapped in ``asyncio.wait_for`` so a hung
-  MCP server can't stall ``oh ask`` bootstrap forever.
+  MCP server can't stall the non-interactive runtime bootstrap forever.
 - **Three log events** (the 9 → 12 inventory addition):
   ``mcp_server_start`` (info) on successful init,
   ``mcp_server_stop`` (info) on clean shutdown,

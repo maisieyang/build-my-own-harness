@@ -28,7 +28,7 @@ import os
 import pytest
 from typer.testing import CliRunner
 
-from openharness.cli import app
+from openharness.cli import headless_app
 
 
 @pytest.mark.integration
@@ -43,8 +43,8 @@ from openharness.cli import app
 def test_real_qwen_streaming_e2e() -> None:
     runner = CliRunner()
     result = runner.invoke(
-        app,
-        ["ask", "Reply with the single word OK and nothing else."],
+        headless_app,
+        ["run", "Reply with the single word OK and nothing else."],
     )
 
     assert result.exit_code == 0, (

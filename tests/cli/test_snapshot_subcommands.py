@@ -97,14 +97,14 @@ class TestSnapshotList:
     def test_no_snapshots_text(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _seed_required_env(monkeypatch)
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["snapshot", "list"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "list"])
         assert result.exit_code == 0
         assert "no snapshots" in result.stdout.lower()
 
     def test_no_snapshots_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _seed_required_env(monkeypatch)
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["snapshot", "list", "--format", "json"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "list", "--format", "json"])
         assert result.exit_code == 0
         assert result.stdout.strip() == "[]"
 
@@ -112,7 +112,7 @@ class TestSnapshotList:
         _seed_required_env(monkeypatch)
         _write_synth_snapshot(_cwd_path(), target="current")
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["snapshot", "list"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "list"])
         assert result.exit_code == 0
         assert "current" in result.stdout
         assert "abc1234" in result.stdout
@@ -136,7 +136,7 @@ class TestSnapshotList:
         )
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["snapshot", "list"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "list"])
         assert result.exit_code == 0
         out = result.stdout
         # current first
@@ -152,7 +152,7 @@ class TestSnapshotList:
         _seed_required_env(monkeypatch)
         _write_synth_snapshot(_cwd_path(), target="current")
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["snapshot", "list", "--format", "json"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "list", "--format", "json"])
         assert result.exit_code == 0
         data = json.loads(result.stdout)
         assert len(data) == 1
@@ -174,7 +174,7 @@ class TestSnapshotShow:
         _seed_required_env(monkeypatch)
         _write_synth_snapshot(_cwd_path(), target="current")
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["snapshot", "show", "current"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "show", "current"])
         assert result.exit_code == 0
         assert "id:" in result.stdout
         assert "abc1234" in result.stdout
@@ -191,7 +191,7 @@ class TestSnapshotShow:
         )
         runner = CliRunner()
         # Prefix match against git_head
-        result = runner.invoke(cli_module.app, ["snapshot", "show", "abc"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "show", "abc"])
         assert result.exit_code == 0
         assert "abc1234" in result.stdout
 
@@ -211,14 +211,14 @@ class TestSnapshotShow:
             created_iso="2026-05-27T12:00:00+00:00",
         )
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["snapshot", "show", "abc"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "show", "abc"])
         assert result.exit_code == 1
         assert "ambiguous" in result.stderr.lower()
 
     def test_show_not_found_errors(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _seed_required_env(monkeypatch)
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["snapshot", "show", "deadbee"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "show", "deadbee"])
         assert result.exit_code == 1
         assert "no snapshot" in result.stderr.lower()
 
@@ -231,7 +231,7 @@ class TestSnapshotShow:
             git_head="abc1234",
         )
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["snapshot", "show", "current"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "show", "current"])
         assert result.exit_code == 1
         assert "current" in result.stderr.lower()
 
@@ -239,7 +239,9 @@ class TestSnapshotShow:
         _seed_required_env(monkeypatch)
         _write_synth_snapshot(_cwd_path(), target="current")
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["snapshot", "show", "current", "--format", "json"])
+        result = runner.invoke(
+            cli_module.app, ["state", "snapshots", "show", "current", "--format", "json"]
+        )
         assert result.exit_code == 0
         # Output should parse as JSON + have the version field
         data = json.loads(result.stdout)
@@ -256,7 +258,7 @@ class TestSnapshotGc:
     def test_gc_no_history_no_op(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _seed_required_env(monkeypatch)
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["snapshot", "gc"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "gc"])
         assert result.exit_code == 0
         assert "no snapshots" in result.stdout.lower()
 
@@ -273,7 +275,7 @@ class TestSnapshotGc:
                 created_iso=f"2026-05-2{5 - i}T10:00:00+00:00",
             )
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["snapshot", "gc"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "gc"])
         assert result.exit_code == 0
         # 5 entries, max_count=2, should drop 3
         assert "Dropped 3" in result.stdout
@@ -290,7 +292,7 @@ class TestSnapshotGc:
                 created_iso=f"2026-05-2{5 - i}T10:00:00+00:00",
             )
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["snapshot", "gc", "--dry-run"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "gc", "--dry-run"])
         assert result.exit_code == 0
         assert "Would drop 2" in result.stdout
         # All 3 entries still on disk
@@ -304,7 +306,7 @@ class TestSnapshotGc:
         # Just 1 entry; default max_count=100 → nothing to drop
         _write_synth_snapshot(cwd, target="history", git_head="abc1234")
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["snapshot", "gc", "--dry-run"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "gc", "--dry-run"])
         assert result.exit_code == 0
         assert "nothing to drop" in result.stdout.lower()
 
@@ -337,7 +339,7 @@ class TestSnapshotShowRenderEdgeCases:
             ],
         )
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["snapshot", "show", "current"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "show", "current"])
         assert result.exit_code == 0
         assert "[tool] Read" in result.stdout
         assert "[result] ok" in result.stdout
@@ -355,7 +357,7 @@ class TestSnapshotShowRenderEdgeCases:
             ],
         )
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["snapshot", "show", "current"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "show", "current"])
         assert result.exit_code == 0
         assert "[image]" in result.stdout
 
@@ -381,7 +383,7 @@ class TestSnapshotShowRenderEdgeCases:
         }
         (snapshot_dir / "current.json").write_text(json.dumps(payload))
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["snapshot", "show", "current"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "show", "current"])
         assert result.exit_code == 0
         # 240 chars + "..." truncation marker
         assert "..." in result.stdout
@@ -403,7 +405,7 @@ class TestSnapshotListMalformed:
         (history_dir / "broken-20260101000000.json").write_text("{{ not valid")
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["snapshot", "list"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "list"])
         assert result.exit_code == 0
         # Good entry shown
         assert "good567" in result.stdout
@@ -421,7 +423,7 @@ class TestSnapshotShowMalformed:
         (snapshot_dir / "current.json").write_text("{{ not valid json")
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["snapshot", "show", "current"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "show", "current"])
         assert result.exit_code == 1
         assert "unparseable" in result.stderr.lower()
 
@@ -446,7 +448,7 @@ class TestSnapshotGcAge:
         _os.utime(path, (thirty_days_ago, thirty_days_ago))
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["snapshot", "gc"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "gc"])
         assert result.exit_code == 0
         assert "Dropped 1" in result.stdout
 
@@ -455,16 +457,16 @@ class TestSnapshotHelp:
     def test_snapshot_help_lists_all_subcommands(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("COLUMNS", "200")
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["snapshot", "--help"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "--help"])
         assert result.exit_code == 0
         # All 3 subcommands present
         assert "list" in result.stdout
         assert "show" in result.stdout
         assert "gc" in result.stdout
 
-    def test_top_level_help_mentions_snapshot(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_state_help_mentions_snapshots(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("COLUMNS", "200")
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["--help"])
+        result = runner.invoke(cli_module.app, ["state", "--help"])
         assert result.exit_code == 0
-        assert "snapshot" in result.stdout
+        assert "snapshots" in result.stdout

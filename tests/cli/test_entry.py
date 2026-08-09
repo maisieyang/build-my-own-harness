@@ -1,10 +1,4 @@
-"""Tests for the bare ``oh`` entry point (repl-ux plan §1 — 正门).
-
-Bare ``oh`` must enter the chat REPL — one word enters the session,
-matching the mental model the plan targets. The command surface is
-otherwise untouched: ``--help`` still lists subcommands, ``--version``
-still short-circuits, and every subcommand keeps working.
-"""
+"""Tests for the single public ``oh`` agent entry point."""
 
 from __future__ import annotations
 
@@ -31,6 +25,19 @@ def _capture_run_chat(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
 
 class TestBareEntry:
+    def test_console_main_dispatches_public_app(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        called = False
+
+        def _fake_app() -> None:
+            nonlocal called
+            called = True
+
+        monkeypatch.setattr(cli_module, "app", _fake_app)
+
+        cli_module.main()
+
+        assert called
+
     def test_bare_oh_enters_chat(self, monkeypatch: pytest.MonkeyPatch) -> None:
         captured = _capture_run_chat(monkeypatch)
 
@@ -80,15 +87,19 @@ class TestBareEntry:
         assert "openharness" in result.stdout
         assert not captured, "--version must not start the REPL"
 
-    def test_help_still_lists_subcommands(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_help_omits_agent_compatibility_commands(self, monkeypatch: pytest.MonkeyPatch) -> None:
         captured = _capture_run_chat(monkeypatch)
 
         runner = CliRunner()
         result = runner.invoke(cli_module.app, ["--help"])
 
         assert result.exit_code == 0
-        assert "ask" in result.stdout
-        assert "chat" in result.stdout
+        assert "chat" not in result.stdout
+        assert "ask" not in result.stdout
+        assert "config" in result.stdout
+        assert "inspect" in result.stdout
+        assert "state" in result.stdout
+        assert "dev" in result.stdout
         assert not captured, "--help must not start the REPL"
 
     def test_explicit_chat_subcommand_still_works(self, monkeypatch: pytest.MonkeyPatch) -> None:

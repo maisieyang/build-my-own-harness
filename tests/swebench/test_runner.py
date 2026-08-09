@@ -1,11 +1,9 @@
-"""T4 (D40.2 / D40.5 / D40.6) — headless invocation: argv/env assembly +
-envelope parsing. The real ``oh`` subprocess is replaced by fake invokers;
-the default invoker's subprocess mechanics are exercised in the T7 smoke.
-"""
+"""SWE-bench drives the private headless API, never the public ``oh`` CLI."""
 
 from __future__ import annotations
 
 import json
+import os
 from typing import TYPE_CHECKING
 
 from openharness.swebench.model import SWEBenchInstance
@@ -13,8 +11,8 @@ from openharness.swebench.runner import (
     Invocation,
     InvocationResult,
     RunConfig,
-    build_argv,
     build_env,
+    default_invoker,
     run_instance,
 )
 
@@ -51,33 +49,46 @@ def good_envelope() -> str:
     )
 
 
-class TestBuildArgv:
-    def test_headless_flags_present(self) -> None:
-        argv = build_argv("fix it", RunConfig())
+class TestInternalInvocation:
+    def test_run_config_has_no_public_cli_command(self) -> None:
+        assert not hasattr(RunConfig(), "oh_command")
 
-        assert argv[:2] == ["oh", "ask"]
-        assert "fix it" in argv
-        for flag in ("-p", "--output-format", "--no-skills", "--no-commands"):
-            assert flag in argv
-        assert argv[argv.index("--output-format") + 1] == "json"
+    def test_invocation_carries_typed_runtime_inputs(self, tmp_path: Path) -> None:
+        seen: list[Invocation] = []
 
-    def test_model_and_sandbox_passthrough(self) -> None:
-        argv = build_argv("g", RunConfig(model="deepseek-v3.2", sandbox=True))
+        def invoke(inv: Invocation) -> InvocationResult:
+            seen.append(inv)
+            return InvocationResult(exit_code=0, stdout=good_envelope(), stderr="")
 
-        assert argv[argv.index("--model") + 1] == "deepseek-v3.2"
-        assert "--sandbox" in argv
+        run_instance(
+            make_instance(),
+            tmp_path,
+            RunConfig(model="deepseek-v3.2", sandbox=True, max_turns=60),
+            invoke=invoke,
+            extract=lambda ws: "",
+        )
 
-    def test_no_model_flag_when_default(self) -> None:
-        assert "--model" not in build_argv("g", RunConfig())
+        invocation = seen[0]
+        assert invocation.model == "deepseek-v3.2"
+        assert invocation.sandbox is True
+        assert invocation.max_turns == 60
+        assert "widget frobnicates twice" in invocation.prompt
 
-    def test_max_turns_default_40_and_overridable(self) -> None:
-        """小批 finding: astropy-14182 died on the 20-turn cap (astropy-6938
-        finished at 19 — right against it). SWE-bench tasks need headroom."""
-        argv = build_argv("g", RunConfig())
-        assert argv[argv.index("--max-turns") + 1] == "40"
+    def test_default_invoker_calls_private_runtime(self, tmp_path: Path) -> None:
+        result = default_invoker(
+            Invocation(
+                prompt="hello",
+                cwd=tmp_path,
+                env={"HOME": str(tmp_path), "PATH": os.environ["PATH"]},
+                timeout_s=10,
+                model=None,
+                sandbox=False,
+                max_turns=1,
+            )
+        )
 
-        argv = build_argv("g", RunConfig(max_turns=60))
-        assert argv[argv.index("--max-turns") + 1] == "60"
+        assert result.exit_code == 1
+        assert "Configuration error" in result.stderr
 
 
 class TestBuildEnv:
@@ -132,8 +143,8 @@ class TestRunInstance:
         assert seen[0].cwd == tmp_path
         assert result.exit_code == 0
 
-    def test_firewall_gold_fields_never_in_prompt_argv_or_env(self, tmp_path: Path) -> None:
-        """D40.3 红线: 泄题字段不进子进程的 argv 和 env."""
+    def test_firewall_gold_fields_never_in_prompt_or_env(self, tmp_path: Path) -> None:
+        """D40.3 红线: 泄题字段不进内部请求和 env."""
         seen: list[Invocation] = []
 
         def invoke(inv: Invocation) -> InvocationResult:
@@ -150,8 +161,8 @@ class TestRunInstance:
         )
 
         inv = seen[0]
-        assert GOLD_SENTINEL not in " ".join(inv.argv)
-        assert "F2P-SENTINEL" not in " ".join(inv.argv)
+        assert GOLD_SENTINEL not in inv.prompt
+        assert "F2P-SENTINEL" not in inv.prompt
         for value in inv.env.values():
             assert GOLD_SENTINEL not in value
             assert "F2P-SENTINEL" not in value

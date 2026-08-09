@@ -11,8 +11,7 @@ system surfaces:
   ``name``. Detected at :class:`PluginLoader.discover` time
   (P9-T2). Listing both manifest paths in the error message lets the
   user immediately spot which directory to rename.
-- :class:`PluginInstallError` — ``oh plugins install <source>`` or
-  ``oh plugins remove <name>`` filesystem operation failed (P9-T4).
+- :class:`PluginInstallError` — a plugin filesystem operation failed (P9-T4).
   Reasons include: git clone exit non-zero, source path not found,
   destination already exists.
 
@@ -34,4 +33,4 @@ class PluginConflictError(OpenHarnessError):
 
 
 class PluginInstallError(OpenHarnessError):
-    """``oh plugins install`` / ``remove`` filesystem operation failed."""
+    """A plugin filesystem operation failed."""

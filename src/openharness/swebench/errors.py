@@ -20,7 +20,7 @@ class DatasetNotFoundError(SWEBenchError):
 
     def __init__(self, path: str) -> None:
         super().__init__(
-            f"SWE-bench dataset not found: {path} — run `oh bench swebench fetch` first"
+            f"SWE-bench dataset not found: {path} — run `oh dev bench swebench fetch` first"
         )
         self.path = path
 

@@ -4,7 +4,7 @@ Phase 1 (D5.5) shipped a 3-event renderer; P2-T6.6d extended it with the
 two engine-emitted tool events introduced in P2-T4.4a. Phase 15 (D30.x)
 wraps the tool-event pair (Started → Completed) in a ``rich.Live`` region
 when stdout is a TTY, falling back byte-identical to the pre-Phase-15
-behavior off-TTY (pipes, files, CI, ``oh ask --print``).
+behavior off-TTY (pipes, files, CI, and the private headless runtime).
 
 Behavior table:
 

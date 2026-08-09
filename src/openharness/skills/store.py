@@ -31,7 +31,7 @@ class SkillStore(Protocol):
     Two operations:
 
     - :meth:`discover` runs **once at bootstrap**(catalog stays frozen
-      for the duration of an ``oh ask`` invocation per ``decisions/12``
+      for the duration of a non-interactive invocation per ``decisions/12``
       "Out of scope:hot reload"). Sync because filesystem I/O at
       startup is trivial and sync is easier to test.
     - :meth:`get` is called per ``LoadSkill`` tool dispatch — also sync
@@ -81,7 +81,7 @@ class FilesystemSkillStore(FilesystemMarkdownStore[Skill]):
     against the cache.
 
     The store does NOT watch the filesystem for changes. Catalog is
-    frozen for the duration of an ``oh ask`` invocation per the
+    frozen for the duration of a non-interactive invocation per the
     boundary doc Out-of-Scope.
     """
 

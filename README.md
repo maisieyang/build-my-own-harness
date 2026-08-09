@@ -88,7 +88,7 @@ control problems that the model cannot solve by itself.
 
 ```mermaid
 flowchart LR
-    U["User or script"] --> C["REPL and headless CLI"]
+    U["User or internal adapter"] --> C["REPL and private headless runtime"]
     C --> E["Agent engine"]
     E <--> M["OpenAI-compatible model"]
     E --> P["Permission profile, verified boundary, and hooks"]
@@ -170,24 +170,15 @@ untrusted transcript --> independent judge --> pass --> persist "met" and stop
 
 Judge errors and malformed output fail closed. A hard turn cap bounds false
 negatives and provider failures. Goal state is persisted with the conversation,
-including terminal sentinels, so `oh chat --resume` does not resurrect work that
+including terminal sentinels, so `oh --resume` does not resurrect work that
 was already completed.
 
-### Headless execution and isolation
+### Private non-interactive execution
 
-`oh ask -p` remains the single-run primitive for scripts, benchmarks, and CI.
-It runs one prompt and reports the engine's terminal state; it does not own a
-second completion loop.
-
-```bash
-uv run oh ask -p "inspect the repository and report the highest-risk gap" \
-  --output-format json \
-  --isolate
-```
-
-`--isolate` places that one run in a fresh Git worktree. Sandbox, worktree, and
-structured output remain execution primitives rather than alternative owners
-of task completion.
+Benchmarks and runtime tests use a private non-interactive adapter rather than
+adding another public agent-starting command. The adapter runs in a child
+process so each case retains an isolated cwd, environment, and wall-clock
+timeout. It is an implementation boundary, not a second user-facing CLI.
 
 ### Evaluation ladder
 
@@ -198,8 +189,9 @@ The project separates mechanism tests from model-behavior evidence:
 2. Capability evals cover tool choice, error feedback, skill triggering,
    memory, compaction, and completion judging with programmatic scorers,
    cassette/replay, and judge meta-evaluation.
-3. SWE-bench exercises the shipped CLI across 300 real repository tasks and
-   joins execution records with official verdicts for failure attribution.
+3. SWE-bench exercises the same internal runtime as the REPL across 300 real
+   repository tasks and joins execution records with official verdicts for
+   failure attribution.
 
 The goal-owned completion judge lives in
 [`src/openharness/services/goal_judge.py`](./src/openharness/services/goal_judge.py).
@@ -281,11 +273,27 @@ fields, and verified sandbox switch needed by the repository's current
 dogfood setup; the loop itself contains no provider-specific branches.
 
 Type `/` in the REPL to open the combined menu of built-ins, user commands, and
-skills. An initial prompt can be supplied directly:
+skills. Enter the first prompt inside the session.
+
+### Choose the launcher by context
+
+When developing OpenHarness itself—including from a Git worktree—always launch
+it through the current checkout:
 
 ```bash
-uv run oh "review this repository and identify the highest-risk gap"
+uv run oh
 ```
+
+`uv run` resolves the `pyproject.toml` and `.venv` belonging to the current
+worktree, so the running harness code follows that worktree's branch. A bare
+`oh` is resolved from `PATH`; when it was installed as a uv tool or editable
+checkout, it may still point at a different checkout even though its cwd is the
+current worktree. That split can make a feature worktree operate on its own
+files while running harness code from the main checkout.
+
+Use bare `oh` when OpenHarness is installed as a stable tool and you are using
+it to operate on another project. Use `uv run oh` when developing or validating
+OpenHarness itself.
 
 ### macOS Seatbelt dogfood
 
@@ -326,23 +334,74 @@ instruction files from the OpenHarness installation directory, filesystem
 ancestors, or a user-global fallback. Project instructions remain enabled when
 durable memory is disabled.
 
-## Command map
+## Using OpenHarness
 
-| Command | Purpose |
+OpenHarness has one public Agent entry: `oh [OPTIONS]`. In this repository or
+one of its worktrees, use `uv run oh`; an installed copy uses bare `oh`.
+
+```bash
+uv run oh
+```
+
+### 1. Shell CLI command tree
+
+```text
+oh [OPTIONS]              # the Agent entry
+├── config                # user configuration; `oh config` shows effective settings
+│   └── edit
+├── inspect               # read-only runtime inspection
+│   ├── tools
+│   ├── hooks
+│   └── plugins
+├── state                 # persistent state for the current project
+│   ├── memory
+│   └── snapshots
+└── dev                   # contributor workflows
+    ├── eval
+    └── bench
+```
+
+The tree is the navigation model; these are the executable leaf actions:
+
+| Area | Commands |
 |---|---|
-| `oh` / `oh chat` | Interactive multi-turn session |
-| `oh ask` | One-shot or headless execution |
-| `oh tools` | Inspect registered tool schemas and metadata |
-| `oh config` | Show effective settings or edit the user `.env` |
-| `oh hooks` | Inspect framework and plugin hooks |
-| `oh memory` | Inspect the per-project memory store |
-| `oh plugins` | Inspect installed native and Claude Code-format plugins |
-| `oh snapshot` | List, show, and garbage-collect conversation snapshots |
-| `oh eval` | Run capability-anchored prompt evals |
-| `oh bench swebench` | Fetch and run SWE-bench Lite cases |
+| Agent | `oh`, `oh --auto`, `oh --dry-run`, `oh --resume` |
+| Config | `oh config`, `oh config edit` |
+| Inspect | `oh inspect tools list`, `oh inspect tools show NAME`, `oh inspect hooks list`, `oh inspect hooks describe NAME`, `oh inspect plugins list` |
+| State | `oh state memory list`, `oh state memory show NAME`, `oh state memory path`, `oh state snapshots list`, `oh state snapshots show ID`, `oh state snapshots gc` |
+| Dev | `oh dev eval focus_state`, `oh dev eval memory_decision`, `oh dev bench swebench fetch`, `oh dev bench swebench run` |
 
-Run `uv run oh --help` or `uv run oh <command> --help` for the authoritative
-option surface. All configuration uses the `OPENHARNESS_*` namespace; see
+Each group help includes copyable examples. For the options of a particular
+leaf, follow the tree one level at a time:
+
+```bash
+uv run oh state --help
+uv run oh state memory --help
+```
+
+### 2. REPL slash commands
+
+Once `oh` starts, `/` opens the current session's scrollable command menu. Use
+arrow keys to browse it or keep typing to filter it. `/help` prints the stable
+built-in reference.
+
+| Area | Commands |
+|---|---|
+| Session | `/help`, `/clear`, `/compact`, `/exit` (`/quit` is an alias) |
+| Workflow | `/plan [prompt]`, `/goal [condition|clear]` |
+| Permissions | `/permissions`, `/approve [id]`, `/deny [id]`, `/resume` |
+| Context | `/skills`, `/memory` |
+
+`/approve`, `/deny`, and `/resume` act on a parked permission request; they
+are meaningful only when one exists.
+
+The menu can also contain dynamic entries. User-authored commands are Markdown
+files in `~/.openharness/commands/` or `<project>/.openharness/commands/`;
+project entries override global ones and are invoked as `/<name> [args]`. If no
+built-in or user command matches, `/<skill-name>` falls through to a discovered
+skill. The resolution order is built-in command, user command, then skill.
+
+All configuration uses the `OPENHARNESS_*` namespace; see
 [`.env.example`](./.env.example).
 
 ## Quality contract

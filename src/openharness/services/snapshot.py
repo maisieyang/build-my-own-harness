@@ -1,8 +1,8 @@
 """Session snapshot writer/loader — P12-T2.
 
 Per ``decisions/27-phase-12-boundary.md`` D30.2: deterministic
-per-turn JSON snapshot that ``oh ask --resume`` / ``oh chat --resume``
-loads back into a fresh ``QueryContext``. Parallel to (NOT replacing)
+per-turn JSON snapshot that ``oh --resume`` loads back into a fresh
+``QueryContext``. Parallel to (NOT replacing)
 Phase 11's 5-slot markdown checkpoint at
 ``services/session_memory.py`` — two consumers (L3 compact reads the
 markdown, resume reads the JSON), one ``tool_metadata`` producer
@@ -679,7 +679,7 @@ def _gc_history(
 ) -> list[Path]:
     """Drop history/ entries exceeding ``max_count`` or ``max_age_days``.
 
-    Returns the list of paths dropped (for ``oh snapshot gc``
+    Returns the list of paths dropped (for ``oh state snapshots gc``
     reporting). Drops oldest-first. Either arm at 0 skips that
     check (max_count=0 keeps no entries; max_age_days=0 disables
     the age arm).

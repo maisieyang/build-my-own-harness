@@ -183,6 +183,62 @@ app = typer.Typer(
     add_completion=False,
 )
 
+# The public shell surface is organized by audience and responsibility. Bare
+# ``oh`` remains the only visible agent entry; everything else lives below one
+# of these four concepts.
+config_app = typer.Typer(
+    name="config",
+    help="Configure OpenHarness.",
+    epilog="Shortcut:\n\n  oh config                 Show effective settings.",
+)
+inspect_app = typer.Typer(
+    name="inspect",
+    help="Inspect runtime capabilities.",
+    no_args_is_help=True,
+    epilog=(
+        "Examples:\n\n"
+        "  oh inspect tools list       List registered tools.\n\n"
+        "  oh inspect hooks list       List framework and plugin hooks.\n\n"
+        "  oh inspect plugins list     List installed plugins."
+    ),
+)
+state_app = typer.Typer(
+    name="state",
+    help="Inspect and maintain project state.",
+    no_args_is_help=True,
+    epilog=(
+        "Examples:\n\n"
+        "  oh state memory list        List project memories.\n\n"
+        "  oh state memory path        Print the memory directory.\n\n"
+        "  oh state snapshots list     List conversation snapshots.\n\n"
+        "  oh state snapshots gc       Maintain snapshot history."
+    ),
+)
+dev_app = typer.Typer(
+    name="dev",
+    help="Run repository development workflows.",
+    no_args_is_help=True,
+    epilog=(
+        "Examples:\n\n"
+        "  oh dev eval --help          Show available capability evals.\n\n"
+        "  oh dev bench swebench --help  Show SWE-bench workflows."
+    ),
+)
+app.add_typer(config_app, name="config")
+app.add_typer(inspect_app, name="inspect")
+app.add_typer(state_app, name="state")
+app.add_typer(dev_app, name="dev")
+
+# Private command harness for exercising the non-interactive runtime from
+# tests and benchmark adapters. It is deliberately not mounted on ``app`` and
+# has no console-script entry point: ``oh`` has one agent-starting front door.
+headless_app = typer.Typer(add_completion=False)
+
+
+@headless_app.callback()
+def _headless_root() -> None:
+    """Private parser root; intentionally unreachable from ``oh``."""
+
 
 # --------------------------------------------------------------------------- #
 # Seams (overridable in tests)                                                #
@@ -316,7 +372,7 @@ def _maybe_register_web_tools(
             )
             raise typer.Exit(code=1)
         # Default-ON path with no key — silently degrade. No stderr
-        # noise: every ``oh ask`` invocation would emit it otherwise,
+        # noise: every non-interactive invocation would emit it otherwise,
         # which is unacceptable UX for users who don't care about
         # web at all. The system prompt's anti-substitution paragraph
         # tells the LLM to suggest ``--enable-web`` (which then
@@ -636,7 +692,7 @@ async def _run_ask(
     )
     # P9-T3 (decisions/24 D27.4): plugin discovery is opt-in. CLI flag
     # overrides Settings. When OFF, plugin components are not loaded
-    # into the running registry — but ``oh plugins list`` (T4) still
+    # into the running registry — but ``oh inspect plugins list`` still
     # works for read-only introspection.
     enable_plugins = (
         enable_plugins_override if enable_plugins_override is not None else settings.enable_plugins
@@ -699,7 +755,7 @@ async def _run_ask(
     # prompts that legitimately start with ``/``).
     #
     # ``UnknownCommandError`` from the live path is intentionally NOT
-    # caught here — it propagates to the synchronous ``ask`` command's
+    # caught here — it propagates to the private synchronous command's
     # except chain so the user-facing error UX (with available catalog)
     # renders before any LLM call is attempted.
     #
@@ -1168,7 +1224,7 @@ async def _dispatch_ask(
 
 
 # --------------------------------------------------------------------------- #
-# P6+: oh chat REPL                                                           #
+# Interactive REPL                                                            #
 # --------------------------------------------------------------------------- #
 
 
@@ -1206,7 +1262,7 @@ def _emit_skill_catalog(skill_store: SkillStore) -> None:
 
 def _emit_memory_catalog(memory_store: MemoryStore | None, memory_dir: Path | None) -> None:
     """Render ``/memory`` output — alphabetical 3-column
-    ``<name> <type> <description>``, matching the ``oh memory list``
+    ``<name> <type> <description>``, matching ``oh state memory list``
     text format exactly so users see the same data whether they query
     from outside or inside the REPL.
 
@@ -1219,7 +1275,7 @@ def _emit_memory_catalog(memory_store: MemoryStore | None, memory_dir: Path | No
 
     Missing memory subsystem (``--no-enable-memory`` or
     ``settings.enable_memory=False``) → ``(memory subsystem disabled)``.
-    Empty store → ``(no memories yet)`` (matches ``oh memory list``
+    Empty store → ``(no memories yet)`` (matches ``oh state memory list``
     empty branch). D37.4 column widths.
     """
     if memory_store is None:
@@ -1245,7 +1301,7 @@ def _emit_memory_catalog(memory_store: MemoryStore | None, memory_dir: Path | No
 
 
 _CHAT_HELP_TEXT = """\
-oh chat — multi-turn REPL commands:
+OpenHarness — multi-turn REPL commands:
   /exit, /quit       leave the REPL
   /clear             reset conversation history (keeps tools + mode)
   /compact           force full LLM-based compaction of the conversation
@@ -1310,7 +1366,7 @@ async def _run_chat(
 
     Builds a QueryContext once, then loops on ``input(">>> ")``,
     accumulating conversation history across turns. Each turn runs the
-    same ``run_query`` engine ``oh ask`` uses; the new
+    same ``run_query`` engine the non-interactive runtime uses; the new
     ``ConversationCompleteEvent`` exposes the post-turn message list
     which becomes the next turn's ``initial_messages``.
     """
@@ -1522,7 +1578,7 @@ async def _run_chat(
             web_enabled=effective_web,
         )
 
-        typer.echo("oh chat — multi-turn REPL. Type / for the command menu, /exit to quit.")
+        typer.echo("OpenHarness — multi-turn REPL. Type / for the command menu, /exit to quit.")
 
         # P12-T5 (D30.4): --resume loads the latest snapshot for cwd
         # as the starting history; banner prints message count + git_head
@@ -1858,10 +1914,10 @@ async def _run_chat(
             if user_input == "/skills":
                 _emit_skill_catalog(skill_store)
                 continue
-            # ``/memory`` in REPL — mirrors ``oh memory list`` text format so
+            # ``/memory`` mirrors ``oh state memory list`` text format so
             # users don't have to leave the chat to inspect the memory store
             # the LLM is reading from. Read-only; identical 3-column layout
-            # (name / type / description) as ``oh memory list``. First line
+            # (name / type / description) as ``oh state memory list``. First line
             # is the ``(memory dir: ...)`` header so wrong-cwd runs surface
             # immediately rather than rendering an unrelated project's data.
             if user_input == "/memory":
@@ -2110,7 +2166,7 @@ async def _run_chat(
                     get_session_memory_dir(env.cwd) / "checkpoint.md" if enable_memory else None
                 ),
                 memory_store=memory_store,
-                # P12-T3 (D30.8): snapshot writer mirrored from ask.
+                # P12-T3 (D30.8): snapshot writer mirrored from non-interactive execution.
                 snapshot_enabled=settings.snapshot.enabled,
                 snapshot_max_age_warn_days=settings.snapshot.max_age_warn_days,
                 snapshot_history_max_count=settings.snapshot.history.max_count,
@@ -2297,55 +2353,120 @@ def _root(
         is_eager=True,
         help="Print version and exit.",
     ),
+    model: str | None = typer.Option(None, "--model", "-m", help="Model name override."),
+    max_tokens: int = typer.Option(
+        DEFAULT_MAX_TOKENS,
+        "--max-tokens",
+        min=1,
+        hidden=True,
+        help="Max tokens per turn.",
+    ),
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Use the automated reviewer for exact permission requests.",
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="List tool calls; don't execute."),
+    log_level: LogLevel | None = typer.Option(None, "--log-level", hidden=True),
+    log_format: LogFormat | None = typer.Option(None, "--log-format", hidden=True),
+    tool_result_cap: int | None = typer.Option(None, "--tool-result-cap", hidden=True, min=0),
+    no_auto_truncate: bool = typer.Option(False, "--no-auto-truncate", hidden=True),
+    no_skills: bool = typer.Option(False, "--no-skills", hidden=True),
+    no_commands: bool = typer.Option(False, "--no-commands", hidden=True),
+    sandbox: bool | None = typer.Option(
+        None,
+        "--sandbox/--no-sandbox",
+        help="Enable or disable the verified execution sandbox.",
+    ),
+    sandbox_backend: SandboxBackendName | None = typer.Option(
+        None,
+        "--sandbox-backend",
+        help="Select the verified sandbox backend.",
+    ),
+    sandbox_image: str | None = typer.Option(None, "--sandbox-image", hidden=True),
+    sandbox_memory: str | None = typer.Option(None, "--sandbox-memory", hidden=True),
+    sandbox_cpus: float | None = typer.Option(None, "--sandbox-cpus", hidden=True),
+    sandbox_runtime: str | None = typer.Option(None, "--sandbox-runtime", hidden=True),
+    enable_plugin_hooks: bool | None = typer.Option(
+        None,
+        "--enable-plugin-hooks/--no-enable-plugin-hooks",
+        hidden=True,
+    ),
+    enable_plugins: bool | None = typer.Option(
+        None,
+        "--enable-plugins/--no-enable-plugins",
+        hidden=True,
+    ),
+    enable_memory: bool | None = typer.Option(
+        None,
+        "--enable-memory/--no-enable-memory",
+        hidden=True,
+    ),
+    enable_web: bool | None = typer.Option(
+        None,
+        "--enable-web/--no-enable-web",
+        hidden=True,
+    ),
+    compact_threshold: float | None = typer.Option(
+        None,
+        "--compact-threshold",
+        hidden=True,
+        min=0.0,
+        max=1.0,
+    ),
+    no_auto_compact: bool = typer.Option(False, "--no-auto-compact", hidden=True),
+    resume: bool = typer.Option(
+        False,
+        "--resume",
+        help="Resume the latest snapshot for the current project.",
+    ),
+    resume_id: str | None = typer.Option(
+        None,
+        "--resume-id",
+        help="Resume the snapshot whose git commit matches this prefix.",
+    ),
+    llm_focus_state: bool | None = typer.Option(
+        None,
+        "--llm-focus-state/--no-llm-focus-state",
+        hidden=True,
+    ),
 ) -> None:
-    """OpenHarness CLI.
-
-    D43 front-door note: ``oh "prompt"`` / ``oh -p "prompt"`` are handled
-    by :func:`_preprocess_root_argv` in ``main()`` (known-subcommand-first
-    argv rewrite), NOT by params here — a Click group feeds its positional
-    argument before resolving subcommands, so a group-level ``prompt``
-    would shadow every subcommand (``oh chat`` → prompt="chat"). Learned
-    the hard way; do not re-add group-level positionals.
-    """
-    # repl-ux plan §1 (正门): bare ``oh`` = argless ``oh chat``. Every
-    # kwarg is spelled out because calling the typer-decorated ``chat``
-    # directly would otherwise leak OptionInfo sentinels as values.
+    """OpenHarness CLI. The root command starts the interactive session."""
     if ctx.invoked_subcommand is None:
         chat(
-            prompt=None,
-            model=None,
-            max_tokens=DEFAULT_MAX_TOKENS,
-            auto=False,
-            dry_run=False,
-            log_level=None,
-            log_format=None,
-            tool_result_cap=None,
-            no_auto_truncate=False,
-            no_skills=False,
-            no_commands=False,
-            sandbox=None,
-            sandbox_backend=None,
-            sandbox_image=None,
-            sandbox_memory=None,
-            sandbox_cpus=None,
-            sandbox_runtime=None,
-            enable_plugin_hooks=None,
-            enable_plugins=None,
-            enable_memory=None,
-            enable_web=None,
-            compact_threshold=None,
-            no_auto_compact=False,
-            resume=False,
-            resume_id=None,
-            llm_focus_state=None,
+            model=model,
+            max_tokens=max_tokens,
+            auto=auto,
+            dry_run=dry_run,
+            log_level=log_level,
+            log_format=log_format,
+            tool_result_cap=tool_result_cap,
+            no_auto_truncate=no_auto_truncate,
+            no_skills=no_skills,
+            no_commands=no_commands,
+            sandbox=sandbox,
+            sandbox_backend=sandbox_backend,
+            sandbox_image=sandbox_image,
+            sandbox_memory=sandbox_memory,
+            sandbox_cpus=sandbox_cpus,
+            sandbox_runtime=sandbox_runtime,
+            enable_plugin_hooks=enable_plugin_hooks,
+            enable_plugins=enable_plugins,
+            enable_memory=enable_memory,
+            enable_web=enable_web,
+            compact_threshold=compact_threshold,
+            no_auto_compact=no_auto_compact,
+            resume=resume,
+            resume_id=resume_id,
+            llm_focus_state=llm_focus_state,
         )
 
 
-@app.command(help="Send a single prompt to the configured LLM and stream the response.")
-def ask(
+@headless_app.command("run", help="Internal non-interactive runtime adapter.")
+def _run_headless_command(
     prompt: str = typer.Argument(
         ...,
-        help='User prompt. Quote multi-word prompts: oh ask "explain X".',
+        help="Prompt for internal non-interactive execution.",
     ),
     model: str | None = typer.Option(
         None,
@@ -2544,7 +2665,7 @@ def ask(
             "Enable discovery + loading of plugins from "
             "~/.openharness/plugins/<name>/manifest.yaml (Phase 9). "
             "Default OFF — plugin components are not registered into "
-            "the running registry unless this flag is set. ``oh plugins "
+            "the running registry unless this flag is set. ``oh inspect plugins "
             "list`` still works without it (read-only introspection). "
             "Overrides OPENHARNESS_ENABLE_PLUGINS."
         ),
@@ -2807,15 +2928,11 @@ def ask(
         raise typer.Exit(code=1)
 
 
-@app.command(help="Open an interactive multi-turn REPL (Phase 6+).")
+@app.command(
+    hidden=True,
+    help="Compatibility entry for the interactive session; use bare `oh`.",
+)
 def chat(
-    prompt: str | None = typer.Argument(
-        None,
-        help=(
-            "Optional initial prompt (D43.1): submitted as the first REPL "
-            "turn, then the session stays interactive."
-        ),
-    ),
     model: str | None = typer.Option(None, "--model", "-m", help="Model name override."),
     max_tokens: int = typer.Option(
         DEFAULT_MAX_TOKENS, "--max-tokens", min=1, help="Max tokens per turn."
@@ -2913,7 +3030,7 @@ def chat(
         help="Opt in to LLM-authored task_focus_state (Phase 13 D31.7). Default OFF.",
     ),
 ) -> None:
-    """Multi-turn REPL — same flag surface as ``ask`` minus the prompt arg."""
+    """Multi-turn REPL and the sole public agent-starting command."""
     reviewer_posture_override = ReviewerPosture.AUTO if auto else None
     execution_posture_override = ExecutionPosture.DRY_RUN if dry_run else None
 
@@ -2922,7 +3039,7 @@ def chat(
     try:
         asyncio.run(
             _run_chat(
-                initial_prompt=prompt,
+                initial_prompt=None,
                 model_override=model,
                 max_tokens=max_tokens,
                 reviewer_posture_override=reviewer_posture_override,
@@ -2966,14 +3083,14 @@ def chat(
 
 
 # --------------------------------------------------------------------------- #
-# P7-T2: introspection subcommands (oh tools / oh config / oh hooks)         #
+# Configuration and runtime inspection commands                               #
 # --------------------------------------------------------------------------- #
 
 
 _CONFIG_TEMPLATE = """\
 # OpenHarness user-global configuration
 #
-# This file is loaded by ``oh ask`` / ``oh chat`` etc. as a LOWER-
+# This file is loaded by ``oh`` and internal runtimes as a LOWER-
 # precedence layer than a ``.env`` in the project's cwd, which in turn
 # is lower precedence than env vars set in your shell.
 #
@@ -3012,10 +3129,10 @@ def _redact_secret(value: str | None) -> str:
     return f"***{value[-4:]}"
 
 
-# ----- oh tools --------------------------------------------------------------
+# ----- oh inspect tools ------------------------------------------------------
 
 tools_app = typer.Typer(name="tools", help="Inspect registered tools.")
-app.add_typer(tools_app, name="tools")
+inspect_app.add_typer(tools_app, name="tools")
 
 
 @tools_app.command("list", help="List the tools registered in the default registry.")
@@ -3031,8 +3148,8 @@ def tools_list(
 
     MCP adapters + LoadSkill register conditionally based on Settings
     + filesystem state, so this offline listing shows only the
-    framework's default catalog. Run ``oh ask --dry-run "..."`` to see
-    the effective registry for a real invocation.
+    framework's default catalog. This command intentionally reports the
+    static registry rather than running a model turn.
     """
     from openharness.tools import create_default_tool_registry
 
@@ -3109,10 +3226,6 @@ def tools_show(
 
 # ----- oh config -------------------------------------------------------------
 
-config_app = typer.Typer(name="config", help="Inspect or edit OpenHarness configuration.")
-app.add_typer(config_app, name="config")
-
-
 # Field names whose values are redacted on display.
 _SECRET_FIELDS = frozenset({"api_key"})
 
@@ -3157,6 +3270,13 @@ def config_show(
         typer.echo(f"{k:<{width}}= {v!r}")
 
 
+@config_app.callback(invoke_without_command=True)
+def _config_root(ctx: typer.Context) -> None:
+    """Show effective configuration when no explicit action is selected."""
+    if ctx.invoked_subcommand is None:
+        config_show(format="text")
+
+
 @config_app.command("edit", help="Open ~/.openharness/.env in $EDITOR.")
 def config_edit() -> None:
     """Open the user-global config file in ``$EDITOR``(or ``nano`` /
@@ -3189,10 +3309,10 @@ def config_edit() -> None:
     subprocess.run([editor, str(env_file)], check=False)
 
 
-# ----- oh hooks --------------------------------------------------------------
+# ----- oh inspect hooks ------------------------------------------------------
 
 hooks_app = typer.Typer(name="hooks", help="Inspect framework + plugin hooks.")
-app.add_typer(hooks_app, name="hooks")
+inspect_app.add_typer(hooks_app, name="hooks")
 
 
 @hooks_app.command("list", help="List built-in hooks (and plugins with --enable-plugin-hooks).")
@@ -3312,16 +3432,16 @@ def hooks_describe(
     typer.echo(doc)
 
 
-# ----- oh memory -------------------------------------------------------------
+# ----- oh state memory -------------------------------------------------------
 # P10-T5: read-only inspection subcommands per D28.11.
 # No add / edit / remove — write surface defers to Phase 11's extraction
 # secondary pass + future CLI add command.
 
 memory_app = typer.Typer(
     name="memory",
-    help=("Inspect project memory store (read-only — the main LLM is the writer per D36.10)."),
+    help="Inspect the current project's memory store (read-only).",
 )
-app.add_typer(memory_app, name="memory")
+state_app.add_typer(memory_app, name="memory")
 
 
 # P17-T4 (D37.4): name + description truncation caps for the text
@@ -3460,13 +3580,13 @@ def memory_path() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# P19-T3 (D39.7): oh plugins list                                             #
+# Plugin inspection                                                           #
 # --------------------------------------------------------------------------- #
 #
 # Read-only discovery — calls PluginLoader.discover_with_format() only;
 # no fan_out so Python-hook modules don't get imported as a side effect
 # of asking "what plugins do I have installed?". Same role as
-# ``oh memory list`` / ``oh snapshot list``: a fast, side-effect-free
+# ``oh state memory list`` / ``oh state snapshots list``: fast, side-effect-free
 # introspection entry point that confirms a freshly-dropped plugin dir
 # was actually discovered.
 
@@ -3474,7 +3594,7 @@ plugins_app = typer.Typer(
     name="plugins",
     help="Inspect installed plugins (read-only).",
 )
-app.add_typer(plugins_app, name="plugins")
+inspect_app.add_typer(plugins_app, name="plugins")
 
 
 @plugins_app.command("list", help="List installed plugins under ~/.openharness/plugins/.")
@@ -3570,19 +3690,19 @@ def plugins_list(
 
 
 # --------------------------------------------------------------------------- #
-# P13-T2 (D31.6): oh snapshot list / show / gc                                #
+# Snapshot inspection and maintenance                                         #
 # --------------------------------------------------------------------------- #
 #
-# Mirrors the ``oh memory list / show / path`` pattern (Phase 10 T5):
+# Mirrors the ``oh state memory list / show / path`` pattern:
 # typer sub-app with 3 read-mostly subcommands for user-side
 # introspection. ``list`` is discoverability, ``show`` is inspection,
 # ``gc`` is force-cleanup outside the per-turn eager rotation path.
 
 snapshot_app = typer.Typer(
     name="snapshot",
-    help="Inspect + manage Phase 12 snapshots for the current cwd.",
+    help="Inspect and maintain conversation snapshots for the current project.",
 )
-app.add_typer(snapshot_app, name="snapshot")
+state_app.add_typer(snapshot_app, name="snapshots")
 
 
 def _snapshot_list_entries(cwd: Path) -> list[tuple[str, Path]]:
@@ -3893,15 +4013,15 @@ def snapshot_gc(
 
 
 # --------------------------------------------------------------------------- #
-# `oh eval` — Stage 1-5 capability-anchored prompt eval                        #
+# ``oh dev eval`` — capability evals                                          #
 # --------------------------------------------------------------------------- #
 
 
 eval_app = typer.Typer(
     name="eval",
-    help="Run capability-anchored prompt eval (Stages 1-5 substrate).",
+    help="Run capability evals.",
 )
-app.add_typer(eval_app, name="eval")
+dev_app.add_typer(eval_app, name="eval")
 
 
 @eval_app.command(
@@ -3917,8 +4037,7 @@ def eval_focus_state(  # pragma: no cover — experimental eval surface (exclude
         "--mode",
         "-m",
         help=(
-            "Cassette mode (D33.2): "
-            "'live' (real LLM, no cassette save), "
+            "Cassette mode: 'live' (real LLM, no cassette save), "
             "'record' (real LLM + save cassette), "
             "'replay' (load cassette, no LLM call)."
         ),
@@ -3988,7 +4107,7 @@ def eval_focus_state(  # pragma: no cover — experimental eval surface (exclude
     if not dataset_path.exists():
         typer.echo(
             f"Dataset not found at {dataset_path}. "
-            "`oh eval focus_state` must be run from the project root containing evals/.",
+            "`oh dev eval focus_state` must be run from the project root containing evals/.",
             err=True,
         )
         raise typer.Exit(code=1) from None
@@ -4007,7 +4126,7 @@ def eval_focus_state(  # pragma: no cover — experimental eval surface (exclude
         ),
     ]
 
-    typer.echo("# focus_state.py eval — `oh eval focus_state` (Stages 1-5 substrate)")
+    typer.echo("# focus_state.py eval — `oh dev eval focus_state`")
     typer.echo(f"# model:         {effective_model}")
     typer.echo(f"# dataset:       {dataset_path.relative_to(Path.cwd())}")
     typer.echo(f"# cassettes:     {cassette_root.relative_to(Path.cwd())}")
@@ -4062,11 +4181,7 @@ def eval_focus_state(  # pragma: no cover — experimental eval surface (exclude
 
 @eval_app.command(
     "memory_decision",
-    help=(
-        "Run memory_decision eval — Phase 16 T3 D35.5 P0 gating eval for "
-        "decision surface #4 (inline decision class side-effects). 6 cases, "
-        "5 scorers, version-stamped results."
-    ),
+    help=("Run the memory write-decision eval — 6 cases, 5 scorers, version-stamped results."),
 )
 def eval_memory_decision(  # pragma: no cover — experimental eval surface (excluded from coverage gate)
     mode: str = typer.Option(
@@ -4074,8 +4189,7 @@ def eval_memory_decision(  # pragma: no cover — experimental eval surface (exc
         "--mode",
         "-m",
         help=(
-            "Cassette mode (D33.2): "
-            "'live' (real LLM, no cassette save), "
+            "Cassette mode: 'live' (real LLM, no cassette save), "
             "'record' (real LLM + save cassette), "
             "'replay' (load cassette, no LLM call)."
         ),
@@ -4155,7 +4269,7 @@ def eval_memory_decision(  # pragma: no cover — experimental eval surface (exc
     if not dataset_path.exists():
         typer.echo(
             f"Dataset not found at {dataset_path}. "
-            "`oh eval memory_decision` must be run from the project root containing evals/.",
+            "`oh dev eval memory_decision` must be run from the project root containing evals/.",
             err=True,
         )
         raise typer.Exit(code=1) from None
@@ -4175,7 +4289,7 @@ def eval_memory_decision(  # pragma: no cover — experimental eval surface (exc
         ),
     ]
 
-    typer.echo("# memory_decision eval — `oh eval memory_decision` (Phase 16 T3)")
+    typer.echo("# memory_decision eval — `oh dev eval memory_decision`")
     typer.echo(f"# model:         {effective_model}")
     typer.echo(f"# dataset:       {dataset_path.relative_to(Path.cwd())}")
     typer.echo(f"# cassettes:     {cassette_root.relative_to(Path.cwd())}")
@@ -4239,66 +4353,13 @@ def eval_memory_decision(  # pragma: no cover — experimental eval surface (exc
     asyncio.run(_orchestrate())
 
 
-# ----- oh bench (D40: benchmark adapters; sub-app lives in swebench/cli.py) --
+# ----- oh dev bench (sub-app lives in swebench/cli.py) -----------------------
 
 from openharness.swebench.cli import bench_app  # noqa: E402
 
-app.add_typer(bench_app, name="bench")
-
-
-# --------------------------------------------------------------------------- #
-# Entry point                                                                 #
-# --------------------------------------------------------------------------- #
-
-
-def _known_subcommands() -> set[str]:
-    """Registered subcommand names (typer commands + sub-apps)."""
-    names = {cmd.name for cmd in app.registered_commands if cmd.name}
-    names.update(
-        {c.callback.__name__ for c in app.registered_commands if c.name is None and c.callback}
-    )
-    names.update({g.name for g in app.registered_groups if g.name})
-    return names
-
-
-def _preprocess_root_argv(argv: list[str]) -> list[str]:
-    """D43.1/D43.2 — known-subcommand-first argv rewrite (Claude Code 形态).
-
-    A Click group feeds its positional ARGUMENT before resolving
-    subcommands, so ``oh "prompt"`` cannot be a group-level positional
-    (it would shadow every subcommand). Instead ``main()`` rewrites argv
-    before Typer sees it:
-
-    - first non-option token is a known subcommand → passthrough
-    - ``-p``/``--print`` anywhere in a non-subcommand invocation →
-      delegate to ``ask`` (full contract-flag surface for free)
-    - any other non-option lead token → delegate to ``chat`` (the token
-      becomes the seeded initial prompt, D43.1)
-    - pure options (``--version``/``--help``) or empty → passthrough
-
-    Known limit (documented in D43): a quoted prompt equal to a
-    subcommand name routes to the subcommand — same trade-off as
-    Claude Code.
-    """
-    first_positional = next((t for t in argv if not t.startswith("-")), None)
-    if first_positional is None or first_positional in _known_subcommands():
-        return argv
-    if "-p" in argv or "--print" in argv:
-        return ["ask", *argv]
-    return ["chat", *argv]
+dev_app.add_typer(bench_app, name="bench")
 
 
 def main() -> None:
-    """Console-script entry point (``oh`` / ``openharness``).
-
-    Typer's ``app()`` raises :class:`SystemExit` on completion, so this
-    function does not return a value. ``__main__.py`` and the script
-    wrapper both rely on that exit-code propagation.
-    """
-    import sys
-
-    app(_preprocess_root_argv(sys.argv[1:]))
-
-
-if __name__ == "__main__":  # pragma: no cover
-    main()
+    """The sole public console-script entry point: ``oh``."""
+    app()
