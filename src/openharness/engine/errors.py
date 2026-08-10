@@ -14,25 +14,39 @@ loop-specific hint.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from openharness.errors import LoopError
+
+if TYPE_CHECKING:
+    from openharness.protocols import ConversationMessage
 
 
 class LoopLimitExceeded(LoopError):
     """``run_query`` reached its ``max_turns`` cap without ``end_turn``.
 
-    Carries the loop's hard cap so the caller can render a hint like
+    Carries the caller-selected cap so the caller can render a hint like
     "loop hit turn limit, try simpler prompt or raise --max-turns".
 
-    Per ``decisions/06-phase-2-boundary.md`` D6.1, this is the **safety
-    floor** -- not a normal exit path. Phase 4 may add cost-cap on top
-    but the turn counter remains load-bearing.
+    The public interactive loop has no turn-count cap by default. Private
+    adapters and explicit ``--max-turns`` callers use this as a circuit
+    breaker; exhaustion is a forced pause, never semantic completion.
     """
 
-    def __init__(self, max_turns: int) -> None:
+    def __init__(
+        self,
+        max_turns: int,
+        *,
+        messages: list[ConversationMessage] | None = None,
+    ) -> None:
         super().__init__(
             f"loop hit turn limit ({max_turns}); raise --max-turns or simplify the prompt"
         )
         self.max_turns = max_turns
+        # Interactive callers can checkpoint before pausing instead of
+        # throwing away completed tool work. This is never evidence of
+        # semantic completion and must not be routed to the Goal judge.
+        self.messages = list(messages) if messages is not None else None
 
 
 class AutonomousBoundaryError(LoopError):

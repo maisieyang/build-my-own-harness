@@ -9,12 +9,24 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 _MAX_READ_BYTES = 10 * 1024 * 1024
 _MAX_SEARCH_BYTES = 8 * 1024 * 1024
+_MAX_SEARCH_FILE_BYTES = 10 * 1024 * 1024
 _STREAM_CHUNK_BYTES = 64 * 1024
+_RG_SEARCH_TIMEOUT_SECONDS = 0.5
+_PYTHON_SEARCH_TIMEOUT_SECONDS = 5.0
+
+
+class _SearchFallbackTimedOut(Exception):
+    """The in-process search exceeded its bounded recovery window."""
 
 
 def _success(output: str, **metadata: object) -> dict[str, object]:
@@ -154,8 +166,14 @@ def _search(request: dict[str, Any]) -> dict[str, object]:
         # an exact permission request that cannot fix the underlying runtime
         # restriction (dogfood: allowed workspace Grep parked forever).
         return _search_with_python(request)
-    output, byte_truncated = _collect_bounded_output(process, max_bytes=_MAX_SEARCH_BYTES)
-    returncode = process.wait()
+    try:
+        output, byte_truncated, returncode = _collect_bounded_output(
+            process,
+            max_bytes=_MAX_SEARCH_BYTES,
+            timeout_seconds=_RG_SEARCH_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return _search_with_python(request)
     if returncode == 1:
         return _success("(no matches)", match_count=0)
     if returncode != 0:
@@ -197,32 +215,52 @@ def _search_with_python(request: dict[str, Any]) -> dict[str, object]:
     glob = str(request["glob"]) if request.get("glob") is not None else None
     include_hidden = bool(request.get("hidden"))
     line_cap = int(request["line_cap"])
+    deadline = time.monotonic() + _PYTHON_SEARCH_TIMEOUT_SECONDS
+    ignored_directories = _gitignored_directory_patterns(root)
     retained: list[str] = []
     retained_bytes = 0
     byte_truncated = False
     total = 0
 
-    for path in _iter_search_files(root, include_hidden=include_hidden):
-        relative = path.name if root.is_file() else path.relative_to(root).as_posix()
-        if glob is not None and not _glob_matches(relative, glob):
-            continue
-        with path.open("rb") as stream:
-            raw = stream.read()
-        if b"\0" in raw:
-            continue
-        for number, line in enumerate(raw.decode("utf-8", errors="replace").splitlines(), 1):
-            if expression.search(line) is None:
+    try:
+        paths = _iter_search_files(
+            root,
+            include_hidden=include_hidden,
+            ignored_directories=ignored_directories,
+            deadline=deadline,
+        )
+        for path in paths:
+            _raise_if_search_expired(deadline)
+            relative = path.name if root.is_file() else path.relative_to(root).as_posix()
+            if glob is not None and not _glob_matches(relative, glob):
                 continue
-            total += 1
-            if len(retained) >= line_cap:
+            try:
+                if path.stat().st_size > _MAX_SEARCH_FILE_BYTES:
+                    continue
+            except FileNotFoundError:
                 continue
-            rendered = f"{path}:{number}:{line}"
-            encoded_size = len(rendered.encode("utf-8")) + 1
-            if retained_bytes + encoded_size > _MAX_SEARCH_BYTES:
-                byte_truncated = True
+            with path.open("rb") as stream:
+                raw = stream.read()
+            if b"\0" in raw:
                 continue
-            retained.append(rendered)
-            retained_bytes += encoded_size
+            for number, line in enumerate(raw.decode("utf-8", errors="replace").splitlines(), 1):
+                if expression.search(line) is None:
+                    continue
+                total += 1
+                if len(retained) >= line_cap:
+                    continue
+                rendered = f"{path}:{number}:{line}"
+                encoded_size = len(rendered.encode("utf-8")) + 1
+                if retained_bytes + encoded_size > _MAX_SEARCH_BYTES:
+                    byte_truncated = True
+                    continue
+                retained.append(rendered)
+                retained_bytes += encoded_size
+    except _SearchFallbackTimedOut:
+        return _failure(
+            f"search timed out after {_PYTHON_SEARCH_TIMEOUT_SECONDS:g}s "
+            "after ripgrep could not complete inside the sandbox"
+        )
 
     if total == 0:
         return _success(
@@ -243,18 +281,68 @@ def _search_with_python(request: dict[str, Any]) -> dict[str, object]:
     )
 
 
-def _iter_search_files(root: Path, *, include_hidden: bool) -> list[Path]:
+def _iter_search_files(
+    root: Path,
+    *,
+    include_hidden: bool,
+    ignored_directories: tuple[str, ...],
+    deadline: float,
+) -> Iterator[Path]:
     if root.is_file():
         if include_hidden or not root.name.startswith("."):
-            return [root]
-        return []
-    files: list[Path] = []
-    for directory, dirnames, filenames in os.walk(root):
-        if not include_hidden:
-            dirnames[:] = [name for name in dirnames if not name.startswith(".")]
-            filenames = [name for name in filenames if not name.startswith(".")]
-        files.extend(Path(directory) / name for name in filenames)
-    return files
+            yield root
+        return
+
+    pending = [root]
+    while pending:
+        _raise_if_search_expired(deadline)
+        directory = pending.pop()
+        child_directories: list[Path] = []
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                _raise_if_search_expired(deadline)
+                if not include_hidden and entry.name.startswith("."):
+                    continue
+                path = Path(entry.path)
+                if entry.is_dir(follow_symlinks=False):
+                    relative = path.relative_to(root).as_posix()
+                    if not _matches_ignored_directory(relative, ignored_directories):
+                        child_directories.append(path)
+                elif entry.is_file(follow_symlinks=False):
+                    yield path
+        pending.extend(reversed(child_directories))
+
+
+def _gitignored_directory_patterns(root: Path) -> tuple[str, ...]:
+    if not root.is_dir():
+        return ()
+    ignore_file = root / ".gitignore"
+    try:
+        lines = ignore_file.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return ()
+    return tuple(
+        line.strip()
+        for line in lines
+        if line.strip().endswith("/") and not line.lstrip().startswith(("#", "!"))
+    )
+
+
+def _matches_ignored_directory(relative: str, patterns: tuple[str, ...]) -> bool:
+    name = relative.rsplit("/", 1)[-1]
+    for raw_pattern in patterns:
+        pattern = raw_pattern.lstrip("/").rstrip("/")
+        if "/" not in pattern:
+            if fnmatch.fnmatchcase(name, pattern):
+                return True
+        elif fnmatch.fnmatchcase(relative, pattern) or relative.startswith(f"{pattern}/"):
+            return True
+    return False
+
+
+def _raise_if_search_expired(deadline: float) -> None:
+    if time.monotonic() >= deadline:
+        raise _SearchFallbackTimedOut
 
 
 def _glob_matches(relative: str, pattern: str) -> bool:
@@ -264,20 +352,50 @@ def _glob_matches(relative: str, pattern: str) -> bool:
 
 
 def _collect_bounded_output(
-    process: subprocess.Popen[bytes], *, max_bytes: int
-) -> tuple[bytes, bool]:
-    """Drain a child pipe completely while retaining at most ``max_bytes``."""
-    if process.stdout is None:
+    process: subprocess.Popen[bytes],
+    *,
+    max_bytes: int,
+    timeout_seconds: float | None = None,
+) -> tuple[bytes, bool, int]:
+    """Drain a child concurrently while enforcing a wall-clock deadline.
+
+    Waiting and draining must happen in parallel: waiting first can deadlock
+    when the pipe fills, while reading first can block forever when ``rg`` is
+    alive but parked by the nested sandbox. Only ``max_bytes`` are retained;
+    the reader continues draining excess output so the child can exit.
+    """
+    stdout = process.stdout
+    if stdout is None:
         raise subprocess.SubprocessError("search process has no output pipe")
     kept = bytearray()
     truncated = False
-    while chunk := process.stdout.read(_STREAM_CHUNK_BYTES):
-        remaining = max_bytes - len(kept)
-        if remaining > 0:
-            kept.extend(chunk[:remaining])
-        if len(chunk) > remaining:
-            truncated = True
-    return bytes(kept), truncated
+    reader_errors: list[BaseException] = []
+
+    def _drain() -> None:
+        nonlocal truncated
+        try:
+            while chunk := stdout.read(_STREAM_CHUNK_BYTES):
+                remaining = max_bytes - len(kept)
+                if remaining > 0:
+                    kept.extend(chunk[:remaining])
+                if len(chunk) > remaining:
+                    truncated = True
+        except BaseException as exc:  # pragma: no cover - defensive thread handoff
+            reader_errors.append(exc)
+
+    reader = threading.Thread(target=_drain, name="openharness-rg-drain", daemon=True)
+    reader.start()
+    try:
+        returncode = process.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+        reader.join()
+        raise
+    reader.join()
+    if reader_errors:
+        raise reader_errors[0]
+    return bytes(kept), truncated, returncode
 
 
 def run(request: dict[str, Any]) -> dict[str, object]:

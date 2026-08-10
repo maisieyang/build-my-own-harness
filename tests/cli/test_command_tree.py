@@ -97,6 +97,8 @@ def test_hidden_advanced_agent_options_remain_callable(
         [
             "--max-tokens",
             "321",
+            "--max-turns",
+            "42",
             "--log-level",
             "INFO",
             "--no-skills",
@@ -107,6 +109,7 @@ def test_hidden_advanced_agent_options_remain_callable(
 
     assert result.exit_code == 0
     assert captured["max_tokens"] == 321
+    assert captured["max_turns"] == 42
     assert captured["log_level_override"] == "INFO"
     assert captured["no_skills"] is True
     assert captured["sandbox_image_override"] == "python:3.11"

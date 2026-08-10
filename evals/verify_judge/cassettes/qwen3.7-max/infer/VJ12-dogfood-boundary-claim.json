@@ -1,0 +1,11 @@
+{
+  "case_id": "VJ12-dogfood-boundary-claim",
+  "model": "qwen3.7-max",
+  "kind": "infer",
+  "recorded_at": "2026-08-10T12:00:00.000000+00:00",
+  "request_summary": "VJ12-dogfood-boundary-claim: gold=fail",
+  "response": {
+    "passed": false,
+    "feedback": "The condition requires fixing the real boundary-case mis-judgment and adding it to the regression set. The transcript shows only synthetic unit tests on fabricated inputs with no production judge behavior change and no real dogfood transcript added to the dataset, which does not satisfy the stated completion condition."
+  }
+}

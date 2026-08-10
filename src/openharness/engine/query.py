@@ -26,6 +26,7 @@ serially within a turn.
 
 from __future__ import annotations
 
+import itertools
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -228,8 +229,8 @@ async def run_query(
     initial_messages: list[ConversationMessage],
     context: QueryContext,
 ) -> AsyncIterator[ApiStreamEvent]:
-    """Drive the agent loop, yielding stream events until ``end_turn`` or the
-    ``max_turns`` cap is reached.
+    """Drive the agent loop until a non-tool response, or until an optional
+    caller-selected ``max_turns`` cap is reached.
 
     Yields events in the order they arrive: API events from
     ``stream_message`` (retry / text-delta / message-complete) interleaved
@@ -266,7 +267,9 @@ async def run_query(
     # can stitch the parent ↔ sub-agent tree via a self-join on
     # ``run_id ↔ parent_run_id`` and filter by depth.
     with bind_run(), bind_agent_depth(context.agent_depth):
-        for _turn in range(context.max_turns):
+        max_turns = context.max_turns
+        turn_indexes = itertools.count() if max_turns is None else range(max_turns)
+        for _turn in turn_indexes:
             with bind_turn(_turn + 1):  # 1-indexed: humans count turns from 1
                 logger.info(
                     "turn_start",
@@ -626,9 +629,16 @@ async def run_query(
                     )
                     return
 
-        # Fell through max_turns without an end_turn:loop budget exhausted.
-        logger.warning("loop_limit_exceeded", max_turns=context.max_turns)
-        raise LoopLimitExceeded(max_turns=context.max_turns)
+        # Only a caller-supplied finite range can fall through. With no cap,
+        # the model owns loop termination by returning a clean non-tool turn.
+        assert max_turns is not None
+        logger.warning("loop_limit_exceeded", max_turns=max_turns)
+        # Preserve the completed assistant/tool exchanges as a checkpoint.
+        # Interactive callers pause and return control without treating this
+        # forced stop as completion; private bounded callers still receive
+        # LoopLimitExceeded as the safety failure it has always been.
+        await _maybe_write_turn_end_metadata(context, messages)
+        raise LoopLimitExceeded(max_turns=max_turns, messages=messages)
 
 
 async def _dispatch_one(

@@ -168,10 +168,16 @@ untrusted transcript --> independent judge --> pass --> persist "met" and stop
                                                  and continue the same session
 ```
 
-Judge errors and malformed output fail closed. A hard turn cap bounds false
-negatives and provider failures. Goal state is persisted with the conversation,
-including terminal sentinels, so `oh --resume` does not resurrect work that
-was already completed.
+The judge runs only after the working loop returns a clean `end_turn`; tool
+failures, permission parking, truncated output, and runtime circuit breakers
+remain execution concerns and never masquerade as completion. Public REPL
+sessions have no loop-count cap by default. An explicit `oh --max-turns N` or
+`OPENHARNESS_MAX_TURNS=N` checkpoints progress and pauses on exhaustion without
+calling the judge. Goal auto-continuation is also unbounded by default; setting
+`OPENHARNESS_GOAL_MAX_AUTO_TURNS=N` opts into a separate circuit breaker. Judge
+errors and malformed output fail closed. Goal state is persisted with the
+conversation, including terminal sentinels, so `oh --resume` does not resurrect
+work that was already completed.
 
 ### Private non-interactive execution
 
@@ -434,6 +440,16 @@ continues the session until the condition is met. Use `/goal` to view status or
 `/goal clear` to stop the controller. A goal can be set while planning, but
 the checker runs only after the session returns to Default.
 
+Goal auto-continuation has no default count limit. To add an explicit circuit
+breaker for local dogfood, set it in `.env`:
+
+```env
+OPENHARNESS_GOAL_MAX_AUTO_TURNS=100
+```
+
+This pauses the Goal after 100 automatically continued session turns; it does
+not limit the tool calls inside an Agent Loop.
+
 #### Maintain the conversation
 
 `/compact` compresses earlier conversation context while preserving the recent
@@ -507,7 +523,7 @@ uv run ruff format --check
   protected control paths are read-only binds and missing ones are reserved by
   read-only mounts so the reported boundary cannot be created around later. A
   non-sandbox posture cannot execute local or delegated tools. Autonomous execution
-  (`--auto`, an active Goal, or headless mode) fails before the first model call
+  (`--auto`, an active Goal, or the private non-interactive adapter) fails before the first model call
   if any exposed local/delegated capability lacks verified boundary coverage;
   a no-sandbox read-only catalog is not exempt. Dry-run and pure external/control
   catalogs do not require a local boundary.
@@ -517,7 +533,9 @@ uv run ruff format --check
   identity cannot be verified. Private and loopback targets remain independent
   explicit profile choices.
 - The `/goal` judge is probabilistic, reads conversation evidence rather than
-  operating-system state, fails closed, and is bounded by an explicit turn cap.
+  operating-system state, and fails closed. Goal may be given an independent
+  auto-continue circuit breaker explicitly; it is disabled by default and is
+  not an Agent Loop turn cap.
 - Permission intent and enforcement evidence are separate contracts. Every
   exact request carries one closed evidence variant: local requests bind the
   active profile, verified boundary, backend, and final operation; external

@@ -60,6 +60,7 @@ class TestBareEntry:
         assert captured["execution_posture_override"] is None
         assert captured["sandbox_backend_override"] is None
         assert captured["resume"] is False
+        assert captured["max_turns"] is None
 
     def test_sandbox_startup_failure_is_rendered_without_traceback(
         self, monkeypatch: pytest.MonkeyPatch

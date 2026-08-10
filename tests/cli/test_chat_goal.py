@@ -11,10 +11,12 @@ from typing import TYPE_CHECKING, Any
 from typer.testing import CliRunner
 
 import openharness.cli as cli_module
+from openharness.engine.errors import LoopLimitExceeded
 from openharness.protocols.content import TextBlock
 from openharness.protocols.messages import ConversationMessage
 from openharness.protocols.stream_events import (
     ApiMessageCompleteEvent,
+    ApiTextDeltaEvent,
     ConversationCompleteEvent,
     ToolExecutionCompletedEvent,
 )
@@ -159,6 +161,21 @@ class TestGoalSetAndJudge:
         assert "Session goal" in contexts[0].system_prompt
         assert "ship it" in contexts[0].system_prompt
 
+    def test_environment_turn_cap_reaches_public_session(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("OPENHARNESS_MAX_TURNS", "50")
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
+        contexts, _ = _install_capture(monkeypatch)
+        _install_judge(monkeypatch, [(True, "ok")])
+        _stub_input_sequence(monkeypatch, ["/goal t", "/exit"])
+
+        result = CliRunner().invoke(cli_module.app, ["chat"])
+
+        assert result.exit_code == 0
+        assert contexts[0].max_turns == 50
+
     def test_judge_evidence_starts_at_current_goal(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_minimum_env(monkeypatch)
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
@@ -180,6 +197,145 @@ class TestGoalSetAndJudge:
 
 
 class TestAutoContinue:
+    def test_explicit_loop_limit_pauses_goal_without_judging(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
+        contexts: list[QueryContext] = []
+
+        async def _limit_then_complete(
+            initial_messages: list[ConversationMessage], context: QueryContext
+        ) -> AsyncIterator[ApiStreamEvent]:
+            contexts.append(context)
+            partial = [
+                *initial_messages,
+                ConversationMessage(
+                    role="assistant",
+                    content=[TextBlock(text="implemented part one before the cap")],
+                ),
+            ]
+            assert context.max_turns is not None
+            yield ApiTextDeltaEvent(text="working")
+            raise LoopLimitExceeded(max_turns=context.max_turns, messages=partial)
+
+        monkeypatch.setattr(cli_module, "run_query", _limit_then_complete)
+        judge_calls = _install_judge(monkeypatch, [(True, "must not be called")])
+        _stub_input_sequence(monkeypatch, ["/goal t", "/exit"])
+
+        result = CliRunner().invoke(cli_module.app, ["chat", "--max-turns", "2"])
+
+        assert result.exit_code == 0
+        assert len(contexts) == 1
+        assert contexts[0].max_turns == 2
+        assert judge_calls == []
+        assert "goal paused at explicit turn limit (2)" in result.stdout
+        assert "progress checkpointed" in result.stdout
+        assert "goal met" not in result.stdout
+
+    def test_goal_judge_only_runs_after_clean_end_turn(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
+
+        async def _truncated_run(
+            initial_messages: list[ConversationMessage], context: QueryContext
+        ) -> AsyncIterator[ApiStreamEvent]:
+            del context
+            assistant = ConversationMessage(
+                role="assistant", content=[TextBlock(text="unfinished output")]
+            )
+            yield ApiMessageCompleteEvent(
+                message=assistant,
+                usage=UsageSnapshot(input_tokens=1, output_tokens=1),
+                stop_reason="max_tokens",
+            )
+            yield ConversationCompleteEvent(messages=[*initial_messages, assistant])
+
+        monkeypatch.setattr(cli_module, "run_query", _truncated_run)
+        judge_calls = _install_judge(monkeypatch, [(True, "must not be called")])
+        _stub_input_sequence(monkeypatch, ["/goal t", "/exit"])
+
+        result = CliRunner().invoke(cli_module.app, ["chat"])
+
+        assert result.exit_code == 0
+        assert judge_calls == []
+        assert "goal paused after incomplete worker stop (max_tokens)" in result.stdout
+
+
+class TestAutoContinueAndExplicitLoopLimit:
+    def test_default_goal_can_continue_beyond_twenty_five_auto_turns(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.delenv("OPENHARNESS_GOAL_MAX_AUTO_TURNS", raising=False)
+        monkeypatch.setattr(
+            cli_module,
+            "_load_settings",
+            lambda: cli_module.Settings(_env_file=None),  # type: ignore[call-arg]
+        )
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
+        contexts, _ = _install_capture(monkeypatch)
+        verdicts = [(False, f"remaining {index}") for index in range(26)]
+        verdicts.append((True, "done"))
+        judge_calls = _install_judge(monkeypatch, verdicts)
+        _stub_input_sequence(monkeypatch, ["/goal long task", "/exit"])
+
+        result = CliRunner().invoke(cli_module.app, ["chat"])
+
+        assert result.exit_code == 0
+        assert len(contexts) == 27
+        assert len(judge_calls) == 27
+        assert "goal not met after" not in result.stdout
+        assert "goal met after 26 auto-turn(s)" in result.stdout
+        assert "/None" not in result.stdout
+
+    def test_default_session_checkpoints_and_returns_control(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
+        attempts: list[list[ConversationMessage]] = []
+
+        async def _limit_then_complete(
+            initial_messages: list[ConversationMessage], context: QueryContext
+        ) -> AsyncIterator[ApiStreamEvent]:
+            attempts.append(list(initial_messages))
+            if len(attempts) == 1:
+                partial = [
+                    *initial_messages,
+                    ConversationMessage(
+                        role="assistant",
+                        content=[TextBlock(text="checkpointed tool progress")],
+                    ),
+                ]
+                assert context.max_turns is not None
+                raise LoopLimitExceeded(max_turns=context.max_turns, messages=partial)
+
+            assistant = ConversationMessage(role="assistant", content=[TextBlock(text="done")])
+            yield ApiMessageCompleteEvent(
+                message=assistant,
+                usage=UsageSnapshot(input_tokens=1, output_tokens=1),
+                stop_reason="end_turn",
+            )
+            yield ConversationCompleteEvent(messages=[*initial_messages, assistant])
+
+        monkeypatch.setattr(cli_module, "run_query", _limit_then_complete)
+        _stub_input_sequence(monkeypatch, ["start", "continue", "/exit"])
+
+        result = CliRunner().invoke(cli_module.app, ["chat", "--max-turns", "2"])
+
+        assert result.exit_code == 0
+        assert len(attempts) == 2
+        assert any(
+            isinstance(block, TextBlock) and block.text == "checkpointed tool progress"
+            for message in attempts[1]
+            for block in message.content
+        )
+        assert "agent paused at explicit turn limit (2)" in result.stdout
+        assert "progress checkpointed" in result.stdout
+
     def test_not_met_auto_continues_with_checker_framing(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -419,6 +575,7 @@ class TestGoalSentinelPersistence:
 
     def test_cleared_sentinel_survives_to_disk(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("OPENHARNESS_GOAL_MAX_AUTO_TURNS", "1")
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
         self._install_capture_with_snapshot(monkeypatch)
         _install_judge(monkeypatch, [(False, "not yet")])

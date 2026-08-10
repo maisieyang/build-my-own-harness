@@ -540,6 +540,30 @@ class TestRunQueryMultiTurn:
 class TestRunQueryMaxTurnsBoundary:
     """Hitting the max_turns cap raises LoopLimitExceeded -- D6.1 hard floor."""
 
+    async def test_no_cap_allows_more_than_fifty_tool_turns(self) -> None:
+        tool_turns = [
+            [_fake_tool_use_event(tool_use_id=f"t{index}", tool_input={"value": str(index)})]
+            for index in range(1, 52)
+        ]
+        client = _StubApiClient(events_per_turn=[*tool_turns, [_end_turn_event("done")]])
+        context = _make_context(
+            api_client=client,
+            tool_registry=_registry_with_fake_tool(),
+            max_turns=None,
+        )
+
+        events = [
+            event
+            async for event in run_query(
+                [ConversationMessage(role="user", content=[TextBlock(text="hi")])],
+                context,
+            )
+        ]
+
+        assert client._turn == 52
+        completes = [event for event in events if isinstance(event, ApiMessageCompleteEvent)]
+        assert completes[-1].stop_reason == "end_turn"
+
     async def test_max_turns_exhausted_raises_loop_limit_exceeded(self) -> None:
         client = _StubApiClient(
             events_per_turn=[
@@ -562,6 +586,14 @@ class TestRunQueryMaxTurnsBoundary:
                 pass
 
         assert exc_info.value.max_turns == 2
+        assert exc_info.value.messages is not None
+        assert [message.role for message in exc_info.value.messages] == [
+            "user",
+            "assistant",
+            "user",
+            "assistant",
+            "user",
+        ]
         # Both configured turns ran before the loop exhausted.
         assert client._turn == 2
 

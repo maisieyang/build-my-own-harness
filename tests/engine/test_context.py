@@ -3,7 +3,7 @@
 The dataclass has three load-bearing behaviors to verify:
 
 1. Frozen — fields cannot be reassigned (forces ``dataclasses.replace`` for changes)
-2. ``max_turns=20`` default matches ``decisions/06-phase-2-boundary.md`` D6.1
+2. ``max_turns=None`` leaves the top-level interactive loop model-terminated
 3. ``dataclasses.replace`` produces a new instance, leaving the original intact
 """
 
@@ -49,9 +49,8 @@ class TestQueryContext:
         # The registry is a concrete runtime collaborator.
         assert isinstance(context.tool_registry, ToolRegistry)
 
-    def test_max_turns_default_matches_boundary_contract(self, context: QueryContext) -> None:
-        # decisions/06-phase-2-boundary.md D6.1: hybrid loop exit, 20 default.
-        assert context.max_turns == 20
+    def test_max_turns_defaults_to_model_terminated(self, context: QueryContext) -> None:
+        assert context.max_turns is None
 
     def test_max_turns_override_accepted(self) -> None:
         ctx = QueryContext(
@@ -77,7 +76,7 @@ class TestQueryContext:
             system_prompt="updated",
         )
         # original unchanged
-        assert context.max_turns == 20
+        assert context.max_turns is None
         assert context.system_prompt == "you are a test harness"
         # new instance carries overrides
         assert replaced.max_turns == 42

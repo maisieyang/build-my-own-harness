@@ -84,7 +84,7 @@ while True:
 
 ```mermaid
 flowchart LR
-    U["用户或脚本"] --> C["REPL 与 headless CLI"]
+    U["用户或内部 adapter"] --> C["REPL 与私有非交互 runtime"]
     C --> E["Agent engine"]
     E <--> M["OpenAI-compatible 模型"]
     E --> P["Permission profile、已验证 boundary 与 hooks"]
@@ -152,8 +152,13 @@ transcript，并交给一次独立、禁用工具的 LLM 调用：
                                               并在同一 session 继续
 ```
 
-Judge 异常和无法解析的输出一律 fail closed；hard turn cap 为 false negative 与
-provider failure 提供上界。Goal 状态与 conversation 一起持久化，包含终态哨兵，
+只有 working loop 返回干净的 `end_turn` 后才会调用 Judge；工具失败、permission
+parking、输出截断与 runtime circuit breaker 都属于执行问题，不能伪装成完成。
+公开 REPL 默认没有 loop-count 上限。只有显式设置 `oh --max-turns N` 或
+`OPENHARNESS_MAX_TURNS=N` 时才启用该熔断器；撞到上限会保存进度并暂停，不会调用
+Judge。Goal 自动续跑同样默认无次数上限；只有显式设置
+`OPENHARNESS_GOAL_MAX_AUTO_TURNS=N` 时才启用另一层可选熔断器。Judge 异常和无法
+解析的输出一律 fail closed。Goal 状态与 conversation 一起持久化，包含终态哨兵，
 因此 `oh --resume` 不会复活已经完成的工作。
 
 ### 私有非交互执行
@@ -361,6 +366,16 @@ checker 会在每轮后判断是否应继续，直到满足条件。使用 `/goa
 `/goal clear` 停止该 controller。可以在 Plan 中设置 Goal，但 checker 只会在
 session 返回 Default 后运行。
 
+Goal 自动续跑默认没有次数上限。如果希望在本地 dogfood 时添加明确的熔断器，可以
+在 `.env` 中设置：
+
+```env
+OPENHARNESS_GOAL_MAX_AUTO_TURNS=100
+```
+
+这会在 100 个自动续跑的 session turn 后暂停 Goal；它不会限制 Agent Loop 内部的
+工具调用次数。
+
 #### 维护会话
 
 `/compact` 压缩较早的 conversation context，同时保留最近一次交流。`/clear`
@@ -434,11 +449,12 @@ uv run ruff format --check
   拒绝或改写调用，但改写后的最终参数会在 dispatch 前重新授权。
 - Isolation 在启动时仍是 opt-in。macOS 上由 Seatbelt backend 覆盖统一的本地 data plane；
   Docker 明确保持 command-only backend，未启用 sandbox 的 posture 不能执行 local 或
-  delegated tool。自主执行（`--auto`、active Goal 或 headless mode）若暴露的任一本地或
+  delegated tool。自主执行（`--auto`、active Goal 或私有非交互 adapter）若暴露的任一本地或
   delegated capability 缺少 verified boundary coverage，会在第一次模型调用前失败；
   no-sandbox 的只读 catalog 也不豁免。dry-run 与纯 external/control catalog 不要求本地 boundary。
 - `/goal` judge 具有概率性，只读取 conversation evidence 而不直接读取操作系统
-  状态，因此必须 fail closed，并受明确的 turn cap 约束。
+  状态，因此必须 fail closed。Goal 可显式配置独立的 auto-continue 熔断器；它默认
+  不启用，也不是 Agent Loop 的 turn cap。
 - Permission intent 与 enforcement evidence 是两份独立 contract。每个 exact request
   只携带一种 closed evidence：local request 绑定 active profile、verified boundary、
   backend 与最终 operation；external request 绑定 active profile、policy surface、

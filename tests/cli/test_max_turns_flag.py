@@ -2,7 +2,7 @@
 astropy__astropy-14182 died on the hard-fixed 20-turn cap while
 ``LoopLimitExceeded``'s message told the user to "raise --max-turns" —
 a flag that did not exist. This wires the promised knob:
-``oh ask --max-turns N`` → ``QueryContext.max_turns``.
+the private runtime's ``--max-turns N`` → ``QueryContext.max_turns``.
 
 Capture pattern mirrors test_run_ask_overrides.py (small per-file
 helpers, no cross-file test imports).

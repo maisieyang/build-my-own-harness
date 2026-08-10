@@ -15,8 +15,9 @@ Per the P2-T1 Three-Axis discussion (D7.1 / D7.2 / D7.5):
 - D7.5 fixes ``system_prompt`` as the *assembled* string. ``prompts.py`` (P2-T5)
   is the constructor; QueryContext just holds the result.
 
-``max_turns=20`` default is the loop hard cap from
-``decisions/06-phase-2-boundary.md`` D6.1.
+``max_turns=None`` makes the top-level interactive loop model-terminated.
+Private adapters and callers that need a deterministic circuit breaker pass an
+explicit positive integer.
 """
 
 from __future__ import annotations
@@ -63,7 +64,7 @@ class QueryContext:
     cwd: Path
     model: str
     max_tokens: int = 8192
-    max_turns: int = 20
+    max_turns: int | None = None
     # Optional full dispatch catalog when the model-visible registry is
     # capability-shaped (for example, plan mode). Hidden forged calls are
     # resolved here only so the authoritative deny policy can reject them.
@@ -195,7 +196,7 @@ class QueryContext:
         compact_threshold_ratio: float = 0.83,
         compact_full_max_tokens: int = 20_000,
         compact_full_timeout_s: float = 25.0,
-        max_turns: int = 20,
+        max_turns: int | None = None,
         max_agent_depth: int = 3,
     ) -> tuple[QueryContext, list[ConversationMessage]]:
         """P12-T4 (D30.7): rebuild a QueryContext from a snapshot dict.

@@ -460,6 +460,16 @@ class Settings(BaseSettings):
         default="qwen-plus",
         description="Default model name; overridden by CLI --model.",
     )
+    max_turns: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Optional Agent-loop turn cap per attempt. None leaves the public "
+            "interactive loop model-terminated; private adapters may set an "
+            "explicit circuit breaker. Overridden by CLI --max-turns. Env: "
+            "OPENHARNESS_MAX_TURNS."
+        ),
+    )
     goal_judge_model: str | None = Field(
         default=None,
         description=(
@@ -472,14 +482,13 @@ class Settings(BaseSettings):
             "OPENHARNESS_GOAL_JUDGE_MODEL."
         ),
     )
-    goal_max_auto_turns: int = Field(
-        default=25,
+    goal_max_auto_turns: int | None = Field(
+        default=None,
         ge=1,
         description=(
-            "Backstop cap on consecutive /goal auto-continued turns before "
-            "the loop pauses for human input (D48.5). The recommended "
-            "bound lives in the condition itself (e.g. 'or stop after 20 "
-            "turns'); this is the fail-closed ceiling behind it. Env: "
+            "Optional circuit breaker for consecutive /goal auto-continued "
+            "turns. Omit it to let the goal controller continue until the "
+            "judge reports completion or a real runtime blocker occurs. Env: "
             "OPENHARNESS_GOAL_MAX_AUTO_TURNS."
         ),
     )

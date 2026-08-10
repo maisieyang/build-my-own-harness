@@ -96,6 +96,7 @@ from openharness.commands.model import Command  # noqa: TC001 — runtime use in
 from openharness.compaction import TruncateToolResultHook
 from openharness.config import Settings
 from openharness.engine import QueryContext, extract_authorization_context, run_query
+from openharness.engine.errors import LoopLimitExceeded
 from openharness.engine.slash_skill import synthesize_skill_envelope
 from openharness.errors import LoopError, OpenHarnessError
 from openharness.execution import (
@@ -1365,6 +1366,7 @@ async def _run_chat(
     resume: bool = False,
     resume_id: str | None = None,
     llm_focus_state_override: bool | None = None,
+    max_turns: int | None = None,
 ) -> None:
     """Multi-turn REPL driver — P6+-T2.
 
@@ -1378,6 +1380,7 @@ async def _run_chat(
     # Phase 9 polish candidate — for now, the duplication is contained
     # and tested through both commands' integration tests.
     from openharness.protocols.stream_events import (
+        ApiMessageCompleteEvent,
         ConversationCompleteEvent,
         PermissionParkedEvent,
         ToolExecutionCompletedEvent,
@@ -1385,6 +1388,7 @@ async def _run_chat(
 
     settings = _load_settings()
     model = model_override or settings.model
+    max_turns = max_turns if max_turns is not None else settings.max_turns
     reviewer_posture = reviewer_posture_override or settings.reviewer_posture
     execution_posture = execution_posture_override or settings.execution_posture
     log_level = log_level_override or settings.log_level
@@ -1631,8 +1635,9 @@ async def _run_chat(
         chat_mode = _repl.ChatMode.DEFAULT
 
         # D48 session goal — 续跑式条件循环. ``goal_auto_turns`` counts
-        # consecutive auto-continued turns toward the settings backstop cap;
-        # any manual input resets it. ``pending_is_goal_feedback`` marks a
+        # consecutive auto-continued turns for status and for the optional
+        # configured circuit breaker; any manual input resets it.
+        # ``pending_is_goal_feedback`` marks a
         # queued continuation so it is NOT echoed as ``>>> `` user input
         # (D48.2: checker feedback must never impersonate the user).
         goal: _repl.GoalState | None = None
@@ -2167,6 +2172,7 @@ async def _run_chat(
                 cwd=env.cwd,
                 model=model,
                 max_tokens=max_tokens,
+                max_turns=max_turns,
                 reviewer_posture=reviewer_posture,
                 execution_posture=execution_posture,
                 autonomous=(reviewer_posture is ReviewerPosture.AUTO or goal is not None),
@@ -2215,13 +2221,17 @@ async def _run_chat(
             captured: list[ConversationMessage] | None = None
             permission_confirmation_required: str | None = None
             conversation_completed = False
+            worker_stop_reason: str | None = None
 
             async def _capture(
                 events_iter: AsyncIterator[ApiStreamEvent],
             ) -> AsyncIterator[ApiStreamEvent]:
                 nonlocal captured, conversation_completed, permission_confirmation_required
+                nonlocal worker_stop_reason
                 async for ev in events_iter:
-                    if isinstance(ev, ConversationCompleteEvent):
+                    if isinstance(ev, ApiMessageCompleteEvent):
+                        worker_stop_reason = ev.stop_reason
+                    elif isinstance(ev, ConversationCompleteEvent):
                         captured = ev.messages
                         conversation_completed = True
                     elif isinstance(ev, PermissionParkedEvent):
@@ -2237,6 +2247,21 @@ async def _run_chat(
 
             try:
                 await render_stream(_capture(run_query(history, context)))
+            except LoopLimitExceeded as exc:
+                if exc.messages is None:
+                    typer.echo(f"Loop error: {exc}", err=True)
+                    continue
+                # A caller-selected cap is a circuit breaker, not semantic
+                # assistant completion. Preserve work and return control; an
+                # active Goal must never send this forced stop to its judge.
+                history = list(exc.messages)
+                subject = "goal" if goal is not None else "agent"
+                typer.echo(
+                    f"({subject} paused at explicit turn limit ({exc.max_turns}); "
+                    "progress checkpointed — send a message to continue or restart "
+                    "with a different --max-turns value)"
+                )
+                continue
             except LoopError as exc:
                 typer.echo(f"Loop error: {exc}", err=True)
                 # Don't break — let user issue /clear or retry.
@@ -2250,6 +2275,20 @@ async def _run_chat(
 
             if captured is not None:
                 history = captured
+
+            if (
+                goal is not None
+                and chat_mode is _repl.ChatMode.DEFAULT
+                and conversation_completed
+                and worker_stop_reason != "end_turn"
+            ):
+                typer.echo(
+                    "(goal paused after incomplete worker stop "
+                    f"({worker_stop_reason or 'unknown'}); send a message to continue "
+                    "or /goal clear)"
+                )
+                goal_auto_turns = 0
+                continue
 
             # D47.2/D47.5 — approval menu after every completed assistant turn
             # while in plan mode. A permission-interrupted turn is not a plan
@@ -2347,7 +2386,10 @@ async def _run_chat(
                     )
                     goal = None
                     goal_auto_turns = 0
-                elif goal_auto_turns >= settings.goal_max_auto_turns:
+                elif (
+                    settings.goal_max_auto_turns is not None
+                    and goal_auto_turns >= settings.goal_max_auto_turns
+                ):
                     typer.echo(
                         f"\a(goal not met after {goal_auto_turns} auto-turns — "
                         "paused; send a message to continue or /goal clear. "
@@ -2356,11 +2398,10 @@ async def _run_chat(
                     goal_auto_turns = 0
                 else:
                     goal_auto_turns += 1
-                    typer.echo(
-                        f"(goal not met — continuing "
-                        f"({goal_auto_turns}/{settings.goal_max_auto_turns}): "
-                        f"{result.reason})"
-                    )
+                    goal_progress = str(goal_auto_turns)
+                    if settings.goal_max_auto_turns is not None:
+                        goal_progress += f"/{settings.goal_max_auto_turns}"
+                    typer.echo(f"(goal not met — continuing ({goal_progress}): {result.reason})")
                     pending_input = _repl.build_goal_continuation(goal.condition, result.reason)
                     pending_is_goal_feedback = True
 
@@ -2393,6 +2434,13 @@ def _root(
         min=1,
         hidden=True,
         help="Max tokens per turn.",
+    ),
+    max_turns: int | None = typer.Option(
+        None,
+        "--max-turns",
+        min=1,
+        hidden=True,
+        help="Optional Agent-loop turn cap; omitted means model-terminated.",
     ),
     auto: bool = typer.Option(
         False,
@@ -2469,6 +2517,7 @@ def _root(
         chat(
             model=model,
             max_tokens=max_tokens,
+            max_turns=max_turns,
             auto=auto,
             dry_run=dry_run,
             log_level=log_level,
@@ -2970,6 +3019,13 @@ def chat(
     max_tokens: int = typer.Option(
         DEFAULT_MAX_TOKENS, "--max-tokens", min=1, help="Max tokens per turn."
     ),
+    max_turns: int | None = typer.Option(
+        None,
+        "--max-turns",
+        min=1,
+        hidden=True,
+        help="Optional Agent-loop turn cap; omitted means model-terminated.",
+    ),
     auto: bool = typer.Option(
         False,
         "--auto",
@@ -3075,6 +3131,7 @@ def chat(
                 initial_prompt=None,
                 model_override=model,
                 max_tokens=max_tokens,
+                max_turns=max_turns,
                 reviewer_posture_override=reviewer_posture_override,
                 execution_posture_override=execution_posture_override,
                 log_level_override=log_level,
@@ -3133,6 +3190,8 @@ _CONFIG_TEMPLATE = """\
 # OPENHARNESS_API_KEY="sk-..."
 # OPENHARNESS_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
 # OPENHARNESS_MODEL="qwen-plus"
+# OPENHARNESS_MAX_TURNS=100  # optional; omitted means model-terminated
+# OPENHARNESS_GOAL_MAX_AUTO_TURNS=100  # optional; omit for goal-driven completion
 
 # Canonical permission intent (nested overrides preserve workspace defaults)
 # OPENHARNESS_PERMISSION_PROFILE__NETWORK__ENABLED="true"

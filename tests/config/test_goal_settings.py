@@ -16,15 +16,22 @@ def _base_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class TestGoalSettingsDefaults:
+    def test_interactive_loop_has_no_default_turn_cap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert settings.max_turns is None
+
     def test_judge_model_defaults_to_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _base_env(monkeypatch)
-        settings = Settings()  # type: ignore[call-arg]
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
         assert settings.goal_judge_model is None
 
-    def test_max_auto_turns_defaults_to_25(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_max_auto_turns_defaults_to_unbounded(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _base_env(monkeypatch)
-        settings = Settings()  # type: ignore[call-arg]
-        assert settings.goal_max_auto_turns == 25
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert settings.goal_max_auto_turns is None
 
 
 class TestGoalSettingsEnvOverride:
@@ -32,6 +39,8 @@ class TestGoalSettingsEnvOverride:
         _base_env(monkeypatch)
         monkeypatch.setenv("OPENHARNESS_GOAL_JUDGE_MODEL", "qwen-turbo")
         monkeypatch.setenv("OPENHARNESS_GOAL_MAX_AUTO_TURNS", "5")
-        settings = Settings()  # type: ignore[call-arg]
+        monkeypatch.setenv("OPENHARNESS_MAX_TURNS", "50")
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
         assert settings.goal_judge_model == "qwen-turbo"
         assert settings.goal_max_auto_turns == 5
+        assert settings.max_turns == 50

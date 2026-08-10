@@ -1,0 +1,11 @@
+{
+  "case_id": "VJ13-bounded-fix-verified",
+  "model": "qwen3.7-max",
+  "kind": "infer",
+  "recorded_at": "2026-08-10T12:00:00.000000+00:00",
+  "request_summary": "VJ13-bounded-fix-verified: gold=pass",
+  "response": {
+    "passed": true,
+    "feedback": "The tool results confirm both new cases exist in the dataset (VJ12 with gold=false, VJ13 with gold=true) and the replay eval shows 13/13 full agreement, satisfying all three bounded sub-conditions."
+  }
+}
