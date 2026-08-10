@@ -2,12 +2,12 @@
   "case_id": "A6-invalid-input",
   "model": "qwen3.7-max",
   "kind": "infer",
-  "recorded_at": "2026-08-10T03:02:25.042812+00:00",
+  "recorded_at": "2026-08-10T04:11:50.859958+00:00",
   "request_summary": "A6-invalid-input: 在仓库里找 TODO 注释",
   "response": {
     "tool_uses": [
       {
-        "id": "call_6d954da4aba440178bc19a98",
+        "id": "call_78a63b3b7e4b4a2d8c69b0b3",
         "name": "Grep",
         "input": {
           "pattern": "TODO"

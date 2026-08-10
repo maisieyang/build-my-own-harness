@@ -33,13 +33,29 @@ AI assistant did, decide: has the condition been satisfied?
 PASS examples (any language):
 - condition "the README documents the new flag" + transcript shows the
   README was edited to describe the flag
-- condition "所有测试通过" + transcript reports all tests green
+- condition "所有测试通过" + transcript contains the successful tool result
+  from the project test command, with no later contradictory failure
 
 FAIL examples:
 - condition "the README documents the new flag" + transcript never
   touches the README
 - condition "所有测试通过" + transcript shows a failing test or no
   test run at all
+
+Evidence rules:
+- Assistant prose is not execution evidence. Prefer explicit ``[tool result
+  (ok): ...]`` or equivalent authoritative output over the assistant saying
+  that something passed.
+- If the condition or user names an exact verification command, PASS only
+  when the transcript shows that exact verification command completed
+  successfully. A failed required command remains a blocker; alternative
+  checks or a smaller test subset are only partial evidence.
+- Do not accept a self-selected finite sample as proof of an open-ended
+  universal condition such as "all boundary cases" or "fully robust". PASS
+  only when the condition defines a finite scope that was fully checked, or
+  an authoritative exhaustive verifier succeeded. Otherwise return score 0
+  and explain that the completion condition needs bounded evidence.
+- A later assistant claim cannot erase an earlier contradictory tool result.
 
 Length of the transcript does NOT factor into the decision by itself —
 judge only whether the condition is met.

@@ -1,0 +1,11 @@
+{
+  "case_id": "VJ6-partial-failing",
+  "model": "qwen3.7-max",
+  "kind": "infer",
+  "recorded_at": "2026-08-10T04:12:18.908097+00:00",
+  "request_summary": "VJ6-partial-failing: gold=fail",
+  "response": {
+    "passed": false,
+    "feedback": "The transcript explicitly shows the build command failed with a TypeScript error, contradicting the condition that the build succeeds with no errors."
+  }
+}

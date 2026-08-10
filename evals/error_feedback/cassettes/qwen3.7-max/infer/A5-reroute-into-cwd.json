@@ -2,12 +2,12 @@
   "case_id": "A5-reroute-into-cwd",
   "model": "qwen3.7-max",
   "kind": "infer",
-  "recorded_at": "2026-08-10T03:02:22.687850+00:00",
+  "recorded_at": "2026-08-10T04:11:49.376809+00:00",
   "request_summary": "A5-reroute-into-cwd: 生成一个 fizzbuzz.py 并确认能跑",
   "response": {
     "tool_uses": [
       {
-        "id": "call_0939abef5029454e968ee1f1",
+        "id": "call_a31e8aa1149d4e61a84e447b",
         "name": "Write",
         "input": {
           "path": "fizzbuzz.py",

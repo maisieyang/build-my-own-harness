@@ -2,12 +2,12 @@
   "case_id": "A6-read-missing-file",
   "model": "qwen3.7-max",
   "kind": "infer",
-  "recorded_at": "2026-08-10T03:02:27.011613+00:00",
+  "recorded_at": "2026-08-10T04:11:53.599857+00:00",
   "request_summary": "A6-read-missing-file: 读一下项目的配置文件 settings.toml",
   "response": {
     "tool_uses": [
       {
-        "id": "call_2d04e42b89c14c99b0ddbe56",
+        "id": "call_d2e4ef4fde6e4f59bb149570",
         "name": "Bash",
         "input": {
           "command": "find /workspace -name \"settings.toml\" -type f 2>/dev/null"

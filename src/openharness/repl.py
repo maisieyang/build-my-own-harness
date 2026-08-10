@@ -257,7 +257,11 @@ def goal_prompt_section(condition: str) -> str:
         f"    {condition}\n\n"
         "Work toward the condition and surface verifiable evidence in the "
         "conversation (e.g. actually run the relevant checks so their output "
-        "is visible) — the checker judges only what appears here. Automation "
+        "is visible) — the checker judges only what appears here. If the goal "
+        "names an exact verification command, only a successful result from that "
+        "command satisfies it; alternatives are partial evidence. Do not treat "
+        "self-selected examples as proof of an open-ended universal condition; "
+        "obtain an authoritative exhaustive check or make the scope explicit. Automation "
         "pauses on permission or checker failures."
     )
 

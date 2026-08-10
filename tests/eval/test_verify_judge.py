@@ -122,6 +122,13 @@ class TestLoadDataset:
             assert s.condition
             assert s.transcript
 
+    def test_dogfood_evidence_boundary_cases_have_hard_gold(self) -> None:
+        samples = {sample.case_id: sample for sample in load_verify_judge_dataset(DATASET)}
+
+        assert samples["VJ9-bounded-boundaries-pass"].gold_passed is True
+        assert samples["VJ10-required-command-failed"].gold_passed is False
+        assert samples["VJ11-self-selected-universal"].gold_passed is False
+
 
 class TestRunEval:
     async def test_end_to_end_calls_production_judge(self) -> None:

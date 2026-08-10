@@ -147,6 +147,28 @@ def test_environment_all_none_include_exclude_set_and_credentials(
     assert none_env == {"SAFE": "yes"}
 
 
+def test_workspace_runtime_routes_uv_cache_inside_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UV_CACHE_DIR", "/outside/ambient-cache")
+    profile = RuntimePermissionProfile(name="workspace")
+
+    environment = build_sandbox_environment(profile, workspace=tmp_path)
+
+    assert environment["UV_CACHE_DIR"] == str(tmp_path / ".cache" / "uv")
+
+
+def test_explicit_uv_cache_setting_wins_over_workspace_default(tmp_path: Path) -> None:
+    profile = RuntimePermissionProfile(
+        name="workspace",
+        environment=EnvironmentPolicy(set_values={"UV_CACHE_DIR": str(tmp_path / "custom")}),
+    )
+
+    environment = build_sandbox_environment(profile, workspace=tmp_path)
+
+    assert environment["UV_CACHE_DIR"] == str(tmp_path / "custom")
+
+
 def test_preflight_reports_platform_socket_identity_and_resources(tmp_path: Path) -> None:
     profile = RuntimePermissionProfile(
         name="unsupported",

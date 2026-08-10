@@ -16,10 +16,10 @@
 - 跨 model 比较(D35.8)
 
 **2. Input spec**:种植错误历史(user 任务 → assistant tool_use →
-`is_error` tool_result,错误文本 = 引擎/checker **真实格式**)。N=10:
+`is_error` tool_result,错误文本 = 引擎/checker **真实格式**)。N=11:
 A5 ×4(含 14182 死亡链、F3 改道正样本、**F4 新旧消息条件对**)+
-A6 ×6(unknown-tool / invalid-input / command-missing / file-missing /
-Grep launcher denied / 双次种植的顽固重试探针)。Case 源全部来自 D41.6
+A6 ×7(unknown-tool / invalid-input / command-missing / file-missing /
+Grep launcher denied / 指定验证命令失败 / 双次种植的顽固重试探针)。Case 源全部来自 D41.6
 飞轮(benchmark records + dogfood 2026-07-12、2026-08-10),零凭空编题。
 
 **3. Judgment spec**:全确定性,轨迹不变量(D41.4 本面最硬 oracle):
@@ -36,13 +36,15 @@ Grep launcher denied / 双次种植的顽固重试探针)。Case 源全部来自
 
 ## Pass bar(qwen3.7-max ratify 2026-08-10)
 
-- **Gate:qwen3.7-max 上 `cases all-dims-pass ≥ 8/10`,且 8 个稳定绿 case
+- **Gate:qwen3.7-max 上 `cases all-dims-pass ≥ 9/11`,且 9 个稳定绿 case
   必须全绿**。
-- 依据(N=4 画像):9,8,8,8 — 8 case 4/4 稳定绿。
-  `A5-bash-denied-14182` 0/4(每次都原样重发 `pytest -q`),
-  `A5-write-outside-oldmsg` 1/4;两者保留为观察项,不列入稳定绿集合。
+- 依据(N=4 画像):9,10,10,10 /11 — 9 case 4/4 稳定绿。
+  `A5-bash-denied-14182` 1/4、`A5-write-outside-oldmsg` 2/4;
+  两者保留为观察项,不列入稳定绿集合。
 - 新增 `A6-grep-launch-denied` 4/4 全绿:模型均改走 Bash 搜索,没有
   重试同一个 Grep,也没有编造 `/approve` 或 permission profile 指导。
+- 新增 `A6-required-verifier-failed` 4/4 全绿:指定的完整 pytest 命令
+  collection 失败后,模型没有宣称验证通过,而是继续诊断或寻找可行验证路径。
 
 ## 条件对照读数(F4 消息改进,首轮)
 
@@ -54,10 +56,9 @@ reference model 上产生了可观测改善。
 
 ## Cassettes & results
 
-- `cassettes/qwen3.7-max/infer/` — 10 case 当前回放基线(record 轮
-  9/10;回放一致性已验证)
-- `results/qwen3.7-max-record.txt`、`qwen3.7-max-run{2..4}.txt` —
-  当前 N=4 画像原始输出
+- `cassettes/qwen3.7-max/infer/` — 11 case 当前回放基线(record 轮
+  9/11;回放一致性已验证)
+- 2026-08-10 当前 N=4 live/record 画像为 9、10、10、10 /11。
 - `cassettes/qwen-max/`、`results/qwen-max-*.txt` — 迁移前历史基线,
   不再作为当前 gate
 - 复跑:`OPENHARNESS_EVAL_MODE=replay uv run python scripts/spike_error_feedback_eval.py`

@@ -203,9 +203,13 @@ def test_permission_error_is_a_typed_boundary_violation(
     }
 
 
-def test_search_launcher_permission_error_is_not_a_target_boundary_violation(
+def test_search_launcher_permission_error_falls_back_to_in_process_search(
     tmp_path: Path, monkeypatch: MonkeyPatch
 ) -> None:
+    target = tmp_path / "tests" / "test_water.py"
+    target.parent.mkdir()
+    target.write_text("def test_trap():\n    pass\n", encoding="utf-8")
+
     def fail_launch(command: list[str], **kwargs: object) -> MagicMock:
         del command, kwargs
         raise PermissionError("operation not permitted")
@@ -215,11 +219,47 @@ def test_search_launcher_permission_error_is_not_a_target_boundary_violation(
         {
             "kind": "search",
             "path": str(tmp_path),
-            "pattern": "needle",
+            "pattern": "trap",
+            "glob": "**/test*.py",
             "line_cap": 10,
         }
     )
 
-    assert result["is_error"] is True
-    assert result["metadata"] == {}
-    assert "failed to launch ripgrep" in str(result["output"])
+    assert result["is_error"] is False
+    assert "test_water.py:1:def test_trap():" in str(result["output"])
+    assert result["metadata"] == {
+        "match_count": 1,
+        "byte_truncated": False,
+        "search_engine": "python-fallback",
+    }
+
+
+def test_search_fallback_preserves_hidden_case_and_line_cap(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    visible = tmp_path / "visible.py"
+    hidden = tmp_path / ".hidden.py"
+    visible.write_text("Needle\nneedle\n", encoding="utf-8")
+    hidden.write_text("needle\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        subprocess,
+        "Popen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("denied")),
+    )
+
+    result = worker.run(
+        {
+            "kind": "search",
+            "path": str(tmp_path),
+            "pattern": "needle",
+            "ignore_case": True,
+            "hidden": False,
+            "line_cap": 1,
+        }
+    )
+
+    assert result["is_error"] is False
+    assert "visible.py:1:Needle" in str(result["output"])
+    assert ".hidden.py" not in str(result["output"])
+    assert "truncated to 1 lines; total matches 2" in str(result["output"])

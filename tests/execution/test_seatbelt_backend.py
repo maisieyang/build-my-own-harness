@@ -60,7 +60,13 @@ def test_compiler_allows_workspace_write_but_denies_nested_protected_path(
         '(require-not (literal "/dev/null"))))'
     ) in profile_text
     assert '(allow sysctl-read (sysctl-name "hw.pagesize_compat"))' in profile_text
+    assert '(allow sysctl-read (sysctl-name "hw.machine"))' in profile_text
     assert '(allow sysctl-read (sysctl-name "kern.ostype"))' in profile_text
+    assert '(allow sysctl-read (sysctl-name "kern.version"))' in profile_text
+    assert (
+        '(allow mach-lookup (global-name "com.apple.SystemConfiguration.configd"))'
+        in profile_text
+    )
     assert '(allow file-write* (literal "/dev/null"))' in profile_text
     assert '(allow file-write* (subpath "/dev"))' not in profile_text
     assert '(require-not (literal "/dev/null"))' in profile_text
@@ -114,6 +120,21 @@ async def test_seatbelt_supports_minimal_toolchain_runtime(tmp_path: Path) -> No
         search = await session.execute(FileSearchOperation(pattern="needle", path=tmp_path))
         uv_version = await session.execute(CommandOperation(command="uv --version", cwd=tmp_path))
         uname = await session.execute(CommandOperation(command="uname -s", cwd=tmp_path))
+        python_uname = await session.execute(
+            CommandOperation(
+                command=f'{sys.executable} -c "import os; print(os.uname().machine)"',
+                cwd=tmp_path,
+            )
+        )
+        uv_run = await session.execute(
+            CommandOperation(
+                command=(
+                    f'uv run --offline --no-project --python {sys.executable} '
+                    'python -c "print(123)"'
+                ),
+                cwd=tmp_path,
+            )
+        )
         devnull = await session.execute(
             CommandOperation(command="printf ok > /dev/null", cwd=tmp_path)
         )
@@ -127,10 +148,23 @@ async def test_seatbelt_supports_minimal_toolchain_runtime(tmp_path: Path) -> No
     assert uv_version.exit_code == 0
     assert uv_version.output.startswith("uv ")
     assert uname == ProcessCompleted(output="Darwin\n", exit_code=0)
+    assert isinstance(python_uname, ProcessCompleted)
+    assert python_uname.exit_code == 0
+    assert python_uname.output.strip()
+    assert uv_run == ProcessCompleted(output="123\n", exit_code=0)
     assert devnull == ProcessCompleted(output="", exit_code=0)
     assert "runtime_write:/dev/null" in session.boundary.filesystem_rules
     assert "runtime_sysctl_read:hw.pagesize_compat" in session.boundary.process_rules
+    assert "runtime_sysctl_read:hw.machine" in session.boundary.process_rules
     assert "runtime_sysctl_read:kern.ostype" in session.boundary.process_rules
+    assert "runtime_sysctl_read:kern.version" in session.boundary.process_rules
+    assert (
+        "runtime_mach_lookup:com.apple.SystemConfiguration.configd"
+        in session.boundary.process_rules
+    )
+    assert f"runtime_set:UV_CACHE_DIR={tmp_path / '.cache' / 'uv'}" in (
+        session.boundary.environment_rules
+    )
 
 
 def test_compiler_denies_ambient_process_authority(tmp_path: Path) -> None:

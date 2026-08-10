@@ -158,6 +158,23 @@ class TestBuildSystemPrompt:
         prompt = build_system_prompt(tools, env)
         assert "recoverable" in prompt
 
+    def test_base_instructions_keep_verification_claims_evidence_bounded(
+        self, tools: list[ToolSpec], env: EnvironmentInfo
+    ) -> None:
+        prompt = build_system_prompt(tools, env)
+
+        assert "exact command" in prompt
+        assert "Alternative checks" in prompt
+        assert "partial evidence" in prompt
+
+    def test_base_instructions_keep_tests_in_the_project_test_suite(
+        self, tools: list[ToolSpec], env: EnvironmentInfo
+    ) -> None:
+        prompt = build_system_prompt(tools, env)
+
+        assert "project's test suite" in prompt
+        assert "production modules" in prompt
+
 
 class TestSkillsCatalogSection:
     """P5c-T3 (decisions/12 L3) — Skills catalog injection.

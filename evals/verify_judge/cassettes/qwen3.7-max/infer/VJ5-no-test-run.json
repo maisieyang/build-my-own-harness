@@ -1,0 +1,11 @@
+{
+  "case_id": "VJ5-no-test-run",
+  "model": "qwen3.7-max",
+  "kind": "infer",
+  "recorded_at": "2026-08-10T04:12:18.015539+00:00",
+  "request_summary": "VJ5-no-test-run: gold=fail",
+  "response": {
+    "passed": false,
+    "feedback": "No test command was executed in the transcript, so there is no authoritative evidence that all tests passed; assistant prose alone is insufficient."
+  }
+}

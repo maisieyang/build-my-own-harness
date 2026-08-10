@@ -5,8 +5,7 @@ Drives the verify_judge consumer over ``evals/verify_judge/dataset.yaml``:
 (VerdictAgreementScorer,纯 `=`)。含抗注入对抗样本。Mirrors
 spike_memory_compact_eval.
 
-Reference policy (dataset_card declaration 4): qwen-max. Runs on other
-models are information, not gate signals.
+The model comes from ``OPENHARNESS_MODEL`` or the project ``.env``.
 
 Run::
 
@@ -23,6 +22,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from dotenv import dotenv_values
 from openai import AsyncOpenAI
 
 from openharness.api import OpenAICompatibleApiClient
@@ -33,9 +33,6 @@ from openharness.eval.verify_judge_scorers import VerdictAgreementScorer
 if TYPE_CHECKING:
     from openharness.eval.cassette import CassetteMode
 
-_REFERENCE_MODEL = "qwen-max"
-
-
 def _resolve_cassette_mode() -> CassetteMode:
     raw = os.environ.get("OPENHARNESS_EVAL_MODE", "live").lower().strip()
     if raw not in ("live", "record", "replay"):
@@ -43,6 +40,18 @@ def _resolve_cassette_mode() -> CassetteMode:
             f"Invalid OPENHARNESS_EVAL_MODE={raw!r}; expected one of live / record / replay"
         )
     return cast("CassetteMode", raw)
+
+
+def _resolve_replay_model(project_root: Path) -> str:
+    configured = os.environ.get("OPENHARNESS_MODEL")
+    if configured is None:
+        configured = dotenv_values(project_root / ".env").get("OPENHARNESS_MODEL")
+    model = configured.strip() if isinstance(configured, str) else ""
+    if not model:
+        raise SystemExit(
+            "OPENHARNESS_MODEL is required for replay; configure it in the project .env"
+        )
+    return model
 
 
 def _print_case(result: VerifyJudgeCaseResult) -> None:
@@ -77,20 +86,19 @@ def _print_summary(results: list[VerifyJudgeCaseResult]) -> None:
 
 
 async def main() -> None:
+    project_root = Path(__file__).resolve().parent.parent
     cassette_mode = _resolve_cassette_mode()
     if cassette_mode == "replay":
-        # F8: replay never calls the API — must not depend on Settings nor
-        # the user's configured model. Default to the reference model so the
-        # committed cassettes are found.
+        # Replay selects a cassette from project configuration without loading
+        # provider credentials or calling the API.
         client = None
-        model = os.environ.get("OPENHARNESS_MODEL", _REFERENCE_MODEL)
+        model = _resolve_replay_model(project_root)
     else:
         settings = Settings()  # type: ignore[call-arg]
         sdk = AsyncOpenAI(api_key=settings.api_key, base_url=settings.base_url)
         client = OpenAICompatibleApiClient(sdk=sdk, extra_body=settings.extra_body)
         model = settings.model
 
-    project_root = Path(__file__).resolve().parent.parent
     dataset_path = project_root / "evals" / "verify_judge" / "dataset.yaml"
     cassette_root = project_root / "evals" / "verify_judge" / "cassettes"
 
@@ -98,11 +106,6 @@ async def main() -> None:
 
     print("# verify_judge eval — 决策面 #1 / B3 (verify 判官元评估)")
     print(f"# model:         {model}")
-    if model != _REFERENCE_MODEL:
-        print(
-            f"# NOTE: reference policy is {_REFERENCE_MODEL} (D41.5) — "
-            "this run is information, not a gate signal"
-        )
     print(f"# dataset:       {dataset_path.relative_to(project_root)}")
     print(f"# cassette_mode: {cassette_mode}")
     print()

@@ -1,0 +1,11 @@
+{
+  "case_id": "VJ1-readme-documented",
+  "model": "qwen3.7-max",
+  "kind": "infer",
+  "recorded_at": "2026-08-10T04:12:12.288836+00:00",
+  "request_summary": "VJ1-readme-documented: gold=pass",
+  "response": {
+    "passed": true,
+    "feedback": "The transcript explicitly states that README.md was edited to add a Flags section describing the --verbose flag, satisfying the documentation condition."
+  }
+}
