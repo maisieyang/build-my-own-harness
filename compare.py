@@ -1,5 +1,5 @@
 def compare(a: float, b: float) -> str:
-    """比较两个数的大小，返回描述性字符串。"""
+    """比较两个数的大小, 返回描述性字符串。"""
     if a > b:
         return f"{a} > {b}"
     elif a < b:

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import fnmatch
+import json
 import os
 import re
 import subprocess
@@ -146,14 +146,14 @@ def _search(request: dict[str, Any]) -> dict[str, object]:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
-    except PermissionError as exc:
+    except PermissionError:
         # The target search happens inside rg. A PermissionError raised here
         # therefore means the worker could not launch the rg executable; it
         # is not evidence that the requested search path sits outside the
         # filesystem boundary. Misclassifying it as a path violation creates
         # an exact permission request that cannot fix the underlying runtime
         # restriction (dogfood: allowed workspace Grep parked forever).
-        return _search_with_python(request, launcher_error=exc)
+        return _search_with_python(request)
     output, byte_truncated = _collect_bounded_output(process, max_bytes=_MAX_SEARCH_BYTES)
     returncode = process.wait()
     if returncode == 1:
@@ -178,9 +178,7 @@ def _search(request: dict[str, Any]) -> dict[str, object]:
     )
 
 
-def _search_with_python(
-    request: dict[str, Any], *, launcher_error: PermissionError
-) -> dict[str, object]:
+def _search_with_python(request: dict[str, Any]) -> dict[str, object]:
     """Preserve Grep when a nested sandbox cannot launch ``rg``.
 
     Files are still opened by this already-sandboxed worker, so the OS

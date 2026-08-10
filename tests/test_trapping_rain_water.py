@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from trapping_rain_water import trap
 
-
 # -- Reference implementation (small inputs only) -----------------------------
+
 
 def _brute_force(height: list[int]) -> int:
     """O(n²) reference for cross-validation."""
@@ -24,6 +24,7 @@ def _brute_force(height: list[int]) -> int:
 
 
 # -- Boundary test cases ------------------------------------------------------
+
 
 class TestTrapBoundary:
     """Each test targets a specific boundary condition."""

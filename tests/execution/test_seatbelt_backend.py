@@ -64,8 +64,7 @@ def test_compiler_allows_workspace_write_but_denies_nested_protected_path(
     assert '(allow sysctl-read (sysctl-name "kern.ostype"))' in profile_text
     assert '(allow sysctl-read (sysctl-name "kern.version"))' in profile_text
     assert (
-        '(allow mach-lookup (global-name "com.apple.SystemConfiguration.configd"))'
-        in profile_text
+        '(allow mach-lookup (global-name "com.apple.SystemConfiguration.configd"))' in profile_text
     )
     assert '(allow file-write* (literal "/dev/null"))' in profile_text
     assert '(allow file-write* (subpath "/dev"))' not in profile_text
@@ -129,7 +128,7 @@ async def test_seatbelt_supports_minimal_toolchain_runtime(tmp_path: Path) -> No
         uv_run = await session.execute(
             CommandOperation(
                 command=(
-                    f'uv run --offline --no-project --python {sys.executable} '
+                    f"uv run --offline --no-project --python {sys.executable} "
                     'python -c "print(123)"'
                 ),
                 cwd=tmp_path,

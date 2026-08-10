@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pytest
-
 from scripts import spike_verify_judge_eval
 
 

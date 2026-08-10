@@ -632,10 +632,7 @@ class SeatbeltBackend:
                 else f"runtime_sysctl_read_prefix:{value}"
                 for selector, value in _RUNTIME_SYSCTL_READ_RULES
             ),
-            *(
-                f"runtime_mach_lookup:{service}"
-                for service in _RUNTIME_MACH_LOOKUP_SERVICES
-            ),
+            *(f"runtime_mach_lookup:{service}" for service in _RUNTIME_MACH_LOOKUP_SERVICES),
         ]
         if profile.process.timeout_seconds is not None:
             process_rules.append(f"timeout<={profile.process.timeout_seconds}s")

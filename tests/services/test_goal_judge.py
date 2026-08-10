@@ -12,9 +12,9 @@ from openharness.protocols import ConversationMessage, TextBlock
 from openharness.protocols.stream_events import ApiMessageCompleteEvent, ApiTextDeltaEvent
 from openharness.protocols.usage import UsageSnapshot
 from openharness.services.goal_judge import (
+    _JUDGE_SYSTEM_PROMPT,
     GoalJudgeResult,
     GoalJudgeVerdict,
-    _JUDGE_SYSTEM_PROMPT,
     judge_goal_completion,
 )
 

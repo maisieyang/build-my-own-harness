@@ -103,6 +103,26 @@ def test_edit_uses_request_bound_atomic_temp_path(tmp_path: Path) -> None:
     assert not temp.exists()
 
 
+def test_atomic_write_removes_temporary_file_when_replace_fails(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    target = tmp_path / "edit.txt"
+    target.write_text("old")
+    temp = tmp_path / ".edit.txt.request.tmp"
+
+    def fail_rename(source: Path, destination: Path) -> None:
+        del source, destination
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(worker.os, "rename", fail_rename)
+
+    with pytest.raises(OSError, match="replace failed"):
+        worker._atomic_write(target, "new", temp_path=temp)
+
+    assert target.read_text() == "old"
+    assert not temp.exists()
+
+
 @pytest.mark.parametrize(
     ("returncode", "stdout", "stderr", "expected"),
     [
@@ -152,6 +172,35 @@ def test_process_output_is_drained_but_memory_is_bounded() -> None:
     assert output == b"0123"
     assert truncated is True
     assert process.stdout.read() == b""
+
+
+def test_process_without_stdout_is_an_explicit_failure() -> None:
+    process = MagicMock()
+    process.stdout = None
+
+    with pytest.raises(subprocess.SubprocessError, match="no output pipe"):
+        worker._collect_bounded_output(process, max_bytes=4)
+
+
+def test_search_reports_byte_truncation(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    process = MagicMock()
+    process.stdout = BytesIO(b"a:1:needle\n")
+    process.wait.return_value = 0
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(worker, "_MAX_SEARCH_BYTES", 4)
+
+    result = worker.run(
+        {
+            "kind": "search",
+            "path": str(tmp_path),
+            "pattern": "needle",
+            "line_cap": 10,
+        }
+    )
+
+    assert result["is_error"] is False
+    assert "output truncated at 4 bytes" in str(result["output"])
+    assert result["metadata"]["byte_truncated"] is True
 
 
 def test_unknown_operation_and_os_error_are_payload_errors(
@@ -263,3 +312,65 @@ def test_search_fallback_preserves_hidden_case_and_line_cap(
     assert "visible.py:1:Needle" in str(result["output"])
     assert ".hidden.py" not in str(result["output"])
     assert "truncated to 1 lines; total matches 2" in str(result["output"])
+
+
+def test_search_fallback_reports_invalid_regex(tmp_path: Path) -> None:
+    result = worker._search_with_python(
+        {
+            "path": str(tmp_path),
+            "pattern": "[",
+            "line_cap": 10,
+        }
+    )
+
+    assert result["is_error"] is True
+    assert "not a valid regular expression" in str(result["output"])
+
+
+def test_search_fallback_skips_binary_and_reports_no_matches(tmp_path: Path) -> None:
+    (tmp_path / "binary.bin").write_bytes(b"needle\0binary")
+    (tmp_path / "plain.txt").write_text("haystack\n", encoding="utf-8")
+
+    result = worker._search_with_python(
+        {
+            "path": str(tmp_path),
+            "pattern": "needle",
+            "line_cap": 10,
+        }
+    )
+
+    assert result["output"] == "(no matches)"
+    assert result["metadata"] == {
+        "match_count": 0,
+        "byte_truncated": False,
+        "search_engine": "python-fallback",
+    }
+
+
+def test_search_fallback_reports_byte_truncation(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    target = tmp_path / "plain.txt"
+    target.write_text("needle\n", encoding="utf-8")
+    monkeypatch.setattr(worker, "_MAX_SEARCH_BYTES", 1)
+
+    result = worker._search_with_python(
+        {
+            "path": str(target),
+            "pattern": "needle",
+            "line_cap": 10,
+        }
+    )
+
+    assert result["metadata"] == {
+        "match_count": 1,
+        "byte_truncated": True,
+        "search_engine": "python-fallback",
+    }
+    assert "output truncated at 1 bytes" in str(result["output"])
+
+
+def test_search_file_iterator_respects_hidden_single_file(tmp_path: Path) -> None:
+    hidden = tmp_path / ".hidden.py"
+    hidden.write_text("needle\n", encoding="utf-8")
+
+    assert worker._iter_search_files(hidden, include_hidden=False) == []
+    assert worker._iter_search_files(hidden, include_hidden=True) == [hidden]
