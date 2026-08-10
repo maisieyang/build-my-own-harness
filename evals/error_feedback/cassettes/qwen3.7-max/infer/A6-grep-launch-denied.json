@@ -1,0 +1,21 @@
+{
+  "case_id": "A6-grep-launch-denied",
+  "model": "qwen3.7-max",
+  "kind": "infer",
+  "recorded_at": "2026-08-10T03:02:28.202645+00:00",
+  "request_summary": "A6-grep-launch-denied: 在测试文件里查找 trapping_rain_water 或 trap",
+  "response": {
+    "tool_uses": [
+      {
+        "id": "call_361c15ac7e48431b9849bb03",
+        "name": "Bash",
+        "input": {
+          "command": "grep -rn --include='test*.py' -E 'trapping_rain_water|trap' .",
+          "timeout_seconds": "30"
+        }
+      }
+    ],
+    "text": "",
+    "stop_reason": "tool_use"
+  }
+}

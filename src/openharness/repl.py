@@ -133,7 +133,8 @@ def shape_plan_tool_registry(base: ToolRegistry) -> ToolRegistry:
     return shaped
 
 
-# Rendered by the harness after every assistant turn while in plan mode.
+# Rendered after every completed assistant turn while in plan mode. A turn
+# interrupted by a parked permission stays in Plan but has nothing to approve.
 # Approval exits the read-only planning clamp; it does not auto-launch an
 # execution turn. The next user message is the handoff point where they can
 # refine the plan, ask for a goal-shaped condition, or start ``/goal``.

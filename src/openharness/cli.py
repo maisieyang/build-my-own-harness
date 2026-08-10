@@ -1309,7 +1309,8 @@ OpenHarness — multi-turn REPL commands:
                      summary regardless of token threshold
   /plan [prompt]     enter plan mode (D47) — edits/commands are clamped
                      to read-only exploration; an approval menu appears
-                     after each reply (approve = return to default mode)
+                     after each completed reply; parked permissions pause
+                     planning before approval
   /goal <condition>  set a session goal (D48) — an independent checker
                      evaluates the conversation after each reply and
                      auto-continues turns until the condition holds;
@@ -1844,6 +1845,27 @@ async def _run_chat(
                 )
                 pending_is_goal_feedback = goal is not None
                 continue
+            # A parked permission is a session-level stop, not a tool-local
+            # warning. Starting another model turn before the owner decides
+            # would allow one more tool to run before the engine notices the
+            # old request (dogfood: Plan Grep parked, then Default Read and
+            # Goal Write still executed). Keep lifecycle/status commands above
+            # available, and allow an existing goal to be inspected or
+            # cleared, but do not enter a new workflow or Agent turn.
+            if permission_runtime.parked_request is not None:
+                goal_status_only = False
+                if user_input == "/goal" or user_input.startswith("/goal "):
+                    goal_status_only = _repl.parse_goal_command(user_input).action in {
+                        "show",
+                        "clear",
+                    }
+                if not goal_status_only:
+                    request_id = permission_runtime.parked_request.request_id[:12]
+                    typer.echo(
+                        f"(permission request pending {request_id}; no new Agent turn "
+                        "started. Use /approve or /deny, then /resume)"
+                    )
+                    continue
             # D47 — enter plan mode. The clamp itself is the permissions deny
             # preset overlaid at context build; this just flips the state.
             # Leaving plan mode is menu-only (harness-owned gate, D47.2) —
@@ -1856,7 +1878,7 @@ async def _run_chat(
                 chat_mode = _repl.ChatMode.PLAN
                 typer.echo(
                     "(plan mode: edits and shell commands are blocked; an "
-                    "approval menu appears after each reply)"
+                    "approval menu appears after each completed reply)"
                 )
                 plan_prompt = user_input.removeprefix("/plan").strip()
                 if not plan_prompt:
@@ -2189,14 +2211,16 @@ async def _run_chat(
 
             captured: list[ConversationMessage] | None = None
             permission_confirmation_required: str | None = None
+            conversation_completed = False
 
             async def _capture(
                 events_iter: AsyncIterator[ApiStreamEvent],
             ) -> AsyncIterator[ApiStreamEvent]:
-                nonlocal captured, permission_confirmation_required
+                nonlocal captured, conversation_completed, permission_confirmation_required
                 async for ev in events_iter:
                     if isinstance(ev, ConversationCompleteEvent):
                         captured = ev.messages
+                        conversation_completed = True
                     elif isinstance(ev, PermissionParkedEvent):
                         captured = ev.messages
                         permission_confirmation_required = ev.reason
@@ -2224,12 +2248,18 @@ async def _run_chat(
             if captured is not None:
                 history = captured
 
-            # D47.2/D47.5 — approval menu after EVERY assistant turn while in
-            # plan mode (v1 declared simplification: no plan-presented
-            # detection; option 2 covers "model is still exploring"). This is
-            # the harness-owned gate: the model has no exit tool, and natural
-            # language cannot flip the mode — only a menu choice can.
-            if chat_mode is _repl.ChatMode.PLAN:
+            # D47.2/D47.5 — approval menu after every completed assistant turn
+            # while in plan mode. A permission-interrupted turn is not a plan
+            # the user can approve; resolve it and /resume first. For ordinary
+            # completed turns, option 2 covers "model is still exploring".
+            # This is the harness-owned gate: the model has no exit tool, and
+            # natural language cannot flip the mode — only a menu choice can.
+            if chat_mode is _repl.ChatMode.PLAN and permission_confirmation_required is not None:
+                typer.echo(
+                    "(plan paused on permission — use /approve or /deny, then "
+                    "/resume; no plan is ready to approve)"
+                )
+            elif chat_mode is _repl.ChatMode.PLAN and conversation_completed:
                 typer.echo(_repl.PLAN_MENU_TEXT)
                 choice: _repl.PlanMenuChoice
                 while True:

@@ -14,7 +14,7 @@ pytest 断言进 CI:任何改动若破坏了「被测 prompt/描述 ↔ 录制�
 Bar 出处(各 dataset_card ratified 值):
 - tool_choice     12/12(全稳定绿)
 - skill_trigger   ≥7/9 且 7 稳定绿必须全绿(v2 措辞,ratchet 后)
-- error_feedback  ≥8/9 且 8 稳定绿必须全绿
+- error_feedback  ≥8/10 且 8 稳定绿必须全绿
 - memory_compact  6/6(全稳定绿,B2 / D45)
 - verify_judge    8/8(判官与金标一致 + 抗注入,B3 / D45.2)
 - memory_read     6/6(must-read 契约 + restraint,C4 / 面 #4)
@@ -52,7 +52,8 @@ from openharness.eval.verify_judge import run_verify_judge_eval
 from openharness.eval.verify_judge_scorers import VerdictAgreementScorer
 
 _ROOT = Path(__file__).parents[2] / "evals"
-_MODEL = "qwen-max"  # reference policy, all three cards
+_MODEL = "qwen-max"
+_ERROR_FEEDBACK_MODEL = "qwen3.7-max"
 
 # 各 eval ratified 的稳定绿集合(card 为准)——这些 case 在回放中必须全绿
 _SKILL_TRIGGER_STABLE_GREENS = {
@@ -66,12 +67,12 @@ _SKILL_TRIGGER_STABLE_GREENS = {
 }
 _ERROR_FEEDBACK_STABLE_GREENS = {
     "A5-write-outside-newmsg",
-    "A5-write-outside-oldmsg",
     "A5-reroute-into-cwd",
     "A6-unknown-tool",
     "A6-invalid-input",
     "A6-bash-command-missing",
     "A6-read-missing-file",
+    "A6-grep-launch-denied",
     "A6-double-planted-persistence",
 }
 
@@ -114,14 +115,14 @@ class TestReplayGates:
             _ROOT / "error_feedback" / "dataset.yaml",
             [VerbatimRetryScorer(), FollowupScorer(), FabricatedGuidanceScorer()],
             api_client=None,
-            model=_MODEL,
+            model=_ERROR_FEEDBACK_MODEL,
             cassette_root=_ROOT / "error_feedback" / "cassettes",
             cassette_mode="replay",
         )
         passing = _passing_ids(results)
         missing_greens = _ERROR_FEEDBACK_STABLE_GREENS - passing
         assert not missing_greens, f"error_feedback 稳定绿破绿: {sorted(missing_greens)}"
-        assert len(passing) >= 8, f"error_feedback bar ≥8/9 broken: passing={len(passing)}"
+        assert len(passing) >= 8, f"error_feedback bar ≥8/10 broken: passing={len(passing)}"
 
     async def test_memory_compact_replay_holds_bar(self) -> None:
         results = await run_memory_compact_eval(

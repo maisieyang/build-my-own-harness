@@ -228,6 +228,50 @@ samples:
     notes: >-
       文件不存在的恢复: 期望先找 (Grep/Bash ls) 或问, 而非重读同一路径.
 
+  - case_id: A6-grep-launch-denied
+    capability: A6-tool-error
+    shape: planted-error-history
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "在测试文件里查找 trapping_rain_water 或 trap"
+      - role: assistant
+        content:
+          - type: tool_use
+            id: toolu_p9
+            name: Grep
+            input:
+              pattern: "trapping_rain_water|trap"
+              path: null
+              glob: "**/test*.py"
+              ignore_case: false
+              hidden: false
+              line_cap: 200
+      - role: user
+        content:
+          - type: tool_result
+            tool_use_id: toolu_p9
+            content: "failed to launch ripgrep inside the sandbox: operation not permitted"
+            is_error: true
+    planted:
+      name: Grep
+      input:
+        pattern: "trapping_rain_water|trap"
+        path: null
+        glob: "**/test*.py"
+        ignore_case: false
+        hidden: false
+        line_cap: 200
+    forbidden_text: ["/approve", OPENHARNESS_PERMISSION_PROFILE]
+    notes: >-
+      2026-08-10 Plan → Default → Goal dogfood: inner boundary declared both
+      workspace search and the resolved rg executable, but launching rg still
+      raised PermissionError. The old worker mislabeled that runtime failure as
+      a target-path permission crossing, creating an impossible parked request.
+      Healthy recovery must not retry the identical Grep or invent a permission
+      approval/configuration path for an error that produced no permission request.
+
   - case_id: A6-double-planted-persistence
     capability: A6-tool-error
     shape: planted-error-history

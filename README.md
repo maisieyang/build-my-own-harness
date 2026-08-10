@@ -46,8 +46,8 @@ artifacts under [`benchmarks/swebench/out/`](./benchmarks/swebench/out).
 
 ## One-minute tour
 
-Bare `oh` opens the conversation-first REPL. Planning, approval, and execution
-are separate state transitions:
+`uv run oh` opens the conversation-first REPL from the current checkout.
+Planning, approval, and execution are separate state transitions:
 
 ```text
 >>> /plan Review the implementation and propose a verification plan
@@ -251,55 +251,58 @@ model's self-report.
 
 ## Quick start
 
-Requires Python >=3.10, [uv](https://docs.astral.sh/uv/), and an
-OpenAI-compatible Chat Completions endpoint.
+OpenHarness is currently developed and dogfooded from source. It requires
+Python >=3.10, [uv](https://docs.astral.sh/uv/), and an OpenAI-compatible Chat
+Completions endpoint.
 
 ```bash
+# Install uv if it is not already available.
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
+# Clone OpenHarness and install its dependencies.
 git clone https://github.com/maisieyang/build-my-own-harness.git
 cd build-my-own-harness
 uv sync
 
+# Create the local configuration.
 cp .env.example .env
 $EDITOR .env
-
-uv run oh
 ```
 
-Fill in the blank values in `.env`'s minimum dogfood block. It contains the
-OpenAI-compatible provider settings, web capability key, provider request
-fields, and verified sandbox switch needed by the repository's current
-dogfood setup; the loop itself contains no provider-specific branches.
+In `.env`, set the model provider API key and compatible base URL, then choose
+a model served by that endpoint. The Web capability API key is optional; leave
+it blank to start without Web tools. Keep `.env` local and never commit
+credentials.
 
-Type `/` in the REPL to open the combined menu of built-ins, user commands, and
-skills. Enter the first prompt inside the session.
-
-### Choose the launcher by context
-
-When developing OpenHarness itself—including from a Git worktree—always launch
-it through the current checkout:
+Start the Agent from this checkout:
 
 ```bash
 uv run oh
 ```
 
-`uv run` resolves the `pyproject.toml` and `.venv` belonging to the current
-worktree, so the running harness code follows that worktree's branch. A bare
-`oh` is resolved from `PATH`; when it was installed as a uv tool or editable
-checkout, it may still point at a different checkout even though its cwd is the
-current worktree. That split can make a feature worktree operate on its own
-files while running harness code from the main checkout.
+When the `>>>` prompt appears, enter a task to begin. Type `/` to open the
+current session's command menu.
 
-Use bare `oh` when OpenHarness is installed as a stable tool and you are using
-it to operate on another project. Use `uv run oh` when developing or validating
-OpenHarness itself.
+### Why always use `uv run oh`?
+
+Always launch OpenHarness through the current checkout, including from a Git
+worktree:
+
+```bash
+uv run oh
+```
+
+`uv run` resolves the `pyproject.toml`, environment, and source code belonging
+to the current checkout. In a worktree, the running harness therefore follows
+that worktree's branch and includes its uncommitted changes. A bare `oh` is
+resolved from `PATH` and may execute code from another checkout, so it is not a
+supported launcher for this source-only workflow.
 
 ### macOS Seatbelt dogfood
 
 The minimum `.env.example` block already enables the sandbox. The default
-backend on macOS is Seatbelt, and bare `oh` enters the interactive chat
-session, so the everyday dogfood command is simply:
+backend on macOS is Seatbelt, and the root Agent entry starts the interactive
+chat session, so the everyday dogfood command is simply:
 
 ```bash
 uv run oh
@@ -336,14 +339,16 @@ durable memory is disabled.
 
 ## Using OpenHarness
 
-OpenHarness has one public Agent entry: `oh [OPTIONS]`. In this repository or
-one of its worktrees, use `uv run oh`; an installed copy uses bare `oh`.
+### How do I get started?
+
+OpenHarness has one public Agent entry: `oh [OPTIONS]`. From this repository or
+one of its worktrees, always invoke it with `uv run oh`.
 
 ```bash
 uv run oh
 ```
 
-### 1. Shell CLI command tree
+### What can I do? — Shell CLI
 
 ```text
 oh [OPTIONS]              # the Agent entry
@@ -361,45 +366,78 @@ oh [OPTIONS]              # the Agent entry
     └── bench
 ```
 
-The tree is the navigation model; these are the executable leaf actions:
-
-| Area | Commands |
-|---|---|
-| Agent | `oh`, `oh --auto`, `oh --dry-run`, `oh --resume` |
-| Config | `oh config`, `oh config edit` |
-| Inspect | `oh inspect tools list`, `oh inspect tools show NAME`, `oh inspect hooks list`, `oh inspect hooks describe NAME`, `oh inspect plugins list` |
-| State | `oh state memory list`, `oh state memory show NAME`, `oh state memory path`, `oh state snapshots list`, `oh state snapshots show ID`, `oh state snapshots gc` |
-| Dev | `oh dev eval focus_state`, `oh dev eval memory_decision`, `oh dev bench swebench fetch`, `oh dev bench swebench run` |
-
-Each group help includes copyable examples. For the options of a particular
-leaf, follow the tree one level at a time:
+Common ways to start the Agent while developing this repository:
 
 ```bash
-uv run oh state --help
-uv run oh state memory --help
+# Temporarily choose a model.
+uv run oh --model qwen-max
+
+# Use the automated reviewer for exact permission requests.
+uv run oh --auto
+
+# Preview tool calls without executing them.
+uv run oh --dry-run
+
+# Explicitly use macOS Seatbelt.
+uv run oh --sandbox --sandbox-backend seatbelt
+
+# Resume the latest session for this project.
+uv run oh --resume
+
+# Combine session options.
+uv run oh --model qwen-max --auto --sandbox
 ```
 
-### 2. REPL slash commands
+### How do I control a session? — REPL slash commands
 
-Once `oh` starts, `/` opens the current session's scrollable command menu. Use
-arrow keys to browse it or keep typing to filter it. `/help` prints the stable
-built-in reference.
+The REPL has three work flows: work normally, explore safely, and work toward a
+verifiable completion condition.
 
-| Area | Commands |
-|---|---|
-| Session | `/help`, `/clear`, `/compact`, `/exit` (`/quit` is an alias) |
-| Workflow | `/plan [prompt]`, `/goal [condition|clear]` |
-| Permissions | `/permissions`, `/approve [id]`, `/deny [id]`, `/resume` |
-| Context | `/skills`, `/memory` |
+#### Default — work normally
 
-`/approve`, `/deny`, and `/resume` act on a parked permission request; they
-are meaningful only when one exists.
+Enter a task directly. The Agent works with the current tool and permission
+configuration.
 
-The menu can also contain dynamic entries. User-authored commands are Markdown
-files in `~/.openharness/commands/` or `<project>/.openharness/commands/`;
-project entries override global ones and are invoked as `/<name> [args]`. If no
-built-in or user command matches, `/<skill-name>` falls through to a discovered
-skill. The resolution order is built-in command, user command, then skill.
+#### Plan — explore safely before acting
+
+`/plan [prompt]` enters read-only exploration: edits and shell commands are
+blocked. After every completed reply, a plan menu lets you keep planning,
+approve the plan and return to Default, or discard it. If a permission request
+parks the turn, resolve it and use `/resume` before the approval menu appears.
+
+#### Goal — keep working until a condition is met
+
+`/goal <condition>` sets a verifiable completion condition and starts work
+immediately. While in Default, an independent checker evaluates each turn and
+continues the session until the condition is met. Use `/goal` to view status or
+`/goal clear` to stop the controller. A goal can be set while planning, but
+the checker runs only after the session returns to Default.
+
+#### Maintain the conversation
+
+`/compact` compresses earlier conversation context while preserving the recent
+exchange. `/clear` clears the conversation and any active goal.
+
+#### Handle permission decisions
+
+`/permissions` shows configured intent and the verified runtime boundary. When
+a permission request is parked, use `/approve [id]` or `/deny [id]`, then
+`/resume` to continue from that decision.
+
+#### Inspect and extend context
+
+`/memory` lists memories for the current project and `/skills` lists available
+skills. User-authored commands are Markdown files in `~/.openharness/commands/`
+or `<project>/.openharness/commands/`; project entries override global ones and
+are invoked as `/<name> [args]`. If no built-in or user command matches,
+`/<skill-name>` falls through to a discovered skill. The resolution order is
+built-in command, user command, then skill.
+
+#### Discover and exit
+
+`/` opens the current session's scrollable command menu; use arrow keys to
+browse it or keep typing to filter it. `/help` prints the stable built-in
+reference. Use `/exit` to leave the REPL (`/quit` is an alias).
 
 All configuration uses the `OPENHARNESS_*` namespace; see
 [`.env.example`](./.env.example).

@@ -1,0 +1,20 @@
+{
+  "case_id": "A6-unknown-tool",
+  "model": "qwen3.7-max",
+  "kind": "infer",
+  "recorded_at": "2026-08-10T03:02:23.925887+00:00",
+  "request_summary": "A6-unknown-tool: 看看 src 目录下有哪些 python 文件",
+  "response": {
+    "tool_uses": [
+      {
+        "id": "call_03396cdd1fec4ada99f4f694",
+        "name": "Glob",
+        "input": {
+          "pattern": "src/**/*.py"
+        }
+      }
+    ],
+    "text": "",
+    "stop_reason": "tool_use"
+  }
+}

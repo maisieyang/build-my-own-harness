@@ -138,11 +138,20 @@ def _search(request: dict[str, Any]) -> dict[str, object]:
     if request.get("glob") is not None:
         command.extend(["--glob", str(request["glob"])])
     command.extend([str(request["pattern"]), str(request["path"])])
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+    except PermissionError as exc:
+        # The target search happens inside rg. A PermissionError raised here
+        # therefore means the worker could not launch the rg executable; it
+        # is not evidence that the requested search path sits outside the
+        # filesystem boundary. Misclassifying it as a path violation creates
+        # an exact permission request that cannot fix the underlying runtime
+        # restriction (dogfood: allowed workspace Grep parked forever).
+        return _failure(f"failed to launch ripgrep inside the sandbox: {exc}")
     output, byte_truncated = _collect_bounded_output(process, max_bytes=_MAX_SEARCH_BYTES)
     returncode = process.wait()
     if returncode == 1:

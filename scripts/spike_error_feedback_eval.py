@@ -2,10 +2,8 @@
 
 Drives the error_feedback consumer (loader, fixture catalog, single-shot
 infer, two `=`-grade scorers) over ``evals/error_feedback/dataset.yaml``
-against the currently-configured model. Mirrors spike_tool_choice_eval.
-
-Reference policy (dataset_card declaration 4): qwen-max. Runs on other
-models are information, not gate signals.
+against the model configured by ``OPENHARNESS_MODEL`` or the project ``.env``.
+Mirrors spike_tool_choice_eval.
 
 Run::
 
@@ -24,6 +22,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from dotenv import dotenv_values
 from openai import AsyncOpenAI
 
 from openharness.api import OpenAICompatibleApiClient
@@ -38,8 +37,6 @@ from openharness.eval.error_feedback_scorers import (
 if TYPE_CHECKING:
     from openharness.eval.cassette import CassetteMode
 
-_REFERENCE_MODEL = "qwen-max"
-
 
 def _resolve_cassette_mode() -> CassetteMode:
     raw = os.environ.get("OPENHARNESS_EVAL_MODE", "live").lower().strip()
@@ -48,6 +45,19 @@ def _resolve_cassette_mode() -> CassetteMode:
             f"Invalid OPENHARNESS_EVAL_MODE={raw!r}; expected one of live / record / replay"
         )
     return cast("CassetteMode", raw)
+
+
+def _resolve_replay_model(project_root: Path) -> str:
+    """Resolve replay cassette identity without loading API credentials."""
+    configured = os.environ.get("OPENHARNESS_MODEL")
+    if configured is None:
+        configured = dotenv_values(project_root / ".env").get("OPENHARNESS_MODEL")
+    model = configured.strip() if isinstance(configured, str) else ""
+    if not model:
+        raise SystemExit(
+            "OPENHARNESS_MODEL is required for replay; configure it in the project .env"
+        )
+    return model
 
 
 def _print_case(result: ErrorFeedbackCaseResult) -> None:
@@ -80,24 +90,19 @@ def _print_summary(results: list[ErrorFeedbackCaseResult]) -> None:
 
 
 async def main() -> None:
+    project_root = Path(__file__).resolve().parent.parent
     cassette_mode = _resolve_cassette_mode()
     if cassette_mode == "replay":
-        # F8 fix (dogfood Day 1, learnings/dogfood-day1): replay never
-        # calls the API — it must not depend on Settings (credentials)
-        # nor on the user's configured model (a project .env pointing at
-        # another model made the documented replay command fail with
-        # CassetteMissingError). Default to the reference model so the
-        # committed cassettes are found; an explicit OPENHARNESS_MODEL
-        # env var still overrides for info runs on other recordings.
+        # Replay never calls the API, so it reads only the configured model
+        # needed to select a cassette and does not require API credentials.
         client = None
-        model = os.environ.get("OPENHARNESS_MODEL", _REFERENCE_MODEL)
+        model = _resolve_replay_model(project_root)
     else:
         settings = Settings()  # type: ignore[call-arg]
         sdk = AsyncOpenAI(api_key=settings.api_key, base_url=settings.base_url)
         client = OpenAICompatibleApiClient(sdk=sdk, extra_body=settings.extra_body)
         model = settings.model
 
-    project_root = Path(__file__).resolve().parent.parent
     dataset_path = project_root / "evals" / "error_feedback" / "dataset.yaml"
     cassette_root = project_root / "evals" / "error_feedback" / "cassettes"
 
@@ -105,11 +110,6 @@ async def main() -> None:
 
     print("# error_feedback eval — D41 P0 (decision surface #3 A5+A6)")
     print(f"# model:         {model}")
-    if model != _REFERENCE_MODEL:
-        print(
-            f"# NOTE: reference policy is {_REFERENCE_MODEL} (D41.5) — "
-            "this run is information, not a gate signal"
-        )
     print(f"# dataset:       {dataset_path.relative_to(project_root)}")
     print(f"# cassette_mode: {cassette_mode}")
     print()

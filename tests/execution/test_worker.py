@@ -175,7 +175,6 @@ def test_unknown_operation_and_os_error_are_payload_errors(
     ("kind", "dimension"),
     [
         ("read", "filesystem.read"),
-        ("search", "filesystem.search"),
         ("write", "filesystem.write"),
         ("edit", "filesystem.write"),
     ],
@@ -202,3 +201,25 @@ def test_permission_error_is_a_typed_boundary_violation(
             "hard_deny": False,
         }
     }
+
+
+def test_search_launcher_permission_error_is_not_a_target_boundary_violation(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    def fail_launch(command: list[str], **kwargs: object) -> MagicMock:
+        del command, kwargs
+        raise PermissionError("operation not permitted")
+
+    monkeypatch.setattr(subprocess, "Popen", fail_launch)
+    result = worker.run(
+        {
+            "kind": "search",
+            "path": str(tmp_path),
+            "pattern": "needle",
+            "line_cap": 10,
+        }
+    )
+
+    assert result["is_error"] is True
+    assert result["metadata"] == {}
+    assert "failed to launch ripgrep" in str(result["output"])
