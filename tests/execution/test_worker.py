@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import subprocess
-from io import BytesIO
+from io import BytesIO, StringIO
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
@@ -347,6 +348,21 @@ def test_search_fallback_skips_binary_and_reports_no_matches(tmp_path: Path) -> 
     }
 
 
+def test_search_fallback_applies_nonmatching_glob(tmp_path: Path) -> None:
+    (tmp_path / "plain.txt").write_text("needle\n", encoding="utf-8")
+
+    result = worker._search_with_python(
+        {
+            "path": str(tmp_path),
+            "pattern": "needle",
+            "glob": "*.py",
+            "line_cap": 10,
+        }
+    )
+
+    assert result["output"] == "(no matches)"
+
+
 def test_search_fallback_reports_byte_truncation(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     target = tmp_path / "plain.txt"
     target.write_text("needle\n", encoding="utf-8")
@@ -374,3 +390,35 @@ def test_search_file_iterator_respects_hidden_single_file(tmp_path: Path) -> Non
 
     assert worker._iter_search_files(hidden, include_hidden=False) == []
     assert worker._iter_search_files(hidden, include_hidden=True) == [hidden]
+
+
+def test_glob_matching_supports_direct_recursive_and_miss() -> None:
+    assert worker._glob_matches("test_water.py", "test*.py") is True
+    assert worker._glob_matches("tests/test_water.py", "**/test*.py") is True
+    assert worker._glob_matches("water.txt", "**/test*.py") is False
+
+
+def test_bounded_output_handles_chunks_after_capacity(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    process = MagicMock()
+    process.stdout = BytesIO(b"abcd")
+    monkeypatch.setattr(worker, "_STREAM_CHUNK_BYTES", 2)
+
+    output, truncated = worker._collect_bounded_output(process, max_bytes=1)
+
+    assert output == b"a"
+    assert truncated is True
+
+
+def test_main_translates_json_between_standard_streams(monkeypatch: MonkeyPatch) -> None:
+    stdin = SimpleNamespace(buffer=BytesIO(b'{"kind":"magic"}'))
+    stdout = StringIO()
+    monkeypatch.setattr(worker.sys, "stdin", stdin)
+    monkeypatch.setattr(worker.sys, "stdout", stdout)
+
+    worker.main()
+
+    assert stdout.getvalue() == (
+        '{"output":"unknown worker operation: magic","is_error":true,"metadata":{}}'
+    )

@@ -113,6 +113,7 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-cov>=5.0",
     "pre-commit>=3.7",
+    "tomli>=2.0; python_version < '3.11'",
     # P5c-T1 — type stubs for PyYAML; mypy --strict won't pass without them
     "types-PyYAML>=6.0",
 ]

@@ -152,7 +152,7 @@ def test_group_help_includes_copyable_leaf_command_examples() -> None:
     for group_name, example in expected_examples.items():
         result = runner.invoke(cli_module.app, [group_name, "--help"])
         assert result.exit_code == 0
-        assert example in result.stdout
+        assert example in " ".join(result.stdout.split())
 
 
 def test_old_top_level_group_paths_are_removed() -> None:
