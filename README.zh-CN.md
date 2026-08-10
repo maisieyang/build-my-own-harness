@@ -55,7 +55,7 @@ plan mode -- approve this plan?
   [3] no, discard plan mode (back to default)
 plan> 1
 
->>> /goal 执行刚批准的计划；运行 `uv run pytest -m 'not integration' -q`；最多 10 turns 后停止
+>>> /goal 执行刚批准的计划；运行 `uv run pytest -m 'not integration and not eval' -q`；最多 10 turns 后停止
 ```
 
 `/plan` 从模型可见 catalog 中移除修改与委派能力，并用 deny-only dispatch guard
@@ -301,7 +301,7 @@ oh [OPTIONS]              # Agent 入口
 
 ```bash
 # 临时指定模型
-uv run oh --model qwen-max
+uv run oh --model qwen3.7-max
 
 # 使用自动 reviewer 处理精确的权限请求
 uv run oh --auto
@@ -316,8 +316,28 @@ uv run oh --sandbox --sandbox-backend seatbelt
 uv run oh --resume
 
 # 组合 session options
-uv run oh --model qwen-max --auto --sandbox
+uv run oh --model qwen3.7-max --auto --sandbox
 ```
+
+### 如何运行 eval？— 仅手动触发
+
+Dataset eval 不会在 CI 或默认测试套件中运行。每次调用都必须显式指定 mode：
+`live`、`record` 或 `replay`；裸命令会 fail closed。
+
+```bash
+# 查看 capability eval
+uv run oh dev eval --help
+
+# replay 已提交的 cassette，不调用 API
+uv run oh dev eval error_feedback --mode replay
+
+# 只运行一个 live 诊断 case
+uv run oh dev eval error_feedback --mode live \
+  --case A6-grep-launch-denied
+```
+
+完整的验证层级、mode 语义、model 选择、record policy、capability catalog 与
+故障排查见 [Eval 手册](./evals/README.zh-CN.md)。
 
 ### 如何控制会话？— REPL slash commands
 
@@ -382,13 +402,15 @@ replacement。无法等价表达的规则必须显式重写；migration 不会�
 ## 质量契约
 
 ```bash
-uv run pytest -m "not integration" -q
+uv run pytest -m "not integration and not eval" -q
 uv run mypy --strict src/
 uv run ruff check
 uv run ruff format --check
 ```
 
-- CI/default gate 不需要 live model 或外部服务。
+- CI/default gate 排除 integration tests 与全部 dataset eval gate。
+- `uv run pytest -m eval -q --no-cov` 手动运行已提交 cassette 的 replay gate，
+  不会调用模型。
 - `uv run pytest -m integration` 运行显式隔离的真实进程或 live-service 检查；
   根据选中的测试，可能需要 Node、Docker、gVisor、凭据或网络。
 - Coverage 必须保持在 95% 以上。

@@ -99,4 +99,4 @@ case)。按新标准复核:v2 仅 TS5-sql 1/4 = 噪声,**v2 复活**,bar 棘轮
 - `cassettes/qwen-max/infer/` — 9 case 回放基线(v2 措辞下重录,record
   轮 9/9;回放一致性已验证)
 - `results/qwen-max-run{1..4}.txt` — N=4 画像原始输出
-- 复跑:`OPENHARNESS_EVAL_MODE=replay uv run python scripts/spike_skill_trigger_eval.py`
+- 复跑:`uv run oh dev eval skill_trigger --mode replay`

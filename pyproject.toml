@@ -213,6 +213,7 @@ warn_required_dynamic_aliases = true
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
+pythonpath = ["."]
 asyncio_mode = "auto"
 addopts = [
     "--strict-markers",
@@ -223,11 +224,11 @@ addopts = [
     "--cov-report=xml",
 ]
 # Custom markers — listed here so ``--strict-markers`` does not flag them.
-# ``integration`` is opt-in; CI runs ``pytest -m "not integration"`` and
-# nightly / on-demand runs ``pytest -m integration`` (with the API-key env
-# var set as a secret). See decisions/05-cli.md D5.7.
+# ``integration`` and dataset ``eval`` gates are opt-in. CI runs only the
+# deterministic unit substrate; both manual surfaces have explicit commands.
 markers = [
     "integration: real-API end-to-end test (opt-in via -m integration)",
+    "eval: dataset-backed cassette replay gate (manual via -m eval)",
 ]
 
 [tool.coverage.run]

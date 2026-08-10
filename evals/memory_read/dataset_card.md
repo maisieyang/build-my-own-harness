@@ -66,4 +66,4 @@ inline 决策两半齐。
 
 - `cassettes/qwen-max/infer/` — 6 case 回放基线(record 6/6;回放一致已验证)
 - `results/qwen-max-run{1..4}.txt` — N=4 画像原始输出
-- 复跑:`OPENHARNESS_EVAL_MODE=replay uv run python scripts/spike_memory_read_eval.py`
+- 复跑:`uv run oh dev eval memory_read --mode replay`

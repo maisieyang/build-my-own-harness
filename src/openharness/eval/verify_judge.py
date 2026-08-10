@@ -25,6 +25,7 @@ from openharness.eval.cassette import (
     CassetteMode,
     CassetteStore,
 )
+from openharness.eval.selection import select_cases
 from openharness.services.goal_judge import GoalJudgeVerdict, judge_goal_completion
 
 if TYPE_CHECKING:
@@ -167,9 +168,10 @@ async def run_verify_judge_eval(
     *,
     cassette_root: Path | None = None,
     cassette_mode: CassetteMode = "live",
+    case_id: str | None = None,
 ) -> list[VerifyJudgeCaseResult]:
     """End-to-end: dataset → per-sample judge (cassette-aware) → scorers."""
-    samples = load_verify_judge_dataset(dataset_path)
+    samples = select_cases(load_verify_judge_dataset(dataset_path), case_id)
     store = CassetteStore(cassette_root) if cassette_root is not None else None
     results: list[VerifyJudgeCaseResult] = []
     for sample in samples:

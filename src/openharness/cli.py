@@ -40,6 +40,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import difflib
+import os
+import subprocess
+import sys
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -4053,6 +4056,95 @@ eval_app = typer.Typer(
 )
 dev_app.add_typer(eval_app, name="eval")
 
+_SCRIPT_EVALS = (
+    "error_feedback",
+    "memory_compact",
+    "memory_read",
+    "permission_review",
+    "skill_trigger",
+    "tool_choice",
+    "verify_judge",
+)
+
+
+def _repository_root() -> Path:
+    """Return the checkout root that owns the contributor eval scripts."""
+    return Path(__file__).resolve().parents[2]
+
+
+def _require_eval_mode(mode: str | None) -> str:
+    if mode is None:
+        typer.echo(
+            "Missing option '--mode'. Choose live, record, or replay explicitly; "
+            "live and record call the configured model.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if mode not in ("live", "record", "replay"):
+        typer.echo(
+            f"Invalid --mode={mode!r}; expected one of: live / record / replay",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    return mode
+
+
+def _run_manual_eval(
+    name: str,
+    *,
+    mode: str | None,
+    model: str | None,
+    case_id: str | None,
+) -> None:
+    """Launch one repository eval only after an explicit mode selection."""
+    selected_mode = _require_eval_mode(mode)
+    root = _repository_root()
+    script = root / "scripts" / f"spike_{name}_eval.py"
+    if not script.is_file():
+        typer.echo(f"Eval script not found: {script}", err=True)
+        raise typer.Exit(code=1)
+
+    env = dict(os.environ)
+    env["OPENHARNESS_EVAL_MODE"] = selected_mode
+    env.pop("OPENHARNESS_EVAL_CASE", None)
+    if model is not None:
+        env["OPENHARNESS_MODEL"] = model
+    if case_id is not None:
+        env["OPENHARNESS_EVAL_CASE"] = case_id
+
+    completed = subprocess.run([sys.executable, str(script)], cwd=root, env=env, check=False)
+    if completed.returncode:
+        raise typer.Exit(code=completed.returncode)
+
+
+def _register_script_eval(name: str) -> None:
+    def command(
+        mode: str | None = typer.Option(
+            None,
+            "--mode",
+            "-m",
+            help="Required: live, record, or replay.",
+        ),
+        model: str | None = typer.Option(
+            None,
+            "--model",
+            help="Override OPENHARNESS_MODEL for this run.",
+        ),
+        case_id: str | None = typer.Option(
+            None,
+            "--case",
+            help="Run exactly one dataset case by case_id.",
+        ),
+    ) -> None:
+        _run_manual_eval(name, mode=mode, model=model, case_id=case_id)
+
+    command.__name__ = f"eval_{name}"
+    eval_app.command(name, help=f"Run the {name} eval manually.")(command)
+
+
+for _script_eval in _SCRIPT_EVALS:
+    _register_script_eval(_script_eval)
+
 
 @eval_app.command(
     "focus_state",
@@ -4062,8 +4154,8 @@ dev_app.add_typer(eval_app, name="eval")
     ),
 )
 def eval_focus_state(  # pragma: no cover — experimental eval surface (excluded from coverage gate)
-    mode: str = typer.Option(
-        "live",
+    mode: str | None = typer.Option(
+        None,
         "--mode",
         "-m",
         help=(
@@ -4081,6 +4173,11 @@ def eval_focus_state(  # pragma: no cover — experimental eval surface (exclude
         False,
         "--no-results",
         help="Skip writing results JSONL (default: write to evals/focus_state/results/).",
+    ),
+    case_id: str | None = typer.Option(
+        None,
+        "--case",
+        help="Run exactly one dataset case by case_id.",
     ),
 ) -> None:
     """Run capability-anchored eval against ``services/focus_state.py``.
@@ -4117,13 +4214,7 @@ def eval_focus_state(  # pragma: no cover — experimental eval surface (exclude
     )
     from openharness.services.focus_state import FOCUS_STATE_SYSTEM_PROMPT
 
-    if mode not in ("live", "record", "replay"):
-        typer.echo(
-            f"Invalid --mode={mode!r}; expected one of: live / record / replay",
-            err=True,
-        )
-        raise typer.Exit(code=1) from None
-    cassette_mode = cast("CassetteMode", mode)
+    cassette_mode = cast("CassetteMode", _require_eval_mode(mode))
 
     settings = _load_settings()
     client = _build_client(settings)
@@ -4174,6 +4265,7 @@ def eval_focus_state(  # pragma: no cover — experimental eval surface (exclude
             effective_model,
             cassette_root=cassette_root,
             cassette_mode=cassette_mode,
+            case_id=case_id,
         )
 
         for result in results:
@@ -4214,8 +4306,8 @@ def eval_focus_state(  # pragma: no cover — experimental eval surface (exclude
     help=("Run the memory write-decision eval — 6 cases, 5 scorers, version-stamped results."),
 )
 def eval_memory_decision(  # pragma: no cover — experimental eval surface (excluded from coverage gate)
-    mode: str = typer.Option(
-        "live",
+    mode: str | None = typer.Option(
+        None,
         "--mode",
         "-m",
         help=(
@@ -4233,6 +4325,11 @@ def eval_memory_decision(  # pragma: no cover — experimental eval surface (exc
         False,
         "--no-results",
         help="Skip writing results JSONL (default: write to evals/memory_decision/results/).",
+    ),
+    case_id: str | None = typer.Option(
+        None,
+        "--case",
+        help="Run exactly one dataset case by case_id.",
     ),
 ) -> None:
     """Run the memory_decision gating eval (Phase 16 T3).
@@ -4279,13 +4376,7 @@ def eval_memory_decision(  # pragma: no cover — experimental eval surface (exc
     )
     from openharness.eval.rubrics import CAPABILITY_RUBRICS
 
-    if mode not in ("live", "record", "replay"):
-        typer.echo(
-            f"Invalid --mode={mode!r}; expected one of: live / record / replay",
-            err=True,
-        )
-        raise typer.Exit(code=1) from None
-    cassette_mode = cast("CassetteMode", mode)
+    cassette_mode = cast("CassetteMode", _require_eval_mode(mode))
 
     settings = _load_settings()
     client = _build_client(settings)
@@ -4348,6 +4439,7 @@ def eval_memory_decision(  # pragma: no cover — experimental eval surface (exc
             effective_model,
             cassette_root=cassette_root,
             cassette_mode=cassette_mode,
+            case_id=case_id,
         )
 
         for r in results:

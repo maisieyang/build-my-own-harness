@@ -7,7 +7,7 @@ Mirrors spike_tool_choice_eval.
 
 Run::
 
-    uv run python scripts/spike_error_feedback_eval.py
+    OPENHARNESS_EVAL_MODE=live uv run python scripts/spike_error_feedback_eval.py
     # re-record cassettes:
     OPENHARNESS_EVAL_MODE=record uv run python scripts/spike_error_feedback_eval.py
     # replay from cassettes (no LLM cost):
@@ -17,12 +17,10 @@ Run::
 from __future__ import annotations
 
 import asyncio
-import os
 from collections import defaultdict
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
-from dotenv import dotenv_values
 from openai import AsyncOpenAI
 
 from openharness.api import OpenAICompatibleApiClient
@@ -33,31 +31,22 @@ from openharness.eval.error_feedback_scorers import (
     FollowupScorer,
     VerbatimRetryScorer,
 )
+from openharness.eval.manual import (
+    resolve_manual_case_id,
+    resolve_manual_cassette_mode,
+    resolve_manual_model,
+)
 
 if TYPE_CHECKING:
     from openharness.eval.cassette import CassetteMode
 
 
 def _resolve_cassette_mode() -> CassetteMode:
-    raw = os.environ.get("OPENHARNESS_EVAL_MODE", "live").lower().strip()
-    if raw not in ("live", "record", "replay"):
-        raise SystemExit(
-            f"Invalid OPENHARNESS_EVAL_MODE={raw!r}; expected one of live / record / replay"
-        )
-    return cast("CassetteMode", raw)
+    return resolve_manual_cassette_mode()
 
 
 def _resolve_replay_model(project_root: Path) -> str:
-    """Resolve replay cassette identity without loading API credentials."""
-    configured = os.environ.get("OPENHARNESS_MODEL")
-    if configured is None:
-        configured = dotenv_values(project_root / ".env").get("OPENHARNESS_MODEL")
-    model = configured.strip() if isinstance(configured, str) else ""
-    if not model:
-        raise SystemExit(
-            "OPENHARNESS_MODEL is required for replay; configure it in the project .env"
-        )
-    return model
+    return resolve_manual_model(project_root)
 
 
 def _print_case(result: ErrorFeedbackCaseResult) -> None:
@@ -121,6 +110,7 @@ async def main() -> None:
         model,
         cassette_root=cassette_root,
         cassette_mode=cassette_mode,
+        case_id=resolve_manual_case_id(),
     )
 
     for result in results:

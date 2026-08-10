@@ -22,6 +22,7 @@ from openharness.eval.cassette import (
     CassetteMode,
     CassetteStore,
 )
+from openharness.eval.selection import select_cases
 from openharness.protocols.content import TextBlock
 from openharness.protocols.messages import ConversationMessage
 from openharness.services.compact import full_compact
@@ -191,9 +192,10 @@ async def run_memory_compact_eval(
     *,
     cassette_root: Path | None = None,
     cassette_mode: CassetteMode = "live",
+    case_id: str | None = None,
 ) -> list[MemoryCompactCaseResult]:
     """End-to-end: dataset → per-sample compact (cassette-aware) → scorers."""
-    samples = load_memory_compact_dataset(dataset_path)
+    samples = select_cases(load_memory_compact_dataset(dataset_path), case_id)
     store = CassetteStore(cassette_root) if cassette_root is not None else None
     results: list[MemoryCompactCaseResult] = []
     for sample in samples:

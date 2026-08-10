@@ -63,6 +63,7 @@ from openharness.eval.cassette import (
     CassetteMode,
     CassetteStore,
 )
+from openharness.eval.selection import select_cases
 from openharness.protocols.content import TextBlock, ToolResultBlock, ToolUseBlock
 from openharness.protocols.messages import ConversationMessage
 from openharness.protocols.requests import ApiMessageRequest
@@ -685,6 +686,7 @@ async def run_memory_decision_eval(
     *,
     cassette_root: Path | None = None,
     cassette_mode: CassetteMode = "live",
+    case_id: str | None = None,
 ) -> list[MemoryDecisionCaseResult]:
     """End-to-end: load dataset → for each sample run LLM + all scorers.
 
@@ -693,7 +695,7 @@ async def run_memory_decision_eval(
     infer call. Scorers are duck-typed: each must have ``score(sample,
     output) -> Score`` and ``dim`` property.
     """
-    samples = load_memory_decision_dataset(dataset_path)
+    samples = select_cases(load_memory_decision_dataset(dataset_path), case_id)
     store: CassetteStore | None = (
         CassetteStore(cassette_root) if cassette_root is not None else None
     )

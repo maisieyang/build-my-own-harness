@@ -61,5 +61,5 @@ reference model 上产生了可观测改善。
 - 2026-08-10 当前 N=4 live/record 画像为 9、10、10、10 /11。
 - `cassettes/qwen-max/`、`results/qwen-max-*.txt` — 迁移前历史基线,
   不再作为当前 gate
-- 复跑:`OPENHARNESS_EVAL_MODE=replay uv run python scripts/spike_error_feedback_eval.py`
+- 复跑:`uv run oh dev eval error_feedback --mode replay`
   (模型从 `OPENHARNESS_MODEL` / 项目 `.env` 读取)

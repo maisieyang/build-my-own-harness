@@ -29,6 +29,7 @@ from openharness.eval.cassette import (
     CassetteMode,
     CassetteStore,
 )
+from openharness.eval.selection import select_cases
 from openharness.prompts.system import EnvironmentInfo, build_system_prompt
 from openharness.protocols.content import TextBlock, ToolUseBlock
 from openharness.protocols.messages import ConversationMessage
@@ -216,9 +217,10 @@ async def run_error_feedback_eval(
     *,
     cassette_root: Path | None = None,
     cassette_mode: CassetteMode = "live",
+    case_id: str | None = None,
 ) -> list[ErrorFeedbackCaseResult]:
     """End-to-end: dataset → per-sample infer (cassette-aware) → all scorers."""
-    samples = load_error_feedback_dataset(dataset_path)
+    samples = select_cases(load_error_feedback_dataset(dataset_path), case_id)
     store = CassetteStore(cassette_root) if cassette_root is not None else None
     results: list[ErrorFeedbackCaseResult] = []
     for sample in samples:

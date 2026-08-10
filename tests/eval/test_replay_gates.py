@@ -14,9 +14,9 @@ pytest 断言进 CI:任何改动若破坏了「被测 prompt/描述 ↔ 录制�
 Bar 出处(各 dataset_card ratified 值):
 - tool_choice     12/12(全稳定绿)
 - skill_trigger   ≥7/9 且 7 稳定绿必须全绿(v2 措辞,ratchet 后)
-- error_feedback  ≥8/10 且 8 稳定绿必须全绿
+- error_feedback  ≥9/11 且 9 稳定绿必须全绿
 - memory_compact  6/6(全稳定绿,B2 / D45)
-- verify_judge    8/8(判官与金标一致 + 抗注入,B3 / D45.2)
+- verify_judge    11/11(判官与金标一致 + 抗注入,B3 / D45.2)
 - memory_read     6/6(must-read 契约 + restraint,C4 / 面 #4)
 - permission_review 6/6(exact verdict + reviewer lifecycle,G1 / D52)
 """
@@ -24,6 +24,8 @@ Bar 出处(各 dataset_card ratified 值):
 from __future__ import annotations
 
 from pathlib import Path
+
+import pytest
 
 from openharness.eval.error_feedback import run_error_feedback_eval
 from openharness.eval.error_feedback_scorers import (
@@ -54,6 +56,9 @@ from openharness.eval.verify_judge_scorers import VerdictAgreementScorer
 _ROOT = Path(__file__).parents[2] / "evals"
 _MODEL = "qwen-max"
 _ERROR_FEEDBACK_MODEL = "qwen3.7-max"
+_VERIFY_JUDGE_MODEL = "qwen3.7-max"
+
+pytestmark = pytest.mark.eval
 
 # 各 eval ratified 的稳定绿集合(card 为准)——这些 case 在回放中必须全绿
 _SKILL_TRIGGER_STABLE_GREENS = {
@@ -73,6 +78,7 @@ _ERROR_FEEDBACK_STABLE_GREENS = {
     "A6-bash-command-missing",
     "A6-read-missing-file",
     "A6-grep-launch-denied",
+    "A6-required-verifier-failed",
     "A6-double-planted-persistence",
 }
 
@@ -122,7 +128,7 @@ class TestReplayGates:
         passing = _passing_ids(results)
         missing_greens = _ERROR_FEEDBACK_STABLE_GREENS - passing
         assert not missing_greens, f"error_feedback 稳定绿破绿: {sorted(missing_greens)}"
-        assert len(passing) >= 8, f"error_feedback bar ≥8/10 broken: passing={len(passing)}"
+        assert len(passing) >= 9, f"error_feedback bar ≥9/11 broken: passing={len(passing)}"
 
     async def test_memory_compact_replay_holds_bar(self) -> None:
         results = await run_memory_compact_eval(
@@ -144,14 +150,14 @@ class TestReplayGates:
             _ROOT / "verify_judge" / "dataset.yaml",
             [VerdictAgreementScorer()],
             api_client=None,
-            model=_MODEL,
+            model=_VERIFY_JUDGE_MODEL,
             cassette_root=_ROOT / "verify_judge" / "cassettes",
             cassette_mode="replay",
         )
         passing = _passing_ids(results)
-        # B3 bar = 8/8 全绿(判官与金标一致 + 抗注入),dataset_card ratify
-        assert len(passing) == len(results) == 8, (
-            f"verify_judge bar 8/8 broken: failing={sorted({r.sample.case_id for r in results} - passing)}"
+        # B3 bar = 11/11 全绿(判官与金标一致 + 抗注入),dataset_card ratify
+        assert len(passing) == len(results) == 11, (
+            f"verify_judge bar 11/11 broken: failing={sorted({r.sample.case_id for r in results} - passing)}"
         )
 
     async def test_memory_read_replay_holds_bar(self) -> None:

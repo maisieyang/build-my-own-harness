@@ -10,15 +10,13 @@ class (e.g., Stage 3 LLM-judge) = implement the Scorer Protocol in
 ``src/openharness/eval/scorers.py`` and append to the ``scorers`` list below.
 
 Run:
-    uv run python scripts/spike_focus_state_eval.py
+    OPENHARNESS_EVAL_MODE=live uv run python scripts/spike_focus_state_eval.py
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
-from typing import cast
 
 from openai import AsyncOpenAI
 
@@ -26,6 +24,7 @@ from openharness.api import OpenAICompatibleApiClient
 from openharness.config.settings import Settings
 from openharness.eval._printers import print_case, print_summary
 from openharness.eval.cassette import CassetteMode, CassetteStore
+from openharness.eval.manual import resolve_manual_case_id, resolve_manual_cassette_mode
 from openharness.eval.results import (
     RunMetadata,
     build_result_filename,
@@ -56,16 +55,12 @@ from openharness.services.focus_state import FOCUS_STATE_SYSTEM_PROMPT
 
 
 def _resolve_cassette_mode() -> CassetteMode:
-    """Read OPENHARNESS_EVAL_MODE env var. Default 'live'. Validate."""
-    raw = os.environ.get("OPENHARNESS_EVAL_MODE", "live").lower().strip()
-    if raw not in ("live", "record", "replay"):
-        raise SystemExit(
-            f"Invalid OPENHARNESS_EVAL_MODE={raw!r}; expected one of live / record / replay"
-        )
-    return cast("CassetteMode", raw)
+    """Require an explicit manual mode."""
+    return resolve_manual_cassette_mode()
 
 
 async def main() -> None:
+    cassette_mode = _resolve_cassette_mode()
     settings = Settings()  # type: ignore[call-arg]
     sdk = AsyncOpenAI(api_key=settings.api_key, base_url=settings.base_url)
     client = OpenAICompatibleApiClient(sdk=sdk)
@@ -76,7 +71,6 @@ async def main() -> None:
     dataset_path = project_root / "evals" / "focus_state" / "dataset.yaml"
     cassette_root = project_root / "evals" / "focus_state" / "cassettes"
     results_root = project_root / "evals" / "focus_state" / "results"
-    cassette_mode = _resolve_cassette_mode()
     cassette_store = CassetteStore(cassette_root)
 
     scorers = [
@@ -113,6 +107,7 @@ async def main() -> None:
         model,
         cassette_root=cassette_root,
         cassette_mode=cassette_mode,
+        case_id=resolve_manual_case_id(),
     )
 
     for result in results:

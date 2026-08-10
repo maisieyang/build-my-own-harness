@@ -23,6 +23,7 @@ from openharness.eval.cassette import (
     CassetteMode,
     CassetteStore,
 )
+from openharness.eval.selection import select_cases
 from openharness.prompts.system import EnvironmentInfo, build_system_prompt
 from openharness.protocols.content import TextBlock, ToolUseBlock
 from openharness.protocols.messages import ConversationMessage
@@ -242,9 +243,11 @@ async def run_memory_read_eval(
     *,
     cassette_root: Path | None = None,
     cassette_mode: CassetteMode = "live",
+    case_id: str | None = None,
 ) -> list[MemoryReadCaseResult]:
     """End-to-end: dataset → per-sample read decision (cassette-aware) → scorers."""
     samples, fixture = load_memory_read_dataset(dataset_path)
+    samples = select_cases(samples, case_id)
     store = CassetteStore(cassette_root) if cassette_root is not None else None
     results: list[MemoryReadCaseResult] = []
     for sample in samples:

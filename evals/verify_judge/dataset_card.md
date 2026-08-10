@@ -77,4 +77,4 @@ follow-up**(需自己的分类金标集),不在 B3 内硬凑。
 - 2026-08-10 当前 N=4 live/record 画像为 11、11、11、11 /11。
 - `cassettes/qwen-max/infer/`、`results/qwen-max-run{1..4}.txt` —
   迁移前 8 case 历史基线,不再作为当前 gate。
-- 复跑:`OPENHARNESS_EVAL_MODE=replay uv run python scripts/spike_verify_judge_eval.py`
+- 复跑:`uv run oh dev eval verify_judge --mode replay`

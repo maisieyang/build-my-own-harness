@@ -58,7 +58,7 @@ plan mode -- approve this plan?
   [3] no, discard plan mode (back to default)
 plan> 1
 
->>> /goal Implement the approved plan; run `uv run pytest -m 'not integration' -q`; stop after 10 turns
+>>> /goal Implement the approved plan; run `uv run pytest -m 'not integration and not eval' -q`; stop after 10 turns
 ```
 
 `/plan` removes mutation and delegation capabilities from the model-visible
@@ -370,7 +370,7 @@ Common ways to start the Agent while developing this repository:
 
 ```bash
 # Temporarily choose a model.
-uv run oh --model qwen-max
+uv run oh --model qwen3.7-max
 
 # Use the automated reviewer for exact permission requests.
 uv run oh --auto
@@ -385,8 +385,29 @@ uv run oh --sandbox --sandbox-backend seatbelt
 uv run oh --resume
 
 # Combine session options.
-uv run oh --model qwen-max --auto --sandbox
+uv run oh --model qwen3.7-max --auto --sandbox
 ```
+
+### How do I run evals? — Manual only
+
+Dataset evals never run in CI or in the default test suite. Every invocation
+must name `live`, `record`, or `replay` explicitly; a bare command fails closed.
+
+```bash
+# Discover the capability evals.
+uv run oh dev eval --help
+
+# Replay a committed cassette without an API call.
+uv run oh dev eval error_feedback --mode replay
+
+# Run one live diagnostic case.
+uv run oh dev eval error_feedback --mode live \
+  --case A6-grep-launch-denied
+```
+
+See the [evaluation handbook](./evals/README.md) for validation levels, mode
+semantics, model selection, recording policy, the capability catalog, and
+troubleshooting.
 
 ### How do I control a session? — REPL slash commands
 
@@ -445,13 +466,15 @@ All configuration uses the `OPENHARNESS_*` namespace; see
 ## Quality contract
 
 ```bash
-uv run pytest -m "not integration" -q
+uv run pytest -m "not integration and not eval" -q
 uv run mypy --strict src/
 uv run ruff check
 uv run ruff format --check
 ```
 
-- The CI/default gate requires no live model or external service.
+- The CI/default gate excludes integration tests and all dataset eval gates.
+- `uv run pytest -m eval -q --no-cov` runs committed cassette replay gates manually;
+  it makes no model call.
 - `uv run pytest -m integration` runs explicitly gated real-process or
   live-service checks and may require Node, Docker, gVisor, credentials, or
   network access depending on the selected test.
