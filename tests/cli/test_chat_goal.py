@@ -139,7 +139,7 @@ class TestGoalSetAndJudge:
         condition, transcript = judge_calls[0]
         assert condition == "tests pass"
         assert "[assistant turn 1]" in transcript
-        assert "goal met" in result.stdout
+        assert "goal met after 1 checked turn (0 continuations)" in result.stdout
         # kickoff 消息以 goal 框架进 history,不回显为用户输入.
         kickoff_text = "".join(
             b.text for m in messages[0] for b in m.content if isinstance(b, TextBlock)
@@ -288,7 +288,7 @@ class TestAutoContinueAndExplicitLoopLimit:
         assert len(contexts) == 27
         assert len(judge_calls) == 27
         assert "goal not met after" not in result.stdout
-        assert "goal met after 26 auto-turn(s)" in result.stdout
+        assert "goal met after 27 checked turns (26 continuations)" in result.stdout
         assert "/None" not in result.stdout
 
     def test_default_session_checkpoints_and_returns_control(

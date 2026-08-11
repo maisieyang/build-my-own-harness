@@ -346,7 +346,7 @@ def test_park_decision_and_explicit_resume_are_durable_and_skip_judge_until_resu
     assert "use /resume" in result.stdout
     assert run_calls == 3
     assert judge_calls == 2
-    assert "goal met after 1 auto-turn" in result.stdout
+    assert "goal met after 2 checked turns (1 continuation)" in result.stdout
     assert persisted == [decision, decision]
 
 

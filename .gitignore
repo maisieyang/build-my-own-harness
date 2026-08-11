@@ -48,6 +48,7 @@ Thumbs.db
 # Project-specific
 .env
 .env.local
+.dogfood/
 *.log
 # Observability run artifacts (`oh ask --log-format json 2> trace.jsonl`)
 *.jsonl

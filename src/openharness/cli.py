@@ -2379,9 +2379,12 @@ async def _run_chat(
                         0,
                         _goal_estimate_tokens(history, model=model) - goal.tokens_at_start,
                     )
+                    checked_turn_label = "turn" if goal.iterations == 1 else "turns"
+                    continuation_label = "continuation" if goal_auto_turns == 1 else "continuations"
                     _extinguish_goal("met", goal.condition)
                     typer.echo(
-                        f"\a(goal met after {goal_auto_turns} auto-turn(s), "
+                        f"\a(goal met after {goal.iterations} checked {checked_turn_label} "
+                        f"({goal_auto_turns} {continuation_label}), "
                         f"~{tokens_delta} tokens, {elapsed:.0f}s — {result.reason})"
                     )
                     goal = None
