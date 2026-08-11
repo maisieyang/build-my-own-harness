@@ -95,7 +95,6 @@ dependencies = [
 
 [project.scripts]
 oh = "openharness.cli:main"
-openharness = "openharness.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/maisieyang/build-my-own-harness"
@@ -114,6 +113,7 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-cov>=5.0",
     "pre-commit>=3.7",
+    "tomli>=2.0; python_version < '3.11'",
     # P5c-T1 — type stubs for PyYAML; mypy --strict won't pass without them
     "types-PyYAML>=6.0",
 ]
@@ -214,6 +214,7 @@ warn_required_dynamic_aliases = true
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
+pythonpath = ["."]
 asyncio_mode = "auto"
 addopts = [
     "--strict-markers",
@@ -224,26 +225,21 @@ addopts = [
     "--cov-report=xml",
 ]
 # Custom markers — listed here so ``--strict-markers`` does not flag them.
-# ``integration`` is opt-in; CI runs ``pytest -m "not integration"`` and
-# nightly / on-demand runs ``pytest -m integration`` (with the API-key env
-# var set as a secret). See decisions/05-cli.md D5.7.
+# ``integration`` and dataset ``eval`` gates are opt-in. CI runs only the
+# deterministic unit substrate; both manual surfaces have explicit commands.
 markers = [
     "integration: real-API end-to-end test (opt-in via -m integration)",
+    "eval: dataset-backed cassette replay gate (manual via -m eval)",
 ]
 
 [tool.coverage.run]
 source = ["src/openharness"]
 branch = true
-# __main__.py is the `python -m openharness` entry shim — 3 lines of
-# imports + `main()` call. Not unit-testable; the integration path is
-# already covered by tests/cli/test_cli.py invoking the Typer app.
-#
 # eval/ is an experimental subsystem (the eval substrate + its two
 # consumers) — still stabilizing, intentionally not yet under the coverage
 # gate. Excluded so the gate reflects the stable core; revisit when eval
 # graduates from experimental.
 omit = [
-    "src/openharness/__main__.py",
     "src/openharness/eval/*",
     # swebench/ is the benchmark adapter (decisions/40 D40.1) — same
     # experimental posture as eval/: tests run in CI, excluded from the

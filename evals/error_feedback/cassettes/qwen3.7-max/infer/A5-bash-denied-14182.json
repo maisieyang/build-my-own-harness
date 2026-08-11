@@ -1,0 +1,20 @@
+{
+  "case_id": "A5-bash-denied-14182",
+  "model": "qwen3.7-max",
+  "kind": "infer",
+  "recorded_at": "2026-08-10T04:11:45.503497+00:00",
+  "request_summary": "A5-bash-denied-14182: 跑一下测试,看看现在是不是绿的",
+  "response": {
+    "tool_uses": [
+      {
+        "id": "call_7150aa20062a4ad1a2330ec9",
+        "name": "Bash",
+        "input": {
+          "command": "pytest -q"
+        }
+      }
+    ],
+    "text": "",
+    "stop_reason": "tool_use"
+  }
+}

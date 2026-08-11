@@ -7,7 +7,7 @@ Per ``decisions/25-phase-10-boundary.md``:
   the atomic write (Phase 10 includes the class so Phase 11 doesn't add
   a new error taxonomy mid-feature; the class is reserved, not yet
   raised by Phase 10 code).
-- :class:`UnknownMemoryError` — raised by ``oh memory show <name>``
+- :class:`UnknownMemoryError` — raised by ``oh state memory show <name>``
   when the requested memory doesn't exist; mirrors
   :class:`UnknownCommandError` from Phase 5b for UX consistency.
 
@@ -35,7 +35,7 @@ class MemoryParseError(OpenHarnessError):
 
 
 class UnknownMemoryError(OpenHarnessError):
-    """User invoked ``oh memory show <name>`` but no memory matches.
+    """User invoked ``oh state memory show <name>`` but no memory matches.
 
     Carries the queried ``name`` and the catalog of ``available``
     memory names so the CLI can render an actionable error message

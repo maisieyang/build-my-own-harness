@@ -48,6 +48,7 @@ if TYPE_CHECKING:
 _RUNTIME_SYSCTL_READ_RULES = (
     ("sysctl-name", "hw.activecpu"),
     ("sysctl-name", "hw.logicalcpu"),
+    ("sysctl-name", "hw.machine"),
     ("sysctl-name", "hw.memsize"),
     ("sysctl-name", "hw.ncpu"),
     ("sysctl-name", "hw.pagesize_compat"),
@@ -58,11 +59,13 @@ _RUNTIME_SYSCTL_READ_RULES = (
     ("sysctl-name", "kern.osversion"),
     ("sysctl-name", "kern.secure_kernel"),
     ("sysctl-name", "kern.usrstack64"),
+    ("sysctl-name", "kern.version"),
     ("sysctl-name-prefix", "hw.optional."),
     ("sysctl-name-prefix", "kern.proc.pid."),
     ("sysctl-name-prefix", "sysctl.proc_cputype"),
 )
 _RUNTIME_WRITABLE_PATHS = (Path("/dev/null"),)
+_RUNTIME_MACH_LOOKUP_SERVICES = ("com.apple.SystemConfiguration.configd",)
 
 
 def _seatbelt_string(value: str) -> str:
@@ -164,6 +167,10 @@ def compile_seatbelt_profile(
     lines.extend(
         f'(allow sysctl-read ({selector} "{_seatbelt_string(value)}"))'
         for selector, value in _RUNTIME_SYSCTL_READ_RULES
+    )
+    lines.extend(
+        f'(allow mach-lookup (global-name "{_seatbelt_string(service)}"))'
+        for service in _RUNTIME_MACH_LOOKUP_SERVICES
     )
     readable_rules = tuple(
         rule
@@ -288,7 +295,9 @@ async def _collect_process_output(
     return output, False
 
 
-def build_sandbox_environment(profile: RuntimePermissionProfile) -> dict[str, str]:
+def build_sandbox_environment(
+    profile: RuntimePermissionProfile, *, workspace: Path | None = None
+) -> dict[str, str]:
     policy = profile.environment
     if policy.inherit is EnvironmentInheritance.ALL:
         environment = dict(os.environ)
@@ -308,6 +317,8 @@ def build_sandbox_environment(profile: RuntimePermissionProfile) -> dict[str, st
             if any(fnmatch.fnmatchcase(name, pattern) for pattern in _CREDENTIAL_PATTERNS):
                 environment.pop(name, None)
     environment.update(policy.set_values)
+    if workspace is not None and "UV_CACHE_DIR" not in policy.set_values:
+        environment["UV_CACHE_DIR"] = str(workspace / ".cache" / "uv")
     for name in _PROXY_ENVIRONMENT_NAMES:
         environment.pop(name, None)
     return environment
@@ -576,7 +587,7 @@ class SeatbeltBackend:
                 cwd=self._cwd,
                 network_proxy_port=(network_proxy.port if network_proxy is not None else None),
             )
-            environment = build_sandbox_environment(profile)
+            environment = build_sandbox_environment(profile, workspace=self._cwd)
             probe = await asyncio.create_subprocess_exec(
                 self._executable,
                 "-p",
@@ -621,6 +632,7 @@ class SeatbeltBackend:
                 else f"runtime_sysctl_read_prefix:{value}"
                 for selector, value in _RUNTIME_SYSCTL_READ_RULES
             ),
+            *(f"runtime_mach_lookup:{service}" for service in _RUNTIME_MACH_LOOKUP_SERVICES),
         ]
         if profile.process.timeout_seconds is not None:
             process_rules.append(f"timeout<={profile.process.timeout_seconds}s")
@@ -660,7 +672,10 @@ class SeatbeltBackend:
                 *runtime_write_rules,
             ),
             network_rules=network_rules,
-            environment_rules=(profile.environment.inherit.value,),
+            environment_rules=(
+                profile.environment.inherit.value,
+                f"runtime_set:UV_CACHE_DIR={environment['UV_CACHE_DIR']}",
+            ),
             process_rules=tuple(process_rules),
             unsupported_features=("external_tools",),
         )

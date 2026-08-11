@@ -13,6 +13,7 @@ from openharness.eval.cassette import (
     CassetteMode,
     CassetteStore,
 )
+from openharness.eval.selection import select_cases
 from openharness.execution import BoundaryViolation
 from openharness.permissions import (
     ExternalToolPolicy,
@@ -223,8 +224,9 @@ async def run_permission_review_eval(
     *,
     cassette_root: Path | None = None,
     cassette_mode: CassetteMode = "live",
+    case_id: str | None = None,
 ) -> list[PermissionReviewCaseResult]:
-    samples = load_permission_review_dataset(dataset_path)
+    samples = select_cases(load_permission_review_dataset(dataset_path), case_id)
     store = CassetteStore(cassette_root) if cassette_root is not None else None
     results: list[PermissionReviewCaseResult] = []
     for sample in samples:

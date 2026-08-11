@@ -92,7 +92,7 @@ class TestLoopIntegrationHappyPath:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "run that command"])
+        result = runner.invoke(cli_module.headless_app, ["run", "run that command"])
 
         assert result.exit_code == 0, result.stderr
         # The [Bash] tool prefix lines from _stream_render.
@@ -119,7 +119,7 @@ class TestLoopIntegrationDenyList:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "delete everything"])
+        result = runner.invoke(cli_module.headless_app, ["run", "delete everything"])
 
         assert result.exit_code == 0, result.stderr
         # Loop emitted ToolExecutionCompleted with is_error=True; render
@@ -149,8 +149,8 @@ class TestLoopIntegrationDryRun:
 
         runner = CliRunner()
         result = runner.invoke(
-            cli_module.app,
-            ["ask", "plan it", "--dry-run"],
+            cli_module.headless_app,
+            ["run", "plan it", "--dry-run"],
         )
 
         assert result.exit_code == 0, result.stderr

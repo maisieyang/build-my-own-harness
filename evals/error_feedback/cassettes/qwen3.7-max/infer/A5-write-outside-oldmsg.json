@@ -1,0 +1,21 @@
+{
+  "case_id": "A5-write-outside-oldmsg",
+  "model": "qwen3.7-max",
+  "kind": "infer",
+  "recorded_at": "2026-08-10T04:11:47.747724+00:00",
+  "request_summary": "A5-write-outside-oldmsg: 把结果写到 /tmp/report.txt",
+  "response": {
+    "tool_uses": [
+      {
+        "id": "call_e38fb74bcad14ee59ac8d81c",
+        "name": "Write",
+        "input": {
+          "path": "/tmp/report.txt",
+          "content": "result"
+        }
+      }
+    ],
+    "text": "",
+    "stop_reason": "tool_use"
+  }
+}

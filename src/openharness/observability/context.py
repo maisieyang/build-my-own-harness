@@ -5,7 +5,7 @@ IDs so an event stream can be reconstructed into a tree:
 
 ::
 
-    trace_id  (= run_id)    — one per ``oh ask`` invocation
+    trace_id  (= run_id)    — one per non-interactive invocation
     span_id   (= turn_id)   — one per LLM turn (1, 2, 3...)
     nested    (= tool_use_id) — one per tool dispatch (lives on ``ToolUseBlock``,
                                 passed at the log call site, not bound here)
@@ -109,7 +109,7 @@ def bind_turn(turn_id: int) -> Iterator[int]:
 def bind_agent_depth(agent_depth: int) -> Iterator[int]:
     """Bind ``agent_depth`` for the duration of a ``run_query`` invocation.
 
-    P6-T4(D16.7):top-level ``oh ask`` runs at depth 0;each
+    P6-T4(D16.7):top-level runs start at depth 0;each
     :class:`SpawnAgent` invocation enters a fresh ``run_query`` with
     ``context.agent_depth = parent.agent_depth + 1``. Every log event
     emitted inside that ``run_query``(``turn_start`` / ``tool_dispatch``

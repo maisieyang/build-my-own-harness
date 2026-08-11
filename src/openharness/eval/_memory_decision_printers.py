@@ -1,5 +1,5 @@
 """Stdout printers for the memory_decision eval — shared between
-the spike script and the ``oh eval memory_decision`` CLI subcommand
+the spike script and the ``oh dev eval memory_decision`` CLI subcommand
 so dev and prod entries produce byte-identical output.
 
 Parallel to :mod:`openharness.eval._printers` (focus_state's

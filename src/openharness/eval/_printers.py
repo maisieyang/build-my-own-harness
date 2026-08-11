@@ -1,6 +1,6 @@
 """Stdout formatting helpers — shared between spike and CLI.
 
-Extracted to single source of truth so spike script and ``oh eval``
+Extracted to single source of truth so spike script and ``oh dev eval``
 subcommand emit identical output. Underscore-prefixed since formatting
 policy is a consumer concern, not substrate API.
 

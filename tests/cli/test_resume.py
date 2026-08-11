@@ -133,7 +133,7 @@ class TestAskResumeHappyPath:
         monkeypatch.setattr(cli_module, "_build_client", lambda _s: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "--resume", "follow-up"])
+        result = runner.invoke(cli_module.headless_app, ["run", "--resume", "follow-up"])
         assert result.exit_code == 0, result.stderr
         # First (and only) LLM request includes prior history + new prompt
         assert stub.last_request is not None
@@ -165,7 +165,7 @@ class TestAskResumeHappyPath:
         monkeypatch.setattr(cli_module, "_build_client", lambda _s: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "fresh"])
+        result = runner.invoke(cli_module.headless_app, ["run", "fresh"])
         assert result.exit_code == 0, result.stderr
         assert stub.last_request is not None
         # Only the fresh prompt — no prior history
@@ -179,7 +179,7 @@ class TestAskResumeWithoutSnapshot:
         monkeypatch.setattr(cli_module, "_build_client", lambda _s: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "--resume", "fresh"])
+        result = runner.invoke(cli_module.headless_app, ["run", "--resume", "fresh"])
         # Exit 0 (warn, don't error)
         assert result.exit_code == 0
         assert "starting fresh" in result.stderr.lower()
@@ -199,7 +199,7 @@ class TestAskResumeWithoutSnapshot:
         monkeypatch.setattr(cli_module, "_build_client", lambda _s: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "--resume-id", "ffff", "follow-up"])
+        result = runner.invoke(cli_module.headless_app, ["run", "--resume-id", "ffff", "follow-up"])
         assert result.exit_code == 1
         assert "ffff" in result.stderr or "id=" in result.stderr.lower()
 
@@ -217,7 +217,7 @@ class TestAskResumeStaleness:
         monkeypatch.setattr(cli_module, "_build_client", lambda _s: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "--resume", "follow-up"])
+        result = runner.invoke(cli_module.headless_app, ["run", "--resume", "follow-up"])
         assert result.exit_code == 1
         assert "cwd" in result.stderr.lower()
 
@@ -232,7 +232,7 @@ class TestAskResumeStaleness:
         monkeypatch.setattr(cli_module, "_build_client", lambda _s: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "--resume", "follow-up"])
+        result = runner.invoke(cli_module.headless_app, ["run", "--resume", "follow-up"])
         assert result.exit_code == 1
         assert "version" in result.stderr.lower()
 
@@ -255,7 +255,7 @@ class TestAskResumeIdImpliesResume:
 
         runner = CliRunner()
         # No --resume flag, just --resume-id
-        result = runner.invoke(cli_module.app, ["ask", "--resume-id", "abc", "follow-up"])
+        result = runner.invoke(cli_module.headless_app, ["run", "--resume-id", "abc", "follow-up"])
         assert result.exit_code == 0, result.stderr
         assert stub.last_request is not None
         # Prior + new prompt
@@ -334,7 +334,7 @@ class TestHelpMentionsResume:
         # force_terminal (CI sets GITHUB_ACTIONS) Rich styles the help text.
         monkeypatch.setenv("COLUMNS", "200")
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "--help"])
+        result = runner.invoke(cli_module.headless_app, ["run", "--help"])
         assert result.exit_code == 0
         plain = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", result.stdout)
         assert "--resume" in plain

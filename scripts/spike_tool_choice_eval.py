@@ -9,7 +9,7 @@ models are information, not gate signals.
 
 Run::
 
-    uv run python scripts/spike_tool_choice_eval.py
+    OPENHARNESS_EVAL_MODE=live uv run python scripts/spike_tool_choice_eval.py
     # re-record cassettes:
     OPENHARNESS_EVAL_MODE=record uv run python scripts/spike_tool_choice_eval.py
     # replay from cassettes (no LLM cost):
@@ -19,15 +19,19 @@ Run::
 from __future__ import annotations
 
 import asyncio
-import os
 from collections import defaultdict
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from openai import AsyncOpenAI
 
 from openharness.api import OpenAICompatibleApiClient
 from openharness.config.settings import Settings
+from openharness.eval.manual import (
+    resolve_manual_case_id,
+    resolve_manual_cassette_mode,
+    resolve_manual_model,
+)
 from openharness.eval.tool_choice import ToolChoiceCaseResult, run_tool_choice_eval
 from openharness.eval.tool_choice_scorers import (
     ExpectedToolScorer,
@@ -38,16 +42,9 @@ from openharness.eval.tool_choice_scorers import (
 if TYPE_CHECKING:
     from openharness.eval.cassette import CassetteMode
 
-_REFERENCE_MODEL = "qwen-max"
-
 
 def _resolve_cassette_mode() -> CassetteMode:
-    raw = os.environ.get("OPENHARNESS_EVAL_MODE", "live").lower().strip()
-    if raw not in ("live", "record", "replay"):
-        raise SystemExit(
-            f"Invalid OPENHARNESS_EVAL_MODE={raw!r}; expected one of live / record / replay"
-        )
-    return cast("CassetteMode", raw)
+    return resolve_manual_cassette_mode()
 
 
 def _print_case(result: ToolChoiceCaseResult) -> None:
@@ -77,24 +74,17 @@ def _print_summary(results: list[ToolChoiceCaseResult]) -> None:
 
 
 async def main() -> None:
+    project_root = Path(__file__).resolve().parent.parent
     cassette_mode = _resolve_cassette_mode()
     if cassette_mode == "replay":
-        # F8 fix (dogfood Day 1, learnings/dogfood-day1): replay never
-        # calls the API — it must not depend on Settings (credentials)
-        # nor on the user's configured model (a project .env pointing at
-        # another model made the documented replay command fail with
-        # CassetteMissingError). Default to the reference model so the
-        # committed cassettes are found; an explicit OPENHARNESS_MODEL
-        # env var still overrides for info runs on other recordings.
         client = None
-        model = os.environ.get("OPENHARNESS_MODEL", _REFERENCE_MODEL)
+        model = resolve_manual_model(project_root)
     else:
         settings = Settings()  # type: ignore[call-arg]
         sdk = AsyncOpenAI(api_key=settings.api_key, base_url=settings.base_url)
         client = OpenAICompatibleApiClient(sdk=sdk, extra_body=settings.extra_body)
         model = settings.model
 
-    project_root = Path(__file__).resolve().parent.parent
     dataset_path = project_root / "evals" / "tool_choice" / "dataset.yaml"
     cassette_root = project_root / "evals" / "tool_choice" / "cassettes"
 
@@ -102,11 +92,6 @@ async def main() -> None:
 
     print("# tool_choice eval — D41 P0 (decision surface #2)")
     print(f"# model:         {model}")
-    if model != _REFERENCE_MODEL:
-        print(
-            f"# NOTE: reference policy is {_REFERENCE_MODEL} (D41.5) — "
-            "this run is information, not a gate signal"
-        )
     print(f"# dataset:       {dataset_path.relative_to(project_root)}")
     print(f"# cassette_mode: {cassette_mode}")
     print()
@@ -118,6 +103,7 @@ async def main() -> None:
         model,
         cassette_root=cassette_root,
         cassette_mode=cassette_mode,
+        case_id=resolve_manual_case_id(),
     )
 
     for result in results:

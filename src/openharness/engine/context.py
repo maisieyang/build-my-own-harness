@@ -78,7 +78,7 @@ class QueryContext:
     # Human-authored or human-derived authorization scope. Subagents inherit
     # this immutable envelope; their delegated user-role prompt cannot widen it.
     authorization_context: tuple[str, ...] = ()
-    # P6-T1 (D16.5): sub-agent recursion tracking. Top-level ``oh ask``
+    # P6-T1 (D16.5): sub-agent recursion tracking. Top-level runs
     # constructs with default ``agent_depth=0``; ``SpawnAgent.execute``
     # builds the sub-context via ``dataclasses.replace(parent,
     # agent_depth=parent.agent_depth + 1)``. ``max_agent_depth`` is the
@@ -204,7 +204,7 @@ class QueryContext:
         ``snapshot``; RUNTIME-STATE (what the harness provides this
         invocation) is passed by the caller. The caller's job is to
         build a fresh registry / hooks / execution_env tree as if
-        starting a new ``oh ask`` — then pass it in. We don't try to
+        starting a new run — then pass it in. We don't try to
         re-validate snapshot fields against the current registries
         (a tool removed since the snapshot is fine — the LLM may
         still reference it; engine's standard "tool not found"

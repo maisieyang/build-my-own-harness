@@ -1,6 +1,6 @@
 """MCP (Model Context Protocol) client subsystem — Phase 5.
 
-Federated tool registry: ``oh ask`` can consume tools from external
+Federated tool registry: the non-interactive runtime can consume tools from external
 MCP servers in addition to the 5 built-in tools (Read / Write / Edit /
 Bash / Grep). Per ``decisions/11`` boundary:
 

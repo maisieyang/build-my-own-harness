@@ -159,7 +159,7 @@ class TestCliWithFilesystemServer:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
         assert result.exit_code == 0, result.stderr
 
         assert stub.last_request is not None

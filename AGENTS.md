@@ -23,7 +23,7 @@
 ## 验证
 
 ```bash
-uv run pytest -m "not integration" -q
+uv run pytest -m "not integration and not eval" -q
 uv run mypy --strict src/
 uv run ruff check
 uv run ruff format --check

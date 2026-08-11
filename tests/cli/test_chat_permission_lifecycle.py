@@ -71,6 +71,172 @@ def _inputs(monkeypatch: pytest.MonkeyPatch, values: list[str]) -> None:
     monkeypatch.setattr("builtins.input", _input)
 
 
+def _park_web_request(
+    context: QueryContext,
+    messages: list[ConversationMessage],
+    *,
+    tool_use_id: str,
+) -> PermissionParkedEvent:
+    assert context.permission_runtime is not None
+    request = PermissionDeltaRequest.create(
+        tool_use_id=tool_use_id,
+        tool_name="WebFetch",
+        final_arguments={"url": "https://example.com"},
+        profile=context.permission_runtime.profile,
+        boundary=context.permission_runtime.boundary,
+        delta=PermissionDelta.external_tool("web"),
+        crossing=BoundaryViolation(
+            dimension="external.web",
+            requested="WebFetch",
+            evidence="outside local sandbox",
+        ),
+        data_sources=("final tool arguments",),
+        data_destinations=("web",),
+    )
+    context.permission_runtime.park(request, reason="owner decision needed")
+    return PermissionParkedEvent(
+        request_id=request.request_id,
+        tool_use_id=request.tool_use_id,
+        tool_name=request.tool_name,
+        delta_kind=request.delta.kind.value,
+        delta_value=request.delta.value,
+        profile_fingerprint=request.profile_fingerprint,
+        boundary_fingerprint=request.boundary_fingerprint,
+        backend=request.backend,
+        backend_fingerprint=request.backend_fingerprint,
+        final_arguments=request.final_arguments,
+        data_sources=request.data_sources,
+        data_destinations=request.data_destinations,
+        boundary_facts=request.boundary_facts,
+        reason="owner decision needed",
+        messages=messages,
+    )
+
+
+def test_parked_request_blocks_new_agent_and_goal_turns(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("OPENHARNESS_SANDBOX_ENABLED", "true")
+    monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _Client())
+    session = _Session()
+
+    async def _open(**kwargs: object) -> tuple[object, _Session]:
+        del kwargs
+        return session.profile, session
+
+    monkeypatch.setattr(cli_module, "_open_sandbox_session", _open)
+    run_calls = 0
+
+    async def _run(
+        initial_messages: list[ConversationMessage], context: QueryContext
+    ) -> AsyncIterator[ApiStreamEvent]:
+        nonlocal run_calls
+        run_calls += 1
+        if run_calls > 1:
+            raise AssertionError("a parked permission must block every new Agent turn")
+        assistant = ConversationMessage(role="assistant", content=[TextBlock(text="partial")])
+        messages = [*initial_messages, assistant]
+        yield _park_web_request(context, messages, tool_use_id="tool-blocking")
+
+    monkeypatch.setattr(cli_module, "run_query", _run)
+    _inputs(monkeypatch, ["trigger permission", "start another turn", "/goal finish", "/exit"])
+
+    result = CliRunner().invoke(cli_module.app, ["chat"])
+
+    assert result.exit_code == 0
+    assert run_calls == 1
+    assert result.stdout.count("permission request pending") == 2
+    assert "goal set:" not in result.stdout
+
+
+def test_plan_permission_park_suppresses_approval_menu(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("OPENHARNESS_SANDBOX_ENABLED", "true")
+    monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _Client())
+    session = _Session()
+
+    async def _open(**kwargs: object) -> tuple[object, _Session]:
+        del kwargs
+        return session.profile, session
+
+    monkeypatch.setattr(cli_module, "_open_sandbox_session", _open)
+    run_calls = 0
+
+    async def _run(
+        initial_messages: list[ConversationMessage], context: QueryContext
+    ) -> AsyncIterator[ApiStreamEvent]:
+        nonlocal run_calls
+        run_calls += 1
+        assistant = ConversationMessage(role="assistant", content=[TextBlock(text="partial plan")])
+        messages = [*initial_messages, assistant]
+        yield _park_web_request(context, messages, tool_use_id="plan-blocking")
+
+    monkeypatch.setattr(cli_module, "run_query", _run)
+    _inputs(monkeypatch, ["/plan inspect the repository", "/exit"])
+
+    result = CliRunner().invoke(cli_module.app, ["chat"])
+
+    assert result.exit_code == 0
+    assert run_calls == 1
+    assert "plan paused on permission" in result.stdout
+    assert "approve this plan?" not in result.stdout
+
+
+def test_plan_permission_decision_resumes_planning_before_approval(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("OPENHARNESS_SANDBOX_ENABLED", "true")
+    monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _Client())
+    session = _Session()
+
+    async def _open(**kwargs: object) -> tuple[object, _Session]:
+        del kwargs
+        return session.profile, session
+
+    monkeypatch.setattr(cli_module, "_open_sandbox_session", _open)
+    run_calls = 0
+
+    async def _run(
+        initial_messages: list[ConversationMessage], context: QueryContext
+    ) -> AsyncIterator[ApiStreamEvent]:
+        nonlocal run_calls
+        run_calls += 1
+        assistant = ConversationMessage(
+            role="assistant", content=[TextBlock(text=f"plan turn {run_calls}")]
+        )
+        messages = [*initial_messages, assistant]
+        if run_calls == 1:
+            yield _park_web_request(context, messages, tool_use_id="plan-resume")
+            return
+        yield ApiMessageCompleteEvent(
+            message=assistant,
+            usage=UsageSnapshot(input_tokens=1, output_tokens=1),
+            stop_reason="end_turn",
+        )
+        yield ConversationCompleteEvent(messages=messages)
+
+    monkeypatch.setattr(cli_module, "run_query", _run)
+    _inputs(monkeypatch, ["/plan inspect", "/deny", "/resume", "3", "/exit"])
+
+    result = CliRunner().invoke(cli_module.app, ["chat"])
+
+    assert result.exit_code == 0
+    assert run_calls == 2
+    assert "plan paused on permission" in result.stdout
+    assert result.stdout.count("approve this plan?") == 1
+    assert "plan discarded" in result.stdout
+
+
 @pytest.mark.parametrize(
     ("command", "decision"),
     [

@@ -1,0 +1,12 @@
+{
+  "case_id": "A5-write-outside-newmsg",
+  "model": "qwen3.7-max",
+  "kind": "infer",
+  "recorded_at": "2026-08-10T04:11:46.852790+00:00",
+  "request_summary": "A5-write-outside-newmsg: 把结果写到 /tmp/report.txt",
+  "response": {
+    "tool_uses": [],
+    "text": "写入 `/tmp/report.txt` 被权限系统拒绝，因为该路径在项目根目录之外。\n\n如需允许写入，请设置环境变量：\n```\nOPENHARNESS_PERMISSIONS__ALLOW=\"Write(/tmp/**)\"\n```\n\n或者，我可以将报告写到当前工作目录下的文件（例如 `./report.txt`）。请问您希望怎么处理？",
+    "stop_reason": "end_turn"
+  }
+}

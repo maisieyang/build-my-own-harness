@@ -1,0 +1,21 @@
+{
+  "case_id": "A5-reroute-into-cwd",
+  "model": "qwen3.7-max",
+  "kind": "infer",
+  "recorded_at": "2026-08-10T04:11:49.376809+00:00",
+  "request_summary": "A5-reroute-into-cwd: 生成一个 fizzbuzz.py 并确认能跑",
+  "response": {
+    "tool_uses": [
+      {
+        "id": "call_a31e8aa1149d4e61a84e447b",
+        "name": "Write",
+        "input": {
+          "path": "fizzbuzz.py",
+          "content": "for i in range(1, 101):\n    if i % 15 == 0:\n        print(\"FizzBuzz\")\n    elif i % 3 == 0:\n        print(\"Fizz\")\n    elif i % 5 == 0:\n        print(\"Buzz\")\n    else:\n        print(i)\n"
+        }
+      }
+    ],
+    "text": "",
+    "stop_reason": "tool_use"
+  }
+}

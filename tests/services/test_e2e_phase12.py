@@ -270,7 +270,7 @@ class TestChatResumeE2E:
 
         # First invocation: write snapshot via engine
         runner = CliRunner()
-        result1 = runner.invoke(cli_module.app, ["ask", "initial question"])
+        result1 = runner.invoke(cli_module.headless_app, ["run", "initial question"])
         assert result1.exit_code == 0, result1.stderr
 
         # Verify snapshot exists in conftest's cwd_dir
@@ -314,14 +314,14 @@ class TestChatResumeE2E:
 
         runner = CliRunner()
         # Turn 1: writes snapshot
-        result1 = runner.invoke(cli_module.app, ["ask", "first question"])
+        result1 = runner.invoke(cli_module.headless_app, ["run", "first question"])
         assert result1.exit_code == 0
         assert len(stub.requests) == 1
 
         # Turn 2: --resume should load snapshot + append "follow-up"
         stub2 = _RecordingEndTurnStub(response="second answer")
         monkeypatch.setattr(cli_module, "_build_client", lambda _s: stub2)
-        result2 = runner.invoke(cli_module.app, ["ask", "--resume", "follow-up"])
+        result2 = runner.invoke(cli_module.headless_app, ["run", "--resume", "follow-up"])
         assert result2.exit_code == 0, result2.stderr
         # Second LLM call's request includes turn 1 history + new prompt
         assert len(stub2.requests) == 1

@@ -17,7 +17,7 @@ runner = CliRunner()
 
 class TestBenchWiring:
     def test_bench_swebench_help_lists_commands(self) -> None:
-        result = runner.invoke(app, ["bench", "swebench", "--help"])
+        result = runner.invoke(app, ["dev", "bench", "swebench", "--help"])
 
         assert result.exit_code == 0
         assert "fetch" in result.output
@@ -26,7 +26,7 @@ class TestBenchWiring:
     def test_run_without_dataset_points_to_fetch(self, tmp_path: object) -> None:
         result = runner.invoke(
             app,
-            ["bench", "swebench", "run", "--dataset-file", "does/not/exist.jsonl"],
+            ["dev", "bench", "swebench", "run", "--dataset-file", "does/not/exist.jsonl"],
         )
 
         assert result.exit_code == 1

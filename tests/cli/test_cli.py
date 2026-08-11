@@ -141,7 +141,7 @@ class TestHappyPath:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "say hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "say hi"])
 
         assert result.exit_code == 0, result.stderr
         assert "hi from stub" in result.stdout
@@ -155,7 +155,7 @@ class TestHappyPath:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
 
         assert result.exit_code == 0
         assert stub.last_request is not None
@@ -168,7 +168,7 @@ class TestHappyPath:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
 
         assert result.exit_code == 0
         assert stub.last_request is not None
@@ -181,7 +181,7 @@ class TestHappyPath:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi", "--model", "qwen-turbo"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi", "--model", "qwen-turbo"])
 
         assert result.exit_code == 0
         assert stub.last_request is not None
@@ -193,7 +193,7 @@ class TestHappyPath:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi", "--max-tokens", "256"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi", "--max-tokens", "256"])
 
         assert result.exit_code == 0
         assert stub.last_request is not None
@@ -211,7 +211,7 @@ class TestErrorUX:
     def test_missing_api_key_prints_config_hint(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Autouse fixture clears env; do not re-populate.
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
 
         assert result.exit_code == 1
         assert "Configuration error" in result.stderr
@@ -225,7 +225,7 @@ class TestErrorUX:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
 
         assert result.exit_code == 1
         assert "Authentication failed" in result.stderr
@@ -238,7 +238,7 @@ class TestErrorUX:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
 
         assert result.exit_code == 1
         assert "Rate-limited" in result.stderr
@@ -250,7 +250,7 @@ class TestErrorUX:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
 
         assert result.exit_code == 1
         assert "Request failed" in result.stderr
@@ -271,7 +271,7 @@ class TestErrorUX:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
 
         assert result.exit_code == 1
         # Prefix that signals the category — distinct from generic "Error:".
@@ -293,14 +293,14 @@ class TestArgumentValidation:
 
     def test_missing_prompt_exits_nonzero(self) -> None:
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask"])
+        result = runner.invoke(cli_module.headless_app, ["run"])
         # Click signals "missing argument" with exit code 2.
         assert result.exit_code == 2
 
     def test_invalid_max_tokens_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_minimum_env(monkeypatch)
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi", "--max-tokens", "0"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi", "--max-tokens", "0"])
         # min=1 → Click reports "Invalid value".
         assert result.exit_code == 2
 
@@ -352,7 +352,7 @@ class TestPermissionFlags:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
 
         assert result.exit_code == 0
         assert captured.context is not None
@@ -369,7 +369,7 @@ class TestPermissionFlags:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi", "--dry-run"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi", "--dry-run"])
 
         assert result.exit_code == 0
         assert captured.context.execution_posture is ExecutionPosture.DRY_RUN  # type: ignore[attr-defined]
@@ -384,7 +384,7 @@ class TestPermissionFlags:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi", "--auto"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi", "--auto"])
 
         assert result.exit_code == 0
         assert captured.context.reviewer_posture is ReviewerPosture.AUTO  # type: ignore[attr-defined]
@@ -399,7 +399,7 @@ class TestPermissionFlags:
         captured = _CapturedContext()
         _patch_run_query_capture(monkeypatch, captured)
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi", "--auto", "--dry-run"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi", "--auto", "--dry-run"])
 
         assert result.exit_code == 0
         assert captured.context.reviewer_posture is ReviewerPosture.AUTO  # type: ignore[attr-defined]
@@ -447,7 +447,7 @@ class TestLoggingFlags:
         _patch_configure_logging(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
 
         assert result.exit_code == 0
         assert captured.level == "WARNING"
@@ -464,7 +464,7 @@ class TestLoggingFlags:
         _patch_configure_logging(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
 
         assert result.exit_code == 0
         assert captured.level == "INFO"
@@ -479,7 +479,7 @@ class TestLoggingFlags:
         _patch_configure_logging(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi", "--log-level", "DEBUG"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi", "--log-level", "DEBUG"])
 
         assert result.exit_code == 0
         assert captured.level == "DEBUG"
@@ -492,7 +492,7 @@ class TestLoggingFlags:
         _patch_configure_logging(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi", "--log-format", "json"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi", "--log-format", "json"])
 
         assert result.exit_code == 0
         assert captured.format == "json"
@@ -501,7 +501,7 @@ class TestLoggingFlags:
         _set_minimum_env(monkeypatch)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi", "--log-level", "TRACE"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi", "--log-level", "TRACE"])
 
         # Typer's Literal handling rejects unknown choices with exit 2
         # (Click's standard "Usage error" code).
@@ -511,7 +511,7 @@ class TestLoggingFlags:
         _set_minimum_env(monkeypatch)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi", "--log-format", "xml"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi", "--log-format", "xml"])
 
         assert result.exit_code == 2
 
@@ -538,7 +538,7 @@ class TestCompactionFlags:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
         assert result.exit_code == 0
 
         # Default: TruncateToolResultHook registered on PostToolUse.
@@ -557,7 +557,7 @@ class TestCompactionFlags:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi", "--no-auto-truncate"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi", "--no-auto-truncate"])
         assert result.exit_code == 0
 
         ctx = captured.context
@@ -577,7 +577,7 @@ class TestCompactionFlags:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
         assert result.exit_code == 0
 
         ctx = captured.context
@@ -593,7 +593,7 @@ class TestCompactionFlags:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi", "--tool-result-cap", "0"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi", "--tool-result-cap", "0"])
         assert result.exit_code == 0
 
         ctx = captured.context
@@ -610,7 +610,7 @@ class TestCompactionFlags:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi", "--tool-result-cap", "500"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi", "--tool-result-cap", "500"])
         assert result.exit_code == 0
 
         ctx = captured.context
@@ -632,7 +632,7 @@ class TestCompactionFlags:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
         assert result.exit_code == 0
 
         ctx = captured.context
@@ -652,7 +652,7 @@ class TestCompactionFlags:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi", "--tool-result-cap", "777"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi", "--tool-result-cap", "777"])
         assert result.exit_code == 0
 
         ctx = captured.context
@@ -665,7 +665,7 @@ class TestCompactionFlags:
         _set_minimum_env(monkeypatch)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi", "--tool-result-cap", "-5"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi", "--tool-result-cap", "-5"])
         assert result.exit_code == 2
 
 
@@ -721,7 +721,7 @@ class TestSkillsBootstrap:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
         assert result.exit_code == 0
 
         ctx = captured.context
@@ -753,7 +753,7 @@ class TestSkillsBootstrap:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
         assert result.exit_code == 0
 
         ctx = captured.context
@@ -783,7 +783,7 @@ class TestSkillsBootstrap:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
         assert result.exit_code == 0
 
         ctx = captured.context
@@ -812,7 +812,7 @@ class TestSkillsBootstrap:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
         assert result.exit_code == 0
 
         ctx = captured.context
@@ -839,7 +839,7 @@ class TestSkillsBootstrap:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi", "--no-skills"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi", "--no-skills"])
         assert result.exit_code == 0
 
         ctx = captured.context
@@ -882,7 +882,7 @@ class TestSlashCommands:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "regular prompt"])
+        result = runner.invoke(cli_module.headless_app, ["run", "regular prompt"])
         assert result.exit_code == 0
         # LLM saw the original prompt verbatim — no expansion attempted.
         assert stub.last_request is not None
@@ -904,7 +904,7 @@ class TestSlashCommands:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "/review last 3 commits"])
+        result = runner.invoke(cli_module.headless_app, ["run", "/review last 3 commits"])
         assert result.exit_code == 0
 
         # The LLM's user message is the resolved body — slash + cmd name gone.
@@ -930,7 +930,7 @@ class TestSlashCommands:
 
         # No LLM stub needed — error fires before any LLM call.
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "/nonexistent some args"])
+        result = runner.invoke(cli_module.headless_app, ["run", "/nonexistent some args"])
         assert result.exit_code == 1
         # Error message names the bad command + lists the available one.
         assert "Unknown command" in result.stderr
@@ -954,7 +954,7 @@ class TestSlashCommands:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "/review args", "--no-commands"])
+        result = runner.invoke(cli_module.headless_app, ["run", "/review args", "--no-commands"])
         assert result.exit_code == 0
         # LLM sees the slash prefix verbatim — no expansion attempted.
         assert stub.last_request is not None
@@ -984,7 +984,7 @@ class TestSlashCommands:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "/shared X"])
+        result = runner.invoke(cli_module.headless_app, ["run", "/shared X"])
         assert result.exit_code == 0
         assert stub.last_request is not None
         user_text = stub.last_request.messages[0].content[0].text  # type: ignore[union-attr]
@@ -1007,7 +1007,7 @@ class TestSlashCommands:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "/plan"])
+        result = runner.invoke(cli_module.headless_app, ["run", "/plan"])
         assert result.exit_code == 0
         assert stub.last_request is not None
         user_text = stub.last_request.messages[0].content[0].text  # type: ignore[union-attr]
@@ -1035,7 +1035,7 @@ class TestSubAgentBootstrap:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
         assert result.exit_code == 0
         assert stub.last_request is not None
         tool_names = {t.name for t in (stub.last_request.tools or [])}
@@ -1054,7 +1054,7 @@ class TestSubAgentBootstrap:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
         assert result.exit_code == 0
 
         ctx = captured.context
@@ -1072,7 +1072,7 @@ class TestSubAgentBootstrap:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
         assert result.exit_code == 0
 
         ctx = captured.context
@@ -1090,7 +1090,7 @@ class TestSubAgentBootstrap:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
         assert result.exit_code == 0
         ctx = captured.context
         assert isinstance(ctx, QueryContext)
@@ -1173,7 +1173,7 @@ class TestSandboxFlags:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
         assert result.exit_code == 0
         ctx = captured.context
         assert isinstance(ctx.execution_env, HostExecution)  # type: ignore[attr-defined]
@@ -1194,7 +1194,7 @@ class TestSandboxFlags:
         )
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi", "--sandbox"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi", "--sandbox"])
         assert result.exit_code == 0
 
         assert "cwd" in captured_init
@@ -1226,9 +1226,9 @@ class TestSandboxFlags:
 
         runner = CliRunner()
         result = runner.invoke(
-            cli_module.app,
+            cli_module.headless_app,
             [
-                "ask",
+                "run",
                 "hi",
                 "--sandbox",
                 "--sandbox-backend",
@@ -1258,7 +1258,7 @@ class TestSandboxFlags:
         session = self._patch_backend(monkeypatch, "SeatbeltBackend", {}, [])
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
         assert result.exit_code == 0
         ctx = captured.context
         from openharness.execution import OneShotOverlaySession
@@ -1278,8 +1278,8 @@ class TestSandboxFlags:
 
         runner = CliRunner()
         result = runner.invoke(
-            cli_module.app,
-            ["ask", "hi", "--sandbox", "--sandbox-backend", "docker-command"],
+            cli_module.headless_app,
+            ["run", "hi", "--sandbox", "--sandbox-backend", "docker-command"],
         )
         assert result.exit_code == 0
         assert captured_init["runtime"] == "runc"
@@ -1297,9 +1297,9 @@ class TestSandboxFlags:
 
         runner = CliRunner()
         result = runner.invoke(
-            cli_module.app,
+            cli_module.headless_app,
             [
-                "ask",
+                "run",
                 "hi",
                 "--sandbox",
                 "--sandbox-backend",
@@ -1323,7 +1323,7 @@ class TestSandboxFlags:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "hi", "--no-sandbox"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi", "--no-sandbox"])
         assert result.exit_code == 0
         ctx = captured.context
         # The override removes the verified boundary. HostExecution remains an
@@ -1388,7 +1388,7 @@ class TestBundles:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "/plain args"])
+        result = runner.invoke(cli_module.headless_app, ["run", "/plain args"])
         assert result.exit_code == 0
         # No bundle → registry is the base ToolRegistry, NOT a WhitelistRegistry.
         from openharness.bundles import WhitelistRegistry
@@ -1432,7 +1432,7 @@ class TestBundles:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "/review the diff"])
+        result = runner.invoke(cli_module.headless_app, ["run", "/review the diff"])
         assert result.exit_code == 0, result.stderr
         ctx = captured.context
         # Layer 1: the bundle replaces the harness-owned base prompt while the
@@ -1464,7 +1464,7 @@ class TestBundles:
         )
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "/review args"])
+        result = runner.invoke(cli_module.headless_app, ["run", "/review args"])
         assert result.exit_code == 1
         assert "Unknown bundle" in result.stderr
         assert "nonexistent" in result.stderr
@@ -1496,7 +1496,7 @@ class TestBundles:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "/ro x"])
+        result = runner.invoke(cli_module.headless_app, ["run", "/ro x"])
         assert result.exit_code == 0
         ctx = captured.context
         # System prompt was rebuilt — catalog should mention Read but NOT Write.
@@ -1536,7 +1536,7 @@ class TestPluginHookDiscovery:
         )
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "/review args"])
+        result = runner.invoke(cli_module.headless_app, ["run", "/review args"])
         assert result.exit_code == 1
         assert "Unknown hook" in result.stderr
         assert "slack_notify" in result.stderr
@@ -1578,7 +1578,9 @@ class TestPluginHookDiscovery:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "/review args", "--enable-plugin-hooks"])
+        result = runner.invoke(
+            cli_module.headless_app, ["run", "/review args", "--enable-plugin-hooks"]
+        )
         assert result.exit_code == 0, result.stderr
         ctx = captured.context
         post = ctx.hook_registry.get("PostToolUse")  # type: ignore[attr-defined]
@@ -1621,7 +1623,7 @@ class TestPluginHookDiscovery:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "/x args"])
+        result = runner.invoke(cli_module.headless_app, ["run", "/x args"])
         assert result.exit_code == 0
         ctx = captured.context
         assert fake_plugin in ctx.hook_registry.get("PreToolUse")  # type: ignore[attr-defined]
@@ -1653,7 +1655,9 @@ class TestPluginHookDiscovery:
         monkeypatch.setattr(cli_module, "discover_plugin_hooks", _should_not_call)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "/x args", "--no-enable-plugin-hooks"])
+        result = runner.invoke(
+            cli_module.headless_app, ["run", "/x args", "--no-enable-plugin-hooks"]
+        )
         # discovery off → slack_notify unknown → exit 1.
         assert result.exit_code == 1
         assert "Unknown hook" in result.stderr
@@ -1706,7 +1710,7 @@ class TestFilesystemHookPlugins:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "/x args", "--enable-plugin-hooks"])
+        result = runner.invoke(cli_module.headless_app, ["run", "/x args", "--enable-plugin-hooks"])
         assert result.exit_code == 0, result.stderr
         ctx = captured.context
         post = ctx.hook_registry.get("PostToolUse")  # type: ignore[attr-defined]
@@ -1766,7 +1770,7 @@ class TestFilesystemHookPlugins:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "/x args", "--enable-plugin-hooks"])
+        result = runner.invoke(cli_module.headless_app, ["run", "/x args", "--enable-plugin-hooks"])
         assert result.exit_code == 0
         ctx = captured.context
         # Entry-point version (PostToolUse) wins, filesystem (PreToolUse)
@@ -1822,7 +1826,7 @@ class TestFilesystemHookPlugins:
 
         runner = CliRunner()
         # Default flag off — bundle refs unknown hook → exit 1.
-        result = runner.invoke(cli_module.app, ["ask", "/x args"])
+        result = runner.invoke(cli_module.headless_app, ["run", "/x args"])
         assert result.exit_code == 1
         assert "Unknown hook" in result.stderr
 
@@ -1847,7 +1851,7 @@ class TestPrintMode:
         stub = _RecordingStubClient(_hello_world_events("must not run"))
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
-        result = CliRunner().invoke(cli_module.app, ["ask", "-p", "go"])
+        result = CliRunner().invoke(cli_module.headless_app, ["run", "-p", "go"])
 
         assert result.exit_code == 1
         assert "requires a verified sandbox boundary" in result.stderr
@@ -1859,7 +1863,7 @@ class TestPrintMode:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "-p", "--dry-run", "say hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "-p", "--dry-run", "say hi"])
 
         assert result.exit_code == 0, result.stderr
         assert "hi from stub" in result.stdout
@@ -1873,8 +1877,8 @@ class TestPrintMode:
 
         runner = CliRunner()
         result = runner.invoke(
-            cli_module.app,
-            ["ask", "--print", "--dry-run", "--output-format", "text", "say hi"],
+            cli_module.headless_app,
+            ["run", "--print", "--dry-run", "--output-format", "text", "say hi"],
         )
 
         assert result.exit_code == 0, result.stderr
@@ -1889,7 +1893,7 @@ class TestPrintMode:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "-p", "--dry-run", "go"])
+        result = runner.invoke(cli_module.headless_app, ["run", "-p", "--dry-run", "go"])
 
         assert result.exit_code == 0, result.stderr
 
@@ -1904,7 +1908,7 @@ class TestPrintMode:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "-p", "go"])
+        result = runner.invoke(cli_module.headless_app, ["run", "-p", "go"])
 
         assert result.exit_code != 0
 
@@ -1920,8 +1924,8 @@ class TestPrintMode:
 
         runner = CliRunner()
         result = runner.invoke(
-            cli_module.app,
-            ["ask", "-p", "--dry-run", "--output-format", "json", "go"],
+            cli_module.headless_app,
+            ["run", "-p", "--dry-run", "--output-format", "json", "go"],
         )
 
         assert result.exit_code == 0, result.stderr
@@ -1945,8 +1949,8 @@ class TestPrintMode:
 
         runner = CliRunner()
         result = runner.invoke(
-            cli_module.app,
-            ["ask", "-p", "--dry-run", "--output-format", "json", "go"],
+            cli_module.headless_app,
+            ["run", "-p", "--dry-run", "--output-format", "json", "go"],
         )
 
         assert result.exit_code != 0
@@ -1964,8 +1968,8 @@ class TestPrintMode:
 
         runner = CliRunner()
         result = runner.invoke(
-            cli_module.app,
-            ["ask", "-p", "--dry-run", "--output-format", "stream-json", "go"],
+            cli_module.headless_app,
+            ["run", "-p", "--dry-run", "--output-format", "stream-json", "go"],
         )
 
         assert result.exit_code == 0, result.stderr
@@ -1982,7 +1986,7 @@ class TestPrintMode:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "--output-format", "json", "go"])
+        result = runner.invoke(cli_module.headless_app, ["run", "--output-format", "json", "go"])
 
         assert result.exit_code == 2
         assert "only applies in headless print mode" in result.stderr
@@ -2001,7 +2005,7 @@ class TestPrintMode:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "-p", "go"])
+        result = runner.invoke(cli_module.headless_app, ["run", "-p", "go"])
 
         assert result.exit_code == 0, result.stderr
         assert captured.context.reviewer_posture is ReviewerPosture.MANUAL  # type: ignore[attr-defined]
@@ -2017,7 +2021,7 @@ class TestPrintMode:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "-p", "--auto", "go"])
+        result = runner.invoke(cli_module.headless_app, ["run", "-p", "--auto", "go"])
 
         assert result.exit_code == 0, result.stderr
         assert captured.context.reviewer_posture is ReviewerPosture.AUTO  # type: ignore[attr-defined]
@@ -2032,7 +2036,7 @@ class TestPrintMode:
         _patch_run_query_capture(monkeypatch, captured)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "-p", "go"])
+        result = runner.invoke(cli_module.headless_app, ["run", "-p", "go"])
 
         assert result.exit_code == 0, result.stderr
         assert isinstance(  # type: ignore[attr-defined]
@@ -2050,6 +2054,6 @@ class TestPrintMode:
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "-p", "go"])
+        result = runner.invoke(cli_module.headless_app, ["run", "-p", "go"])
 
         assert result.exit_code != 0

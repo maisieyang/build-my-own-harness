@@ -108,13 +108,13 @@ class TestAskCliFlag:
         captured = _CapturedContext()
         _patch_capture(monkeypatch, captured)
 
-        result = runner.invoke(cli_module.app, ["ask", "hi", "--max-turns", "42"])
+        result = runner.invoke(cli_module.headless_app, ["run", "hi", "--max-turns", "42"])
 
         assert result.exit_code == 0
         assert captured.context.max_turns == 42  # type: ignore[attr-defined]
 
     def test_help_documents_the_flag(self) -> None:
-        result = runner.invoke(cli_module.app, ["ask", "--help"])
+        result = runner.invoke(cli_module.headless_app, ["run", "--help"])
 
         assert result.exit_code == 0
         assert "--max-turns" in unstyle(result.output)

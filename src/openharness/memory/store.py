@@ -43,7 +43,7 @@ class MemoryStore(Protocol):
 
     - :meth:`discover` runs at bootstrap and caches its result for the
       lifetime of the store instance. Catalog stays frozen for the
-      duration of an ``oh ask`` invocation (no hot reload in Phase 10).
+      duration of a non-interactive invocation (no hot reload in Phase 10).
     - :meth:`get` is called per relevance-injection cycle (P10-T3) —
       sync because it's an in-memory dict lookup after the first
       discover.
@@ -63,7 +63,7 @@ class MemoryStore(Protocol):
     def get(self, name: str) -> Memory | None:
         """Look up a memory by name. ``None`` if not found.
 
-        ``oh memory show <name>`` (P10-T5) calls this; missing name
+        ``oh state memory show <name>`` calls this; missing name
         becomes :class:`UnknownMemoryError` at the CLI layer.
         """
         ...  # pragma: no cover - Protocol method body

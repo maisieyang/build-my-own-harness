@@ -1,0 +1,11 @@
+{
+  "case_id": "VJ11-self-selected-universal",
+  "model": "qwen3.7-max",
+  "kind": "infer",
+  "recorded_at": "2026-08-10T04:12:21.647616+00:00",
+  "request_summary": "VJ11-self-selected-universal: gold=fail",
+  "response": {
+    "passed": false,
+    "feedback": "The condition requires all boundary cases to pass, but the transcript only shows a self-selected finite sample of 16 examples without an authoritative exhaustive verifier or defined boundary set, which is insufficient per the evidence rules."
+  }
+}

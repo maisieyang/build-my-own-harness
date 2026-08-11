@@ -68,8 +68,8 @@ def test_isolate_requires_headless_json(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
     runner = CliRunner()
 
-    no_print = runner.invoke(cli_module.app, ["ask", "--isolate", "go"])
-    text_output = runner.invoke(cli_module.app, ["ask", "-p", "--isolate", "go"])
+    no_print = runner.invoke(cli_module.headless_app, ["run", "--isolate", "go"])
+    text_output = runner.invoke(cli_module.headless_app, ["run", "-p", "--isolate", "go"])
 
     assert no_print.exit_code == 2
     assert "--isolate" in no_print.stderr
@@ -83,8 +83,8 @@ def test_plain_json_run_has_no_run_metadata(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
     result = CliRunner().invoke(
-        cli_module.app,
-        ["ask", "-p", "--dry-run", "--output-format", "json", "go"],
+        cli_module.headless_app,
+        ["run", "-p", "--dry-run", "--output-format", "json", "go"],
     )
 
     assert result.exit_code == 0, result.stderr
@@ -100,8 +100,8 @@ def test_isolate_populates_worktree_metadata(
     monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
 
     result = CliRunner().invoke(
-        cli_module.app,
-        ["ask", "-p", "--dry-run", "--isolate", "--output-format", "json", "go"],
+        cli_module.headless_app,
+        ["run", "-p", "--dry-run", "--isolate", "--output-format", "json", "go"],
     )
 
     assert result.exit_code == 0, result.stderr

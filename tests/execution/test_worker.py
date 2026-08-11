@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import subprocess
-from io import BytesIO
+from io import BytesIO, StringIO
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
@@ -103,6 +104,26 @@ def test_edit_uses_request_bound_atomic_temp_path(tmp_path: Path) -> None:
     assert not temp.exists()
 
 
+def test_atomic_write_removes_temporary_file_when_replace_fails(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    target = tmp_path / "edit.txt"
+    target.write_text("old")
+    temp = tmp_path / ".edit.txt.request.tmp"
+
+    def fail_rename(source: Path, destination: Path) -> None:
+        del source, destination
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(worker.os, "rename", fail_rename)
+
+    with pytest.raises(OSError, match="replace failed"):
+        worker._atomic_write(target, "new", temp_path=temp)
+
+    assert target.read_text() == "old"
+    assert not temp.exists()
+
+
 @pytest.mark.parametrize(
     ("returncode", "stdout", "stderr", "expected"),
     [
@@ -154,6 +175,35 @@ def test_process_output_is_drained_but_memory_is_bounded() -> None:
     assert process.stdout.read() == b""
 
 
+def test_process_without_stdout_is_an_explicit_failure() -> None:
+    process = MagicMock()
+    process.stdout = None
+
+    with pytest.raises(subprocess.SubprocessError, match="no output pipe"):
+        worker._collect_bounded_output(process, max_bytes=4)
+
+
+def test_search_reports_byte_truncation(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    process = MagicMock()
+    process.stdout = BytesIO(b"a:1:needle\n")
+    process.wait.return_value = 0
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(worker, "_MAX_SEARCH_BYTES", 4)
+
+    result = worker.run(
+        {
+            "kind": "search",
+            "path": str(tmp_path),
+            "pattern": "needle",
+            "line_cap": 10,
+        }
+    )
+
+    assert result["is_error"] is False
+    assert "output truncated at 4 bytes" in str(result["output"])
+    assert result["metadata"]["byte_truncated"] is True
+
+
 def test_unknown_operation_and_os_error_are_payload_errors(
     tmp_path: Path, monkeypatch: MonkeyPatch
 ) -> None:
@@ -175,7 +225,6 @@ def test_unknown_operation_and_os_error_are_payload_errors(
     ("kind", "dimension"),
     [
         ("read", "filesystem.read"),
-        ("search", "filesystem.search"),
         ("write", "filesystem.write"),
         ("edit", "filesystem.write"),
     ],
@@ -202,3 +251,174 @@ def test_permission_error_is_a_typed_boundary_violation(
             "hard_deny": False,
         }
     }
+
+
+def test_search_launcher_permission_error_falls_back_to_in_process_search(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    target = tmp_path / "tests" / "test_water.py"
+    target.parent.mkdir()
+    target.write_text("def test_trap():\n    pass\n", encoding="utf-8")
+
+    def fail_launch(command: list[str], **kwargs: object) -> MagicMock:
+        del command, kwargs
+        raise PermissionError("operation not permitted")
+
+    monkeypatch.setattr(subprocess, "Popen", fail_launch)
+    result = worker.run(
+        {
+            "kind": "search",
+            "path": str(tmp_path),
+            "pattern": "trap",
+            "glob": "**/test*.py",
+            "line_cap": 10,
+        }
+    )
+
+    assert result["is_error"] is False
+    assert "test_water.py:1:def test_trap():" in str(result["output"])
+    assert result["metadata"] == {
+        "match_count": 1,
+        "byte_truncated": False,
+        "search_engine": "python-fallback",
+    }
+
+
+def test_search_fallback_preserves_hidden_case_and_line_cap(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    visible = tmp_path / "visible.py"
+    hidden = tmp_path / ".hidden.py"
+    visible.write_text("Needle\nneedle\n", encoding="utf-8")
+    hidden.write_text("needle\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        subprocess,
+        "Popen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("denied")),
+    )
+
+    result = worker.run(
+        {
+            "kind": "search",
+            "path": str(tmp_path),
+            "pattern": "needle",
+            "ignore_case": True,
+            "hidden": False,
+            "line_cap": 1,
+        }
+    )
+
+    assert result["is_error"] is False
+    assert "visible.py:1:Needle" in str(result["output"])
+    assert ".hidden.py" not in str(result["output"])
+    assert "truncated to 1 lines; total matches 2" in str(result["output"])
+
+
+def test_search_fallback_reports_invalid_regex(tmp_path: Path) -> None:
+    result = worker._search_with_python(
+        {
+            "path": str(tmp_path),
+            "pattern": "[",
+            "line_cap": 10,
+        }
+    )
+
+    assert result["is_error"] is True
+    assert "not a valid regular expression" in str(result["output"])
+
+
+def test_search_fallback_skips_binary_and_reports_no_matches(tmp_path: Path) -> None:
+    (tmp_path / "binary.bin").write_bytes(b"needle\0binary")
+    (tmp_path / "plain.txt").write_text("haystack\n", encoding="utf-8")
+
+    result = worker._search_with_python(
+        {
+            "path": str(tmp_path),
+            "pattern": "needle",
+            "line_cap": 10,
+        }
+    )
+
+    assert result["output"] == "(no matches)"
+    assert result["metadata"] == {
+        "match_count": 0,
+        "byte_truncated": False,
+        "search_engine": "python-fallback",
+    }
+
+
+def test_search_fallback_applies_nonmatching_glob(tmp_path: Path) -> None:
+    (tmp_path / "plain.txt").write_text("needle\n", encoding="utf-8")
+
+    result = worker._search_with_python(
+        {
+            "path": str(tmp_path),
+            "pattern": "needle",
+            "glob": "*.py",
+            "line_cap": 10,
+        }
+    )
+
+    assert result["output"] == "(no matches)"
+
+
+def test_search_fallback_reports_byte_truncation(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    target = tmp_path / "plain.txt"
+    target.write_text("needle\n", encoding="utf-8")
+    monkeypatch.setattr(worker, "_MAX_SEARCH_BYTES", 1)
+
+    result = worker._search_with_python(
+        {
+            "path": str(target),
+            "pattern": "needle",
+            "line_cap": 10,
+        }
+    )
+
+    assert result["metadata"] == {
+        "match_count": 1,
+        "byte_truncated": True,
+        "search_engine": "python-fallback",
+    }
+    assert "output truncated at 1 bytes" in str(result["output"])
+
+
+def test_search_file_iterator_respects_hidden_single_file(tmp_path: Path) -> None:
+    hidden = tmp_path / ".hidden.py"
+    hidden.write_text("needle\n", encoding="utf-8")
+
+    assert worker._iter_search_files(hidden, include_hidden=False) == []
+    assert worker._iter_search_files(hidden, include_hidden=True) == [hidden]
+
+
+def test_glob_matching_supports_direct_recursive_and_miss() -> None:
+    assert worker._glob_matches("test_water.py", "test*.py") is True
+    assert worker._glob_matches("tests/test_water.py", "**/test*.py") is True
+    assert worker._glob_matches("water.txt", "**/test*.py") is False
+
+
+def test_bounded_output_handles_chunks_after_capacity(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    process = MagicMock()
+    process.stdout = BytesIO(b"abcd")
+    monkeypatch.setattr(worker, "_STREAM_CHUNK_BYTES", 2)
+
+    output, truncated = worker._collect_bounded_output(process, max_bytes=1)
+
+    assert output == b"a"
+    assert truncated is True
+
+
+def test_main_translates_json_between_standard_streams(monkeypatch: MonkeyPatch) -> None:
+    stdin = SimpleNamespace(buffer=BytesIO(b'{"kind":"magic"}'))
+    stdout = StringIO()
+    monkeypatch.setattr(worker.sys, "stdin", stdin)
+    monkeypatch.setattr(worker.sys, "stdout", stdout)
+
+    worker.main()
+
+    assert stdout.getvalue() == (
+        '{"output":"unknown worker operation: magic","is_error":true,"metadata":{}}'
+    )

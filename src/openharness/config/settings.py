@@ -298,7 +298,7 @@ class SnapshotSettings(BaseModel):
             "~1-2s per turn when enabled. Failure-isolated: any "
             "exception / timeout / parse failure falls back to None "
             "placeholder. CLI: ``--llm-focus-state`` / "
-            "``--no-llm-focus-state`` on ask + chat."
+            "``--no-llm-focus-state`` on chat."
         ),
     )
     focus_state_model: str | None = Field(
@@ -317,7 +317,7 @@ class WebSettings(BaseModel):
     """Tunables for the Phase 14 web tools (D29.4).
 
     Web tools (:class:`WebSearch` + :class:`WebFetch`) are opt-in via
-    ``--enable-web`` on ``oh ask`` / ``oh chat`` *or* via
+    ``--enable-web`` on ``oh`` or via
     ``OPENHARNESS_WEB__ENABLED=true``. When both signals are off, the
     tools are not registered and the default system prompt picks up
     the anti-substitution paragraph (D29.6).
@@ -601,7 +601,7 @@ class Settings(BaseSettings):
         ),
     )
 
-    # P6-T1 (D16.5): sub-agent depth bound. Top-level ``oh ask`` runs at
+    # P6-T1 (D16.5): sub-agent depth bound. Top-level runs start at
     # ``agent_depth=0``; each ``SpawnAgent`` invocation bumps the
     # sub-agent's ``QueryContext.agent_depth`` by 1, and ``SpawnAgent.execute``
     # refuses when ``parent.agent_depth + 1 > parent.max_agent_depth``.
@@ -614,7 +614,7 @@ class Settings(BaseSettings):
         ge=0,
         description=(
             "Maximum sub-agent recursion depth (Phase 6 / D16.5). Top-level "
-            "``oh ask`` runs at depth 0; default 3 supports supervisor → "
+            "the non-interactive runtime runs at depth 0; default 3 supports supervisor → "
             "research → leaf chains. ``0`` disables ``SpawnAgent`` "
             "invocations entirely (depth check refuses any spawn). Env var: "
             "OPENHARNESS_MAX_AGENT_DEPTH."
@@ -730,7 +730,7 @@ class Settings(BaseSettings):
         description=(
             "Enable discovery + loading of plugins from "
             "``~/.openharness/plugins/<name>/manifest.yaml`` (P9 / "
-            "decisions/24). When false (default), ``oh plugins list`` "
+            "decisions/24). When false (default), ``oh inspect plugins list`` "
             "still works (read-only introspection) but plugin "
             "components are NOT registered into the running registry. "
             "Env var: OPENHARNESS_ENABLE_PLUGINS. Overridden by the "

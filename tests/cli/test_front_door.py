@@ -1,19 +1,12 @@
-"""D43 正门收尾 — 根命令位置 prompt / 根命令 -p / 旗面瘦身(hidden)/
-Ctrl+D 双按。Helpers mirror test_compact_repl.py(仓库惯例:每文件自带
-小 helper,不跨测试文件 import)。"""
+"""The public front door has one agent-starting shape: bare ``oh``."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from click import unstyle
 from typer.testing import CliRunner
 
 import openharness.cli as cli_module
-from openharness.protocols.content import TextBlock
-from openharness.protocols.messages import ConversationMessage
-from openharness.protocols.stream_events import ApiMessageCompleteEvent
-from openharness.protocols.usage import UsageSnapshot
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -22,6 +15,11 @@ if TYPE_CHECKING:
 
     from openharness.protocols.requests import ApiMessageRequest
     from openharness.protocols.stream_events import ApiStreamEvent
+
+from openharness.protocols.content import TextBlock
+from openharness.protocols.messages import ConversationMessage
+from openharness.protocols.stream_events import ApiMessageCompleteEvent
+from openharness.protocols.usage import UsageSnapshot
 
 runner = CliRunner()
 
@@ -44,16 +42,13 @@ class _StubClient:
 def _capture_first_messages(
     monkeypatch: pytest.MonkeyPatch,
 ) -> list[list[ConversationMessage]]:
-    """Patch run_query, record initial_messages of every invocation."""
     seen: list[list[ConversationMessage]] = []
 
     async def _fake_run_query(
         initial_messages: list[ConversationMessage],
         context: object,
     ) -> AsyncIterator[ApiStreamEvent]:
-        # snapshot, not reference — the chat REPL mutates one history list
-        # across turns; storing the reference would alias every entry to
-        # the final state (踩过:seen[0][-1] 变成了第二轮的消息)
+        del context
         seen.append(list(initial_messages))
         yield ApiMessageCompleteEvent(
             message=ConversationMessage(role="assistant", content=[TextBlock(text="ok")]),
@@ -85,99 +80,33 @@ def _stub_inputs(monkeypatch: pytest.MonkeyPatch, lines: list[str]) -> None:
     monkeypatch.setattr(builtins, "input", _next)
 
 
-class TestRootPositionalPrompt:
-    """D43.1 — `oh "x"` 带首条消息进 REPL。"""
-
-    def test_prompt_submitted_as_first_message_then_repl_continues(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _set_min_env(monkeypatch)
-        monkeypatch.setattr(cli_module, "_build_client", lambda _s: _StubClient())
-        seen = _capture_first_messages(monkeypatch)
-        _stub_inputs(monkeypatch, ["再补充一点", "/exit"])
-
-        result = runner.invoke(
-            cli_module.app, cli_module._preprocess_root_argv(["解释一下引擎循环"])
-        )
-
-        assert result.exit_code == 0, result.output
-        # 首轮 = 位置 prompt;第二轮 = REPL 里的追问(会话没被赶出门)
-        assert len(seen) == 2
-        first_turn_text = seen[0][-1].content[0].text  # type: ignore[union-attr]
-        assert first_turn_text == "解释一下引擎循环"
-
-    def test_bare_oh_still_enters_plain_repl(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _set_min_env(monkeypatch)
-        monkeypatch.setattr(cli_module, "_build_client", lambda _s: _StubClient())
-        seen = _capture_first_messages(monkeypatch)
-        _stub_inputs(monkeypatch, ["/exit"])
-
-        result = runner.invoke(cli_module.app, cli_module._preprocess_root_argv([]))
-
-        assert result.exit_code == 0, result.output
-        assert seen == []  # 没有自动提交任何消息
-
-
-class TestRootPrintMode:
-    """D43.2 — `oh -p "x"` = headless 机器门挂根命令。"""
-
-    def test_root_p_emits_json_envelope(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _set_min_env(monkeypatch)
-        monkeypatch.setattr(cli_module, "_build_client", lambda _s: _StubClient())
-        _capture_first_messages(monkeypatch)
-
-        result = runner.invoke(
-            cli_module.app,
-            cli_module._preprocess_root_argv(
-                ["-p", "列出三个 git 命令", "--output-format", "json"]
-            ),
-        )
-
-        assert result.exit_code == 0, result.output
-        assert '"type": "result"' in result.stdout
-
-    def test_root_p_without_prompt_exits_2(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _set_min_env(monkeypatch)
-
-        result = runner.invoke(cli_module.app, cli_module._preprocess_root_argv(["-p"]))
+class TestRemovedBranches:
+    def test_positional_prompt_is_rejected(self) -> None:
+        result = runner.invoke(cli_module.app, ["解释一下引擎循环"])
 
         assert result.exit_code == 2
+        assert "No such command" in result.output
 
+    def test_root_print_flag_is_rejected(self) -> None:
+        result = runner.invoke(cli_module.app, ["-p", "列出三个 git 命令"])
 
-class TestFlagDiet:
-    """D43.3 — 配置旗退出 help 展示,解析照常(hidden ≠ 删除)。"""
+        assert result.exit_code == 2
+        assert "No such option" in result.output
 
-    def test_retired_subcommands_are_absent(self) -> None:
-        assert {"autopilot", "run"}.isdisjoint(cli_module._known_subcommands())
+    def test_ask_command_is_rejected(self) -> None:
+        result = runner.invoke(cli_module.app, ["ask", "hello"])
 
-    def test_config_flags_hidden_from_ask_help(self) -> None:
-        result = runner.invoke(cli_module.app, ["ask", "--help"])
-        assert result.exit_code == 0
-        for flag in ("--sandbox-image", "--enable-web", "--compact-threshold", "--llm-focus-state"):
-            assert flag not in result.output, f"{flag} 应已 hidden"
+        assert result.exit_code == 2
+        assert "No such command" in result.output
 
-    def test_contract_flags_still_visible(self) -> None:
-        result = runner.invoke(cli_module.app, ["ask", "--help"])
-        help_text = unstyle(result.output)
-        for flag in ("--max-turns", "--isolate", "--output-format"):
-            assert flag in help_text, f"{flag} 是合同旗,必须可见"
+    def test_chat_does_not_accept_an_initial_prompt(self) -> None:
+        result = runner.invoke(cli_module.app, ["chat", "hello"])
 
-    def test_retired_repair_loop_flags_are_absent(self) -> None:
-        result = runner.invoke(cli_module.app, ["ask", "--help"])
-        for flag in ("--verify", "--goal-condition", "--max-iter", "--decompose", "--resume-run"):
-            assert flag not in result.output
+        assert result.exit_code == 2
+        assert "unexpected extra argument" in result.output.lower()
 
-    def test_hidden_flag_still_parses(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _set_min_env(monkeypatch)
-        monkeypatch.setattr(cli_module, "_build_client", lambda _s: _StubClient())
-        _capture_first_messages(monkeypatch)
-
-        result = runner.invoke(
-            cli_module.app,
-            ["ask", "hi", "--compact-threshold", "0.5", "--enable-memory"],
-        )
-
-        assert result.exit_code == 0, result.output  # 兼容不破
+    def test_root_argv_preprocessor_is_gone(self) -> None:
+        assert not hasattr(cli_module, "_preprocess_root_argv")
 
 
 class TestCtrlDDoublePress:
@@ -214,28 +143,3 @@ class TestCtrlDDoublePress:
         assert result.exit_code == 0, result.output
         assert len(seen) == 1  # "hi" 被正常处理(EOF 后武装被重置)
         assert result.stdout.count("again to exit") == 2  # 两次单发 EOF 各提示一次
-
-
-class TestPreprocessRouting:
-    """D43 known-subcommand-first 路由表(main() 入口的 argv 重写)。"""
-
-    def test_routing_table(self) -> None:
-        pp = cli_module._preprocess_root_argv
-        assert pp([]) == []
-        assert pp(["--version"]) == ["--version"]
-        assert pp(["chat"]) == ["chat"]
-        assert pp(["memory", "list"]) == ["memory", "list"]
-        assert pp(["ask", "hi"]) == ["ask", "hi"]
-        assert pp(["解释引擎"]) == ["chat", "解释引擎"]
-        assert pp(["-m", "qwen-max", "解释引擎"]) == ["chat", "-m", "qwen-max", "解释引擎"]
-        assert pp(["-p", "goal", "--output-format", "json"]) == [
-            "ask",
-            "-p",
-            "goal",
-            "--output-format",
-            "json",
-        ]
-
-    def test_subcommand_name_as_prompt_routes_to_subcommand(self) -> None:
-        # D43 已知限制: 与子命令同名的引号 prompt 会路由到子命令 (CC 同款取舍)
-        assert cli_module._preprocess_root_argv(["memory"]) == ["memory"]

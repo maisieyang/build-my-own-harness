@@ -1,7 +1,4 @@
-"""T5 (D40.8) — batch orchestrator: dual-track output (standard
-predictions.jsonl + records.jsonl), per-instance failure isolation,
-idempotent resume. All git/subprocess seams injected — zero external deps.
-"""
+"""Batch orchestration with the private headless invocation seam."""
 
 from __future__ import annotations
 
@@ -176,7 +173,7 @@ class TestRunBatch:
         invoked: list[str] = []
 
         def counting_invoke(inv: Invocation) -> InvocationResult:
-            invoked.append(inv.argv[-1])
+            invoked.append(inv.prompt)
             return good_invoke(inv)
 
         kwargs: dict[str, Any] = {

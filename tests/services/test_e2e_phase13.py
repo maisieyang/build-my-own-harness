@@ -144,23 +144,23 @@ class TestCliSubcommandE2E:
         runner = CliRunner()
 
         # 1. oh ask writes the snapshot via the real engine
-        result = runner.invoke(cli_module.app, ["ask", "initial question"])
+        result = runner.invoke(cli_module.headless_app, ["run", "initial question"])
         assert result.exit_code == 0, result.stderr
 
         # 2. oh snapshot list shows current
-        result = runner.invoke(cli_module.app, ["snapshot", "list"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "list"])
         assert result.exit_code == 0
         assert "current" in result.stdout
 
         # 3. oh snapshot show current renders the metadata
-        result = runner.invoke(cli_module.app, ["snapshot", "show", "current"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "show", "current"])
         assert result.exit_code == 0
         assert "id:" in result.stdout
         assert "model:" in result.stdout
         assert "messages:" in result.stdout
 
         # 4. oh snapshot gc --dry-run reports nothing under threshold
-        result = runner.invoke(cli_module.app, ["snapshot", "gc", "--dry-run"])
+        result = runner.invoke(cli_module.app, ["state", "snapshots", "gc", "--dry-run"])
         assert result.exit_code == 0
         assert (
             "no snapshots to gc" in result.stdout.lower()
@@ -232,7 +232,7 @@ class TestLlmFocusStateE2E:
         runner = CliRunner()
         result = runner.invoke(
             cli_module.app,
-            ["snapshot", "show", "current", "--format", "json"],
+            ["state", "snapshots", "show", "current", "--format", "json"],
         )
         assert result.exit_code == 0
         # JSON output round-trips the focus state

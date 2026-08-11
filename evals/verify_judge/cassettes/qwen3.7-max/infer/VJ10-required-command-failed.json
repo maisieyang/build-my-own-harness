@@ -1,0 +1,11 @@
+{
+  "case_id": "VJ10-required-command-failed",
+  "model": "qwen3.7-max",
+  "kind": "infer",
+  "recorded_at": "2026-08-10T04:12:20.113200+00:00",
+  "request_summary": "VJ10-required-command-failed: gold=fail",
+  "response": {
+    "passed": false,
+    "feedback": "The required verification command `uv run pytest -m \"not integration\" -q` failed with collection errors, and no subsequent successful run of that exact command is shown; alternative checks do not satisfy the explicit condition."
+  }
+}

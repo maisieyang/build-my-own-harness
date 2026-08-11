@@ -107,7 +107,7 @@ class TestAskCompactExtractFlags:
         monkeypatch.setattr(cli_module, "run_query", fake)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "--no-auto-compact", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "--no-auto-compact", "hi"])
         assert result.exit_code == 0, result.stderr
         assert len(captured) == 1
         assert captured[0].compact_enabled is False  # type: ignore[attr-defined]
@@ -119,14 +119,14 @@ class TestAskCompactExtractFlags:
         monkeypatch.setattr(cli_module, "run_query", fake)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "--compact-threshold", "0.5", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "--compact-threshold", "0.5", "hi"])
         assert result.exit_code == 0, result.stderr
         assert captured[0].compact_threshold_ratio == 0.5  # type: ignore[attr-defined]
 
     def test_threshold_invalid_above_one_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_min_env(monkeypatch)
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["ask", "--compact-threshold", "1.5", "hi"])
+        result = runner.invoke(cli_module.headless_app, ["run", "--compact-threshold", "1.5", "hi"])
         assert result.exit_code != 0
 
 
@@ -233,8 +233,11 @@ class TestCompactFlagsAreHiddenConfigFlags:
     def test_hidden_from_both_helps(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("COLUMNS", "200")
         runner = CliRunner()
-        for cmd in ("ask", "chat"):
-            result = runner.invoke(cli_module.app, [cmd, "--help"])
+        for command_app, cmd in (
+            (cli_module.headless_app, "run"),
+            (cli_module.app, "chat"),
+        ):
+            result = runner.invoke(command_app, [cmd, "--help"])
             assert result.exit_code == 0
             plain = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", result.stdout)
             assert "--no-auto-compact" not in plain, cmd

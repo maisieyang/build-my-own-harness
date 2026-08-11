@@ -31,7 +31,7 @@ def get_project_memory_dir(cwd: str | Path) -> Path:
 
     The path is computed from the **resolved** absolute path of ``cwd``
     so symlinks point to the same memory dir as the canonical location
-    (running ``oh ask`` from ``/private/var/foo`` and ``/var/foo``
+    (running the non-interactive runtime from ``/private/var/foo`` and ``/var/foo``
     — where ``/var`` symlinks to ``/private/var`` on macOS — shares
     memory, not splits it).
 

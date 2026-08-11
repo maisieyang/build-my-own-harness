@@ -81,9 +81,9 @@ class TestPrintModeFailClosedWired:
         runner = CliRunner()
         with runner.isolated_filesystem():
             result = runner.invoke(
-                cli_module.app,
+                cli_module.headless_app,
                 [
-                    "ask",
+                    "run",
                     "-p",
                     "--sandbox",
                     "--sandbox-backend",
@@ -119,9 +119,9 @@ class TestPrintModeFailClosedWired:
         runner = CliRunner()
         with runner.isolated_filesystem():
             result = runner.invoke(
-                cli_module.app,
+                cli_module.headless_app,
                 [
-                    "ask",
+                    "run",
                     "-p",
                     "--sandbox",
                     "--sandbox-backend",

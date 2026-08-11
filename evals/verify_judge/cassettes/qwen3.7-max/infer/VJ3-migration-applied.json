@@ -1,0 +1,11 @@
+{
+  "case_id": "VJ3-migration-applied",
+  "model": "qwen3.7-max",
+  "kind": "infer",
+  "recorded_at": "2026-08-10T04:12:14.553130+00:00",
+  "request_summary": "VJ3-migration-applied: gold=pass",
+  "response": {
+    "passed": true,
+    "feedback": "The transcript shows the migration was applied via `alembic upgrade head` and the subsequent `\\d users` command confirmed the presence of the email_verified column, satisfying both parts of the condition."
+  }
+}

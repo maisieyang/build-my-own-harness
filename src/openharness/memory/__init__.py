@@ -27,7 +27,7 @@ Phase 10 tasks:
   (6th ``markdown_store`` consumer) + :class:`EmptyMemoryStore`.
 - T3: relevance scoring + usage-tracking atomic rewrite.
 - T4: ``prompts/`` refactor + CLAUDE.md cascade + memory injection.
-- T5: ``oh memory list / show / path`` CLI.
+- T5: ``oh state memory list / show / path`` CLI.
 - T6: E2E smoke + invariant verification + retro.
 
 Public API:

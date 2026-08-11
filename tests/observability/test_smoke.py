@@ -147,8 +147,8 @@ class TestObservabilityE2E:
 
         runner = CliRunner()
         result = runner.invoke(
-            cli_module.app,
-            ["ask", "smoke", "--auto", "--log-level", "INFO", "--log-format", "json"],
+            cli_module.headless_app,
+            ["run", "smoke", "--auto", "--log-level", "INFO", "--log-format", "json"],
         )
 
         assert result.exit_code == 0, result.stderr
@@ -210,8 +210,8 @@ class TestObservabilityE2E:
 
         runner = CliRunner()
         result = runner.invoke(
-            cli_module.app,
-            ["ask", "smoke", "--auto", "--log-format", "json"],
+            cli_module.headless_app,
+            ["run", "smoke", "--auto", "--log-format", "json"],
         )
 
         assert result.exit_code == 0
@@ -232,8 +232,8 @@ class TestObservabilityE2E:
             monkeypatch.setattr(cli_module, "_build_client", lambda _s: stub)
             runner = CliRunner()
             result = runner.invoke(
-                cli_module.app,
-                ["ask", "smoke", "--auto", "--log-level", "INFO", "--log-format", "json"],
+                cli_module.headless_app,
+                ["run", "smoke", "--auto", "--log-level", "INFO", "--log-format", "json"],
             )
             assert result.exit_code == 0
             lines = [

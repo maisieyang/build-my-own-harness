@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 class TestToolsList:
     def test_list_text_format_lists_six_defaults(self) -> None:
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["tools", "list"])
+        result = runner.invoke(cli_module.app, ["inspect", "tools", "list"])
         assert result.exit_code == 0
         # The default registry from create_default_tool_registry() has
         # Read / Write / Edit / Bash / Grep / Agent.
@@ -37,13 +37,13 @@ class TestToolsList:
 
     def test_list_marks_read_only_tools(self) -> None:
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["tools", "list"])
+        result = runner.invoke(cli_module.app, ["inspect", "tools", "list"])
         assert "[read-only]" in result.stdout
         # Read + Grep are read-only; Write/Edit/Bash/Agent are not.
 
     def test_list_json_format(self) -> None:
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["tools", "list", "--format", "json"])
+        result = runner.invoke(cli_module.app, ["inspect", "tools", "list", "--format", "json"])
         assert result.exit_code == 0
         data = json.loads(result.stdout)
         assert isinstance(data, list)
@@ -59,7 +59,7 @@ class TestToolsList:
 class TestToolsShow:
     def test_show_read_text_format(self) -> None:
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["tools", "show", "Read"])
+        result = runner.invoke(cli_module.app, ["inspect", "tools", "show", "Read"])
         assert result.exit_code == 0
         assert "name:" in result.stdout
         assert "Read" in result.stdout
@@ -70,7 +70,7 @@ class TestToolsShow:
 
     def test_show_json_format(self) -> None:
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["tools", "show", "Read", "-f", "json"])
+        result = runner.invoke(cli_module.app, ["inspect", "tools", "show", "Read", "-f", "json"])
         assert result.exit_code == 0
         data = json.loads(result.stdout)
         assert data["name"] == "Read"
@@ -80,7 +80,7 @@ class TestToolsShow:
 
     def test_show_unknown_tool_exits_1_with_catalog(self) -> None:
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["tools", "show", "Nonexistent"])
+        result = runner.invoke(cli_module.app, ["inspect", "tools", "show", "Nonexistent"])
         assert result.exit_code == 1
         assert "Unknown tool" in result.stderr
         assert "Nonexistent" in result.stderr
@@ -190,7 +190,7 @@ class TestConfigEdit:
 class TestHooksList:
     def test_list_text_shows_builtins(self) -> None:
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["hooks", "list"])
+        result = runner.invoke(cli_module.app, ["inspect", "hooks", "list"])
         assert result.exit_code == 0
         assert "audit_log" in result.stdout
         assert "PostToolUse" in result.stdout
@@ -200,7 +200,7 @@ class TestHooksList:
 
     def test_list_json_format(self) -> None:
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["hooks", "list", "--format", "json"])
+        result = runner.invoke(cli_module.app, ["inspect", "hooks", "list", "--format", "json"])
         assert result.exit_code == 0
         data = json.loads(result.stdout)
         assert isinstance(data, list)
@@ -225,7 +225,7 @@ class TestHooksList:
         monkeypatch.setattr(cli_module, "discover_filesystem_hook_plugins", _sentinel)
 
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["hooks", "list"])
+        result = runner.invoke(cli_module.app, ["inspect", "hooks", "list"])
         assert result.exit_code == 0
         # Plugin discovery NOT called when flag is off.
         # (The subcommand imports lazily inside the function — so we
@@ -238,7 +238,7 @@ class TestHooksList:
 class TestHooksDescribe:
     def test_describe_audit_log_shows_docstring(self) -> None:
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["hooks", "describe", "audit_log"])
+        result = runner.invoke(cli_module.app, ["inspect", "hooks", "describe", "audit_log"])
         assert result.exit_code == 0
         assert "name:" in result.stdout
         assert "audit_log" in result.stdout
@@ -251,13 +251,13 @@ class TestHooksDescribe:
 
     def test_describe_deny_writes_shows_event(self) -> None:
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["hooks", "describe", "deny_writes"])
+        result = runner.invoke(cli_module.app, ["inspect", "hooks", "describe", "deny_writes"])
         assert result.exit_code == 0
         assert "PreToolUse" in result.stdout
 
     def test_describe_unknown_without_plugin_flag(self) -> None:
         runner = CliRunner()
-        result = runner.invoke(cli_module.app, ["hooks", "describe", "nonexistent"])
+        result = runner.invoke(cli_module.app, ["inspect", "hooks", "describe", "nonexistent"])
         assert result.exit_code == 1
         assert "Unknown hook" in result.stderr
         # Catalog includes built-ins so user knows what's available.
@@ -395,7 +395,7 @@ class TestHooksWithPluginDiscovery:
         runner = CliRunner()
         result = runner.invoke(
             cli_module.app,
-            ["hooks", "list", "--enable-plugin-hooks", "--format", "json"],
+            ["inspect", "hooks", "list", "--enable-plugin-hooks", "--format", "json"],
         )
         assert result.exit_code == 0
         data = json.loads(result.stdout)
@@ -426,7 +426,7 @@ class TestHooksWithPluginDiscovery:
         runner = CliRunner()
         result = runner.invoke(
             cli_module.app,
-            ["hooks", "describe", "audit_extra", "--enable-plugin-hooks"],
+            ["inspect", "hooks", "describe", "audit_extra", "--enable-plugin-hooks"],
         )
         assert result.exit_code == 0
         assert "name:" in result.stdout
@@ -455,7 +455,7 @@ class TestHooksWithPluginDiscovery:
         runner = CliRunner()
         result = runner.invoke(
             cli_module.app,
-            ["hooks", "describe", "nonexistent", "--enable-plugin-hooks"],
+            ["inspect", "hooks", "describe", "nonexistent", "--enable-plugin-hooks"],
         )
         assert result.exit_code == 1
         combined = result.stdout + (result.stderr or "")

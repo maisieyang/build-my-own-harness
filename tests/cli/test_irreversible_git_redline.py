@@ -87,9 +87,9 @@ class TestIrreversibleGitRedlineEndToEnd:
         runner = CliRunner()
         with runner.isolated_filesystem():
             result = runner.invoke(
-                cli_module.app,
+                cli_module.headless_app,
                 [
-                    "ask",
+                    "run",
                     "-p",
                     "--auto",
                     "--sandbox",

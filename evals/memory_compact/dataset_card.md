@@ -59,4 +59,4 @@ B2 第一次真跑(qwen-max)连挖两个跨 provider 兼容 bug,层层剥笋:
 
 - `cassettes/qwen-max/infer/` — 6 case 回放基线(record 6/6;回放一致已验证)
 - `results/qwen-max-run{1..4}.txt` — N=4 画像原始输出
-- 复跑:`OPENHARNESS_EVAL_MODE=replay uv run python scripts/spike_memory_compact_eval.py`
+- 复跑:`uv run oh dev eval memory_compact --mode replay`

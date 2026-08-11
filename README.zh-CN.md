@@ -43,7 +43,8 @@ artifact 在 [`benchmarks/swebench/out/`](./benchmarks/swebench/out)。
 
 ## 一分钟体验
 
-裸 `oh` 直接进入 conversation-first REPL。规划、审批和执行是三个独立的状态转换：
+`uv run oh` 从当前 checkout 进入 conversation-first REPL。规划、审批和执行是
+三个独立的状态转换：
 
 ```text
 >>> /plan 检查当前实现，并给出一份验证计划
@@ -54,7 +55,7 @@ plan mode -- approve this plan?
   [3] no, discard plan mode (back to default)
 plan> 1
 
->>> /goal 执行刚批准的计划；运行 `uv run pytest -m 'not integration' -q`；最多 10 turns 后停止
+>>> /goal 执行刚批准的计划；运行 `uv run pytest -m 'not integration and not eval' -q`；最多 10 turns 后停止
 ```
 
 `/plan` 从模型可见 catalog 中移除修改与委派能力，并用 deny-only dispatch guard
@@ -153,21 +154,13 @@ transcript，并交给一次独立、禁用工具的 LLM 调用：
 
 Judge 异常和无法解析的输出一律 fail closed；hard turn cap 为 false negative 与
 provider failure 提供上界。Goal 状态与 conversation 一起持久化，包含终态哨兵，
-因此 `oh chat --resume` 不会复活已经完成的工作。
+因此 `oh --resume` 不会复活已经完成的工作。
 
-### Headless 执行与隔离
+### 私有非交互执行
 
-`oh ask -p` 保留为脚本、benchmark 与 CI 使用的单次运行原语。它执行一个 prompt
-并报告 engine 终态，不拥有第二套 completion loop。
-
-```bash
-uv run oh ask -p "检查当前仓库并报告风险最高的缺口" \
-  --output-format json \
-  --isolate
-```
-
-`--isolate` 把这一次运行放进独立 Git worktree。Sandbox、worktree 与结构化输出
-继续作为执行原语存在，而不是另一套任务完成权的拥有者。
+Benchmark 与 runtime tests 使用私有非交互 adapter，不再增加第二个公开的 Agent
+启动命令。Adapter 在子进程中运行，因此每个 case 都有独立的 cwd、environment 与
+wall-clock timeout。这是一条内部实现边界，不是第二套面向用户的 CLI。
 
 ### Evaluation 阶梯
 
@@ -177,7 +170,8 @@ uv run oh ask -p "检查当前仓库并报告风险最高的缺口" \
 2. Capability evals 覆盖 tool choice、error feedback、skill trigger、memory、
    compaction 与 completion judge，并使用 programmatic scorer、cassette/replay
    与 judge meta-evaluation。
-3. SWE-bench 通过公开 CLI 驱动 300 个真实仓库任务，再把 execution records 与
+3. SWE-bench 通过与 REPL 相同的内部 runtime 驱动 300 个真实仓库任务，再把
+   execution records 与
    官方 verdict join，进行 failure attribution。
 
 `/goal` 专属 completion judge 位于
@@ -231,50 +225,167 @@ self-report。
 
 ## 快速开始
 
-需要 Python >=3.10、[uv](https://docs.astral.sh/uv/)，以及 OpenAI-compatible
-Chat Completions endpoint。
+OpenHarness 当前只维护从源码开发和 dogfood 的使用路径。需要 Python >=3.10、
+[uv](https://docs.astral.sh/uv/)，以及 OpenAI-compatible Chat Completions
+endpoint。
 
 ```bash
+# 如果尚未安装 uv，先安装 uv
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
+# 克隆 OpenHarness 并安装依赖
 git clone https://github.com/maisieyang/build-my-own-harness.git
 cd build-my-own-harness
 uv sync
 
+# 创建本地配置
 cp .env.example .env
 $EDITOR .env
+```
 
+在 `.env` 中填写模型 provider API key 和兼容的 base URL，并选择该 endpoint
+实际提供的模型。Web capability API key 是可选项；留空即可在不启用 Web tools
+的情况下启动。`.env` 只保留在本地，不要提交任何凭据。
+
+从当前 checkout 启动 Agent：
+
+```bash
 uv run oh
 ```
 
-在 `.env` 中填写 `OPENHARNESS_API_KEY`、`OPENHARNESS_BASE_URL` 和
-`OPENHARNESS_MODEL`。默认配置通过 DashScope 使用 Qwen，但 agent loop 内没有
-provider-specific 分支。
+看到 `>>>` 后，直接输入任务即可开始。输入 `/` 可以打开当前 session 的命令菜单。
 
-在 REPL 中输入 `/`，会打开 built-ins、用户 commands 与 skills 共用的菜单。
-也可以直接带一个初始 prompt：
+### 为什么始终使用 `uv run oh`？
+
+包括使用 Git worktree 时，都应通过当前 checkout 启动 OpenHarness：
 
 ```bash
-uv run oh "检查当前仓库，指出风险最高的缺口"
+uv run oh
 ```
 
-## 命令地图
+`uv run` 会解析当前 checkout 的 `pyproject.toml`、environment 和源代码。因此在
+worktree 中运行时，实际执行的是该 worktree 所在分支的代码，并包含尚未提交的
+本地改动。裸 `oh` 由 `PATH` 解析，可能执行另一个 checkout 中的代码，所以不属于
+当前 source-only 工作流支持的启动方式。
 
-| 命令 | 作用 |
-|---|---|
-| `oh` / `oh chat` | 交互式多轮 session |
-| `oh ask` | 单次提问或 headless 执行 |
-| `oh tools` | 查看注册工具的 schema 和 metadata |
-| `oh config` | 查看生效配置或编辑用户 `.env` |
-| `oh hooks` | 查看 framework 与 plugin hooks |
-| `oh memory` | 查看按项目存储的 memory |
-| `oh plugins` | 查看已安装的原生与 Claude Code-format plugins |
-| `oh snapshot` | 列出、查看和清理 conversation snapshots |
-| `oh eval` | 运行 capability-anchored prompt eval |
-| `oh bench swebench` | 获取并运行 SWE-bench Lite cases |
+## 使用 OpenHarness
 
-以 `uv run oh --help` 和 `uv run oh <command> --help` 为 option surface 的
-权威来源。所有配置都使用 `OPENHARNESS_*` namespace，见
+### 如何开始？
+
+OpenHarness 只有一个公开 Agent 入口：`oh [OPTIONS]`。在本仓库或任一 worktree
+中都始终通过 `uv run oh` 调用。
+
+```bash
+uv run oh
+```
+
+### 我有哪些能力？— Shell CLI
+
+```text
+oh [OPTIONS]              # Agent 入口
+├── config                # 用户配置；`oh config` 显示当前生效配置
+│   └── edit
+├── inspect               # 只读运行时检查
+│   ├── tools
+│   ├── hooks
+│   └── plugins
+├── state                 # 当前项目的持久状态
+│   ├── memory
+│   └── snapshots
+└── dev                   # 贡献者工作流
+    ├── eval
+    └── bench
+```
+
+在本仓库开发时，常见的 Agent 启动方式：
+
+```bash
+# 临时指定模型
+uv run oh --model qwen3.7-max
+
+# 使用自动 reviewer 处理精确的权限请求
+uv run oh --auto
+
+# 只预览工具调用，不真正执行
+uv run oh --dry-run
+
+# 明确使用 macOS Seatbelt
+uv run oh --sandbox --sandbox-backend seatbelt
+
+# 恢复当前项目最近的 session
+uv run oh --resume
+
+# 组合 session options
+uv run oh --model qwen3.7-max --auto --sandbox
+```
+
+### 如何运行 eval？— 仅手动触发
+
+Dataset eval 不会在 CI 或默认测试套件中运行。每次调用都必须显式指定 mode：
+`live`、`record` 或 `replay`；裸命令会 fail closed。
+
+```bash
+# 查看 capability eval
+uv run oh dev eval --help
+
+# replay 已提交的 cassette，不调用 API
+uv run oh dev eval error_feedback --mode replay
+
+# 只运行一个 live 诊断 case
+uv run oh dev eval error_feedback --mode live \
+  --case A6-grep-launch-denied
+```
+
+完整的验证层级、mode 语义、model 选择、record policy、capability catalog 与
+故障排查见 [Eval 手册](./evals/README.zh-CN.md)。
+
+### 如何控制会话？— REPL slash commands
+
+REPL 围绕三条工作流组织：正常工作、安全探索，以及持续推进直到满足可验证的
+完成条件。
+
+#### Default — 正常工作
+
+直接输入任务。Agent 使用当前生效的工具与权限配置工作。
+
+#### Plan — 行动前安全探索
+
+`/plan [prompt]` 进入只读探索：编辑与 Shell 命令会被阻断。每次完整回复后，plan
+menu 允许你继续规划、批准计划并返回 Default，或丢弃计划。如果 permission
+request 使当前 turn parked，需要先完成决定并使用 `/resume`，之后才会出现批准菜单。
+
+#### Goal — 持续工作直到满足条件
+
+`/goal <condition>` 设置可验证的完成条件并立即开始工作。在 Default 状态下，独立
+checker 会在每轮后判断是否应继续，直到满足条件。使用 `/goal` 查看状态，或使用
+`/goal clear` 停止该 controller。可以在 Plan 中设置 Goal，但 checker 只会在
+session 返回 Default 后运行。
+
+#### 维护会话
+
+`/compact` 压缩较早的 conversation context，同时保留最近一次交流。`/clear`
+清空 conversation 与所有 active Goal。
+
+#### 处理权限决策
+
+`/permissions` 显示已配置的授权意图与已验证 runtime boundary。当 permission
+request 被 parked 时，使用 `/approve [id]` 或 `/deny [id]`，再通过 `/resume`
+按该决定继续。
+
+#### 查看和扩展 Context
+
+`/memory` 列出当前项目的 memory，`/skills` 列出可用 skills。用户自定义 commands
+是 `~/.openharness/commands/` 或 `<project>/.openharness/commands/` 下的 Markdown
+文件；项目级条目覆盖全局条目，并通过 `/<name> [args]` 调用。如果没有匹配的
+built-in 或用户 command，`/<skill-name>` 会 fallback 到已发现的 skill。解析顺序
+为：built-in、用户 command、skill。
+
+#### 发现命令和退出
+
+`/` 打开当前 session 可用命令的滚动菜单；用方向键浏览，或继续输入以筛选。
+`/help` 显示稳定的 built-in reference。使用 `/exit` 离开 REPL（`/quit` 是 alias）。
+
+所有配置使用 `OPENHARNESS_*` namespace；见
 [`.env.example`](./.env.example)。
 
 ### Permission 模型
@@ -291,13 +402,15 @@ replacement。无法等价表达的规则必须显式重写；migration 不会�
 ## 质量契约
 
 ```bash
-uv run pytest -m "not integration" -q
+uv run pytest -m "not integration and not eval" -q
 uv run mypy --strict src/
 uv run ruff check
 uv run ruff format --check
 ```
 
-- CI/default gate 不需要 live model 或外部服务。
+- CI/default gate 排除 integration tests 与全部 dataset eval gate。
+- `uv run pytest -m eval -q --no-cov` 手动运行已提交 cassette 的 replay gate，
+  不会调用模型。
 - `uv run pytest -m integration` 运行显式隔离的真实进程或 live-service 检查；
   根据选中的测试，可能需要 Node、Docker、gVisor、凭据或网络。
 - Coverage 必须保持在 95% 以上。

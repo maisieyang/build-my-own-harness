@@ -23,7 +23,8 @@ End-user invocation:
 
 ::
 
-    oh ask --enable-plugin-hooks "/review last commit"
+    oh --enable-plugin-hooks
+    >>> /review last commit
     # where review.md → mode: code-review, and code-review bundle has
     # hooks: [audit_log, slack_notify]
 

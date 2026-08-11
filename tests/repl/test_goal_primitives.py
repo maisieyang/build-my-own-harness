@@ -84,6 +84,8 @@ class TestPromptAndContinuation:
         section = goal_prompt_section("the CHANGELOG has an entry")
         assert "the CHANGELOG has an entry" in section
         assert "goal" in section.lower()
+        assert "self-selected examples" in section
+        assert "exact verification command" in section
 
     def test_continuation_frames_checker_not_user(self) -> None:
         msg = build_goal_continuation("tests pass", "pytest was never run")

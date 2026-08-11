@@ -44,7 +44,7 @@ LogFormat = Literal["console", "json"]
 # Their records bypass structlog's JSONRenderer (they're raw stdlib LogRecords,
 # not structlog event dicts), so they show up as plain-text lines on stderr —
 # breaking JSONL purity for ``jq`` / OTel exporters. Silenced to WARNING so
-# normal ``oh ask`` runs emit only our structlog JSON.
+# normal non-interactive runs emit only our structlog JSON.
 #
 # Trade-off: ``--log-level DEBUG`` will not show httpx/openai internals.
 # Users debugging those should set the levels manually:

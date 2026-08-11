@@ -46,8 +46,8 @@ artifacts under [`benchmarks/swebench/out/`](./benchmarks/swebench/out).
 
 ## One-minute tour
 
-Bare `oh` opens the conversation-first REPL. Planning, approval, and execution
-are separate state transitions:
+`uv run oh` opens the conversation-first REPL from the current checkout.
+Planning, approval, and execution are separate state transitions:
 
 ```text
 >>> /plan Review the implementation and propose a verification plan
@@ -58,7 +58,7 @@ plan mode -- approve this plan?
   [3] no, discard plan mode (back to default)
 plan> 1
 
->>> /goal Implement the approved plan; run `uv run pytest -m 'not integration' -q`; stop after 10 turns
+>>> /goal Implement the approved plan; run `uv run pytest -m 'not integration and not eval' -q`; stop after 10 turns
 ```
 
 `/plan` removes mutation and delegation capabilities from the model-visible
@@ -88,7 +88,7 @@ control problems that the model cannot solve by itself.
 
 ```mermaid
 flowchart LR
-    U["User or script"] --> C["REPL and headless CLI"]
+    U["User or internal adapter"] --> C["REPL and private headless runtime"]
     C --> E["Agent engine"]
     E <--> M["OpenAI-compatible model"]
     E --> P["Permission profile, verified boundary, and hooks"]
@@ -170,24 +170,15 @@ untrusted transcript --> independent judge --> pass --> persist "met" and stop
 
 Judge errors and malformed output fail closed. A hard turn cap bounds false
 negatives and provider failures. Goal state is persisted with the conversation,
-including terminal sentinels, so `oh chat --resume` does not resurrect work that
+including terminal sentinels, so `oh --resume` does not resurrect work that
 was already completed.
 
-### Headless execution and isolation
+### Private non-interactive execution
 
-`oh ask -p` remains the single-run primitive for scripts, benchmarks, and CI.
-It runs one prompt and reports the engine's terminal state; it does not own a
-second completion loop.
-
-```bash
-uv run oh ask -p "inspect the repository and report the highest-risk gap" \
-  --output-format json \
-  --isolate
-```
-
-`--isolate` places that one run in a fresh Git worktree. Sandbox, worktree, and
-structured output remain execution primitives rather than alternative owners
-of task completion.
+Benchmarks and runtime tests use a private non-interactive adapter rather than
+adding another public agent-starting command. The adapter runs in a child
+process so each case retains an isolated cwd, environment, and wall-clock
+timeout. It is an implementation boundary, not a second user-facing CLI.
 
 ### Evaluation ladder
 
@@ -198,8 +189,9 @@ The project separates mechanism tests from model-behavior evidence:
 2. Capability evals cover tool choice, error feedback, skill triggering,
    memory, compaction, and completion judging with programmatic scorers,
    cassette/replay, and judge meta-evaluation.
-3. SWE-bench exercises the shipped CLI across 300 real repository tasks and
-   joins execution records with official verdicts for failure attribution.
+3. SWE-bench exercises the same internal runtime as the REPL across 300 real
+   repository tasks and joins execution records with official verdicts for
+   failure attribution.
 
 The goal-owned completion judge lives in
 [`src/openharness/services/goal_judge.py`](./src/openharness/services/goal_judge.py).
@@ -259,39 +251,58 @@ model's self-report.
 
 ## Quick start
 
-Requires Python >=3.10, [uv](https://docs.astral.sh/uv/), and an
-OpenAI-compatible Chat Completions endpoint.
+OpenHarness is currently developed and dogfooded from source. It requires
+Python >=3.10, [uv](https://docs.astral.sh/uv/), and an OpenAI-compatible Chat
+Completions endpoint.
 
 ```bash
+# Install uv if it is not already available.
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
+# Clone OpenHarness and install its dependencies.
 git clone https://github.com/maisieyang/build-my-own-harness.git
 cd build-my-own-harness
 uv sync
 
+# Create the local configuration.
 cp .env.example .env
 $EDITOR .env
+```
 
+In `.env`, set the model provider API key and compatible base URL, then choose
+a model served by that endpoint. The Web capability API key is optional; leave
+it blank to start without Web tools. Keep `.env` local and never commit
+credentials.
+
+Start the Agent from this checkout:
+
+```bash
 uv run oh
 ```
 
-Fill in the blank values in `.env`'s minimum dogfood block. It contains the
-OpenAI-compatible provider settings, web capability key, provider request
-fields, and verified sandbox switch needed by the repository's current
-dogfood setup; the loop itself contains no provider-specific branches.
+When the `>>>` prompt appears, enter a task to begin. Type `/` to open the
+current session's command menu.
 
-Type `/` in the REPL to open the combined menu of built-ins, user commands, and
-skills. An initial prompt can be supplied directly:
+### Why always use `uv run oh`?
+
+Always launch OpenHarness through the current checkout, including from a Git
+worktree:
 
 ```bash
-uv run oh "review this repository and identify the highest-risk gap"
+uv run oh
 ```
+
+`uv run` resolves the `pyproject.toml`, environment, and source code belonging
+to the current checkout. In a worktree, the running harness therefore follows
+that worktree's branch and includes its uncommitted changes. A bare `oh` is
+resolved from `PATH` and may execute code from another checkout, so it is not a
+supported launcher for this source-only workflow.
 
 ### macOS Seatbelt dogfood
 
 The minimum `.env.example` block already enables the sandbox. The default
-backend on macOS is Seatbelt, and bare `oh` enters the interactive chat
-session, so the everyday dogfood command is simply:
+backend on macOS is Seatbelt, and the root Agent entry starts the interactive
+chat session, so the everyday dogfood command is simply:
 
 ```bash
 uv run oh
@@ -326,35 +337,144 @@ instruction files from the OpenHarness installation directory, filesystem
 ancestors, or a user-global fallback. Project instructions remain enabled when
 durable memory is disabled.
 
-## Command map
+## Using OpenHarness
 
-| Command | Purpose |
-|---|---|
-| `oh` / `oh chat` | Interactive multi-turn session |
-| `oh ask` | One-shot or headless execution |
-| `oh tools` | Inspect registered tool schemas and metadata |
-| `oh config` | Show effective settings or edit the user `.env` |
-| `oh hooks` | Inspect framework and plugin hooks |
-| `oh memory` | Inspect the per-project memory store |
-| `oh plugins` | Inspect installed native and Claude Code-format plugins |
-| `oh snapshot` | List, show, and garbage-collect conversation snapshots |
-| `oh eval` | Run capability-anchored prompt evals |
-| `oh bench swebench` | Fetch and run SWE-bench Lite cases |
+### How do I get started?
 
-Run `uv run oh --help` or `uv run oh <command> --help` for the authoritative
-option surface. All configuration uses the `OPENHARNESS_*` namespace; see
+OpenHarness has one public Agent entry: `oh [OPTIONS]`. From this repository or
+one of its worktrees, always invoke it with `uv run oh`.
+
+```bash
+uv run oh
+```
+
+### What can I do? — Shell CLI
+
+```text
+oh [OPTIONS]              # the Agent entry
+├── config                # user configuration; `oh config` shows effective settings
+│   └── edit
+├── inspect               # read-only runtime inspection
+│   ├── tools
+│   ├── hooks
+│   └── plugins
+├── state                 # persistent state for the current project
+│   ├── memory
+│   └── snapshots
+└── dev                   # contributor workflows
+    ├── eval
+    └── bench
+```
+
+Common ways to start the Agent while developing this repository:
+
+```bash
+# Temporarily choose a model.
+uv run oh --model qwen3.7-max
+
+# Use the automated reviewer for exact permission requests.
+uv run oh --auto
+
+# Preview tool calls without executing them.
+uv run oh --dry-run
+
+# Explicitly use macOS Seatbelt.
+uv run oh --sandbox --sandbox-backend seatbelt
+
+# Resume the latest session for this project.
+uv run oh --resume
+
+# Combine session options.
+uv run oh --model qwen3.7-max --auto --sandbox
+```
+
+### How do I run evals? — Manual only
+
+Dataset evals never run in CI or in the default test suite. Every invocation
+must name `live`, `record`, or `replay` explicitly; a bare command fails closed.
+
+```bash
+# Discover the capability evals.
+uv run oh dev eval --help
+
+# Replay a committed cassette without an API call.
+uv run oh dev eval error_feedback --mode replay
+
+# Run one live diagnostic case.
+uv run oh dev eval error_feedback --mode live \
+  --case A6-grep-launch-denied
+```
+
+See the [evaluation handbook](./evals/README.md) for validation levels, mode
+semantics, model selection, recording policy, the capability catalog, and
+troubleshooting.
+
+### How do I control a session? — REPL slash commands
+
+The REPL has three work flows: work normally, explore safely, and work toward a
+verifiable completion condition.
+
+#### Default — work normally
+
+Enter a task directly. The Agent works with the current tool and permission
+configuration.
+
+#### Plan — explore safely before acting
+
+`/plan [prompt]` enters read-only exploration: edits and shell commands are
+blocked. After every completed reply, a plan menu lets you keep planning,
+approve the plan and return to Default, or discard it. If a permission request
+parks the turn, resolve it and use `/resume` before the approval menu appears.
+
+#### Goal — keep working until a condition is met
+
+`/goal <condition>` sets a verifiable completion condition and starts work
+immediately. While in Default, an independent checker evaluates each turn and
+continues the session until the condition is met. Use `/goal` to view status or
+`/goal clear` to stop the controller. A goal can be set while planning, but
+the checker runs only after the session returns to Default.
+
+#### Maintain the conversation
+
+`/compact` compresses earlier conversation context while preserving the recent
+exchange. `/clear` clears the conversation and any active goal.
+
+#### Handle permission decisions
+
+`/permissions` shows configured intent and the verified runtime boundary. When
+a permission request is parked, use `/approve [id]` or `/deny [id]`, then
+`/resume` to continue from that decision.
+
+#### Inspect and extend context
+
+`/memory` lists memories for the current project and `/skills` lists available
+skills. User-authored commands are Markdown files in `~/.openharness/commands/`
+or `<project>/.openharness/commands/`; project entries override global ones and
+are invoked as `/<name> [args]`. If no built-in or user command matches,
+`/<skill-name>` falls through to a discovered skill. The resolution order is
+built-in command, user command, then skill.
+
+#### Discover and exit
+
+`/` opens the current session's scrollable command menu; use arrow keys to
+browse it or keep typing to filter it. `/help` prints the stable built-in
+reference. Use `/exit` to leave the REPL (`/quit` is an alias).
+
+All configuration uses the `OPENHARNESS_*` namespace; see
 [`.env.example`](./.env.example).
 
 ## Quality contract
 
 ```bash
-uv run pytest -m "not integration" -q
+uv run pytest -m "not integration and not eval" -q
 uv run mypy --strict src/
 uv run ruff check
 uv run ruff format --check
 ```
 
-- The CI/default gate requires no live model or external service.
+- The CI/default gate excludes integration tests and all dataset eval gates.
+- `uv run pytest -m eval -q --no-cov` runs committed cassette replay gates manually;
+  it makes no model call.
 - `uv run pytest -m integration` runs explicitly gated real-process or
   live-service checks and may require Node, Docker, gVisor, credentials, or
   network access depending on the selected test.

@@ -26,7 +26,7 @@ class CommandStore(Protocol):
     Two operations:
 
     - :meth:`discover` runs **once at CLI bootstrap**(catalog stays
-      frozen for the duration of an ``oh ask`` invocation per
+      frozen for the duration of a non-interactive invocation per
       ``decisions/14`` Out of Scope:"interactive command discovery").
     - :meth:`get` is called by :func:`expand_command` to look up
       ``/<name>`` invocations.

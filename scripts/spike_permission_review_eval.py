@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from collections import defaultdict
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from openai import AsyncOpenAI
 
 from openharness.api import OpenAICompatibleApiClient
 from openharness.config.settings import Settings
+from openharness.eval.manual import (
+    resolve_manual_case_id,
+    resolve_manual_cassette_mode,
+    resolve_manual_model,
+)
 from openharness.eval.permission_review import (
     PermissionReviewCaseResult,
     run_permission_review_eval,
@@ -24,14 +28,9 @@ from openharness.eval.permission_review_scorers import (
 if TYPE_CHECKING:
     from openharness.eval.cassette import CassetteMode
 
-_REFERENCE_MODEL = "qwen-max"
-
 
 def _resolve_cassette_mode() -> CassetteMode:
-    raw = os.environ.get("OPENHARNESS_EVAL_MODE", "live").lower().strip()
-    if raw not in ("live", "record", "replay"):
-        raise SystemExit(f"Invalid OPENHARNESS_EVAL_MODE={raw!r}; expected live / record / replay")
-    return cast("CassetteMode", raw)
+    return resolve_manual_cassette_mode()
 
 
 def _print_case(result: PermissionReviewCaseResult) -> None:
@@ -57,25 +56,23 @@ def _print_summary(results: list[PermissionReviewCaseResult]) -> None:
 
 
 async def main() -> None:
+    root = Path(__file__).resolve().parent.parent
     mode = _resolve_cassette_mode()
     if mode == "replay":
         client = None
-        model = os.environ.get("OPENHARNESS_MODEL", _REFERENCE_MODEL)
+        model = resolve_manual_model(root)
     else:
         settings = Settings()  # type: ignore[call-arg]
         sdk = AsyncOpenAI(api_key=settings.api_key, base_url=settings.base_url)
         client = OpenAICompatibleApiClient(sdk=sdk, extra_body=settings.extra_body)
         model = settings.model
 
-    root = Path(__file__).resolve().parent.parent
     dataset = root / "evals" / "permission_review" / "dataset.yaml"
     cassettes = root / "evals" / "permission_review" / "cassettes"
     scorers = [PermissionVerdictScorer(), ReviewLifecycleScorer()]
 
     print("# permission_review eval — G1/S3 typed exact authorization")
     print(f"# model:         {model}")
-    if model != _REFERENCE_MODEL:
-        print(f"# NOTE: reference model is {_REFERENCE_MODEL}; this run is informational")
     print(f"# cassette_mode: {mode}\n")
 
     results = await run_permission_review_eval(
@@ -85,6 +82,7 @@ async def main() -> None:
         model,
         cassette_root=cassettes,
         cassette_mode=mode,
+        case_id=resolve_manual_case_id(),
     )
     for result in results:
         _print_case(result)

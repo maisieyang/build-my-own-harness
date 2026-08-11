@@ -50,11 +50,9 @@ jobs:
       - name: Mypy strict
         run: uv run mypy --strict src/
 
-      - name: Pytest (unit + integration mocks; gated real-API tests excluded)
-        # P3-T1.1f: explicit -m "not integration" so CI behavior is declarative
-        # rather than passive-skip. Real-API integration tests are gated by
-        # OPENHARNESS_BASE_URL / _API_KEY env vars and run only locally.
-        run: uv run pytest -m "not integration"
+      - name: Pytest (deterministic unit substrate)
+        # Real-service integration and dataset eval gates are both manual.
+        run: uv run pytest -m "not integration and not eval"
 
       - name: Upload coverage report
         if: matrix.python-version == '3.11'

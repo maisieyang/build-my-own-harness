@@ -35,6 +35,7 @@ from openharness.eval.cassette import (
     cassetted_infer_focus_state,
 )
 from openharness.eval.protocol import Sample, Score, Scorer
+from openharness.eval.selection import select_cases
 from openharness.protocols.messages import ConversationMessage
 
 if TYPE_CHECKING:
@@ -108,6 +109,7 @@ async def run_eval(
     *,
     cassette_root: Path | None = None,
     cassette_mode: CassetteMode = "live",
+    case_id: str | None = None,
 ) -> list[CaseResult]:
     """End-to-end: load dataset → for each sample run LLM + all scorers.
 
@@ -123,7 +125,7 @@ async def run_eval(
     cassetted separately — scorer must be constructed with the same
     ``cassette_store`` + ``cassette_mode`` for full reproducibility.
     """
-    samples = load_dataset(dataset_path)
+    samples = select_cases(load_dataset(dataset_path), case_id)
     store: CassetteStore | None = (
         CassetteStore(cassette_root) if cassette_root is not None else None
     )

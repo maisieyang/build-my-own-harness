@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -138,11 +140,20 @@ def _search(request: dict[str, Any]) -> dict[str, object]:
     if request.get("glob") is not None:
         command.extend(["--glob", str(request["glob"])])
     command.extend([str(request["pattern"]), str(request["path"])])
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+    except PermissionError:
+        # The target search happens inside rg. A PermissionError raised here
+        # therefore means the worker could not launch the rg executable; it
+        # is not evidence that the requested search path sits outside the
+        # filesystem boundary. Misclassifying it as a path violation creates
+        # an exact permission request that cannot fix the underlying runtime
+        # restriction (dogfood: allowed workspace Grep parked forever).
+        return _search_with_python(request)
     output, byte_truncated = _collect_bounded_output(process, max_bytes=_MAX_SEARCH_BYTES)
     returncode = process.wait()
     if returncode == 1:
@@ -165,6 +176,91 @@ def _search(request: dict[str, Any]) -> dict[str, object]:
         match_count=total,
         byte_truncated=byte_truncated,
     )
+
+
+def _search_with_python(request: dict[str, Any]) -> dict[str, object]:
+    """Preserve Grep when a nested sandbox cannot launch ``rg``.
+
+    Files are still opened by this already-sandboxed worker, so the OS
+    boundary remains authoritative. A target-path denial continues to surface
+    as ``filesystem.search`` through ``run``'s PermissionError handler.
+    """
+    try:
+        expression = re.compile(
+            str(request["pattern"]),
+            re.IGNORECASE if request.get("ignore_case") else 0,
+        )
+    except re.error as exc:
+        return _failure(f"search pattern is not a valid regular expression: {exc}")
+
+    root = Path(request["path"])
+    glob = str(request["glob"]) if request.get("glob") is not None else None
+    include_hidden = bool(request.get("hidden"))
+    line_cap = int(request["line_cap"])
+    retained: list[str] = []
+    retained_bytes = 0
+    byte_truncated = False
+    total = 0
+
+    for path in _iter_search_files(root, include_hidden=include_hidden):
+        relative = path.name if root.is_file() else path.relative_to(root).as_posix()
+        if glob is not None and not _glob_matches(relative, glob):
+            continue
+        with path.open("rb") as stream:
+            raw = stream.read()
+        if b"\0" in raw:
+            continue
+        for number, line in enumerate(raw.decode("utf-8", errors="replace").splitlines(), 1):
+            if expression.search(line) is None:
+                continue
+            total += 1
+            if len(retained) >= line_cap:
+                continue
+            rendered = f"{path}:{number}:{line}"
+            encoded_size = len(rendered.encode("utf-8")) + 1
+            if retained_bytes + encoded_size > _MAX_SEARCH_BYTES:
+                byte_truncated = True
+                continue
+            retained.append(rendered)
+            retained_bytes += encoded_size
+
+    if total == 0:
+        return _success(
+            "(no matches)",
+            match_count=0,
+            byte_truncated=False,
+            search_engine="python-fallback",
+        )
+    if total > line_cap:
+        retained.append(f"... [truncated to {line_cap} lines; total matches {total}]")
+    if byte_truncated:
+        retained.append(f"... [output truncated at {_MAX_SEARCH_BYTES} bytes]")
+    return _success(
+        "\n".join(retained),
+        match_count=total,
+        byte_truncated=byte_truncated,
+        search_engine="python-fallback",
+    )
+
+
+def _iter_search_files(root: Path, *, include_hidden: bool) -> list[Path]:
+    if root.is_file():
+        if include_hidden or not root.name.startswith("."):
+            return [root]
+        return []
+    files: list[Path] = []
+    for directory, dirnames, filenames in os.walk(root):
+        if not include_hidden:
+            dirnames[:] = [name for name in dirnames if not name.startswith(".")]
+            filenames = [name for name in filenames if not name.startswith(".")]
+        files.extend(Path(directory) / name for name in filenames)
+    return files
+
+
+def _glob_matches(relative: str, pattern: str) -> bool:
+    if fnmatch.fnmatchcase(relative, pattern):
+        return True
+    return pattern.startswith("**/") and fnmatch.fnmatchcase(relative, pattern[3:])
 
 
 def _collect_bounded_output(

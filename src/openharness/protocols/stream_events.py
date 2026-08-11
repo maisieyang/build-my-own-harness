@@ -135,11 +135,11 @@ class ConversationCompleteEvent(StrictModel):
     loop exits (end_turn reached or max_turns hit).
 
     Carries the full conversation messages list so callers (notably
-    the ``oh chat`` REPL) can carry forward state across turns —
+    the ``oh`` REPL) can carry forward state across turns —
     just plug ``event.messages`` back in as ``initial_messages``
     for the next ``run_query`` invocation.
 
-    ``oh ask``'s renderer ignores this event (no visible output);
+    the non-interactive runtime's renderer ignores this event (no visible output);
     it's metadata for callers that care about multi-turn state.
     """
 

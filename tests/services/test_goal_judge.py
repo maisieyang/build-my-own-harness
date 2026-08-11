@@ -12,6 +12,7 @@ from openharness.protocols import ConversationMessage, TextBlock
 from openharness.protocols.stream_events import ApiMessageCompleteEvent, ApiTextDeltaEvent
 from openharness.protocols.usage import UsageSnapshot
 from openharness.services.goal_judge import (
+    _JUDGE_SYSTEM_PROMPT,
     GoalJudgeResult,
     GoalJudgeVerdict,
     judge_goal_completion,
@@ -58,6 +59,13 @@ class _RaisingStubClient:
 
 
 class TestJudgeGoalCompletionHappyPath:
+    def test_prompt_requires_authoritative_bounded_evidence(self) -> None:
+        normalized = " ".join(_JUDGE_SYSTEM_PROMPT.split())
+        assert "exact verification command" in normalized
+        assert "tool result" in normalized
+        assert "self-selected finite sample" in normalized
+        assert "open-ended universal condition" in normalized
+
     async def test_score_one_passes(self) -> None:
         stub = _JudgeStubClient('{"score": 1, "reason": "condition satisfied"}')
         result = await judge_goal_completion(

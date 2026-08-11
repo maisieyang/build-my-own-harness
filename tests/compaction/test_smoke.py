@@ -169,8 +169,8 @@ class TestCompactionE2E:
 
         runner = CliRunner()
         result = runner.invoke(
-            cli_module.app,
-            ["ask", "smoke", "--auto", "--log-level", "INFO", "--log-format", "json"],
+            cli_module.headless_app,
+            ["run", "smoke", "--auto", "--log-level", "INFO", "--log-format", "json"],
         )
         assert result.exit_code == 0, result.stderr
 
@@ -204,9 +204,9 @@ class TestCompactionE2E:
 
         runner = CliRunner()
         result = runner.invoke(
-            cli_module.app,
+            cli_module.headless_app,
             [
-                "ask",
+                "run",
                 "smoke",
                 "--auto",
                 "--log-level",
@@ -240,9 +240,9 @@ class TestCompactionE2E:
 
         runner = CliRunner()
         result = runner.invoke(
-            cli_module.app,
+            cli_module.headless_app,
             [
-                "ask",
+                "run",
                 "smoke",
                 "--auto",
                 "--log-level",
