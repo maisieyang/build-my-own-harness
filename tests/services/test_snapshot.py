@@ -46,6 +46,7 @@ from openharness.services.snapshot import (
     _current_git_head,
     _serialize_snapshot,
     append_messages_to_snapshot,
+    clear_conversation_snapshot,
     get_snapshot_dir,
     load_snapshot,
     update_permission_runtime_snapshot,
@@ -388,6 +389,71 @@ def test_permission_decision_amends_current_snapshot_without_rotating(
     loaded = load_snapshot(tmp_path)
     grants = loaded["extra"]["permission_runtime"]["grants"]
     assert [grant["grant_fingerprint"] for grant in grants] == [request.grant_fingerprint]
+
+
+def test_clear_conversation_snapshot_atomically_replaces_messages_and_permission_state(
+    tmp_path: Path,
+) -> None:
+    runtime = _permission_runtime()
+    request = PermissionDeltaRequest.create(
+        tool_use_id="tool-clear",
+        tool_name="Bash",
+        final_arguments={"command": "curl https://example.com"},
+        profile=runtime.profile,
+        boundary=runtime.boundary,
+        delta=PermissionDelta.network_domain("example.com"),
+        crossing=BoundaryViolation(
+            dimension="network.domain",
+            requested="example.com:443",
+            evidence="not in allowlist",
+        ),
+    )
+    runtime.park(request, reason="waiting for user")
+    path = write_session_snapshot(
+        cwd=tmp_path,
+        tool_metadata={"keep": ["metadata"]},
+        messages=_sample_messages(),
+        context=_StubContext(permission_runtime=runtime),  # type: ignore[arg-type]
+    )
+    runtime.clear_pending_state()
+
+    assert clear_conversation_snapshot(cwd=tmp_path, runtime=runtime) == path
+
+    loaded = load_snapshot(tmp_path)
+    assert loaded["messages"] == []
+    assert loaded["tool_metadata"] == {"keep": ["metadata"]}
+    permission_state = loaded["extra"]["permission_runtime"]
+    assert permission_state["parked_request"] is None
+    assert permission_state["last_human_decision"] is None
+    assert not (path.parent / "history").exists()
+
+
+def test_clear_conversation_snapshot_missing_is_noop(tmp_path: Path) -> None:
+    assert clear_conversation_snapshot(cwd=tmp_path, runtime=_permission_runtime()) is None
+
+
+def test_clear_conversation_snapshot_write_failure_preserves_old_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runtime = _permission_runtime()
+    path = write_session_snapshot(
+        cwd=tmp_path,
+        tool_metadata={},
+        messages=_sample_messages(),
+        context=_StubContext(permission_runtime=runtime),  # type: ignore[arg-type]
+    )
+    before = path.read_text(encoding="utf-8")
+
+    def _fail_write(**kwargs: object) -> None:
+        del kwargs
+        raise OSError("disk full")
+
+    monkeypatch.setattr("openharness.services.snapshot._atomic_write", _fail_write)
+
+    with pytest.raises(SnapshotError, match="unable to replace current snapshot"):
+        clear_conversation_snapshot(cwd=tmp_path, runtime=runtime)
+    assert path.read_text(encoding="utf-8") == before
 
 
 class TestPermissionRuntimeSnapshotAmendmentFailures:

@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import TYPE_CHECKING
 
@@ -31,6 +32,7 @@ from openharness.protocols.stream_events import (
 from openharness.protocols.usage import UsageSnapshot
 from openharness.services.compact import (
     CompactResult,
+    FullCompactError,
     auto_compact_if_needed,
     estimate_message_tokens,
     full_compact,
@@ -213,6 +215,45 @@ class TestL2ContextCollapse:
 
 
 class TestL3SessionMemoryReuse:
+    def test_stat_failure_returns_unchanged(self) -> None:
+        class _BrokenStatPath:
+            def exists(self) -> bool:
+                return True
+
+            def stat(self) -> object:
+                raise OSError("stat denied")
+
+        messages = [_user_text(f"msg-{i}") for i in range(20)]
+        path = _BrokenStatPath()
+
+        new_messages, changed = try_session_memory_compaction(messages, path)  # type: ignore[arg-type]
+
+        assert changed is False
+        assert new_messages == messages
+
+    def test_read_failure_returns_unchanged(self) -> None:
+        class _FreshStat:
+            st_mtime = time.time()
+
+        class _BrokenReadPath:
+            def exists(self) -> bool:
+                return True
+
+            def stat(self) -> _FreshStat:
+                return _FreshStat()
+
+            def read_text(self, *, encoding: str) -> str:
+                assert encoding == "utf-8"
+                raise UnicodeDecodeError("utf-8", b"x", 0, 1, "invalid")
+
+        messages = [_user_text(f"msg-{i}") for i in range(20)]
+        path = _BrokenReadPath()
+
+        new_messages, changed = try_session_memory_compaction(messages, path)  # type: ignore[arg-type]
+
+        assert changed is False
+        assert new_messages == messages
+
     def test_no_checkpoint_path_returns_unchanged(self) -> None:
         messages = [_user_text(f"msg-{i}") for i in range(20)]
         new_messages, changed = try_session_memory_compaction(messages, None)
@@ -273,6 +314,70 @@ class TestL3SessionMemoryReuse:
 
 class TestL4FullCompact:
     @pytest.mark.asyncio
+    async def test_prompt_preserves_structured_context_evidence(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: dict[str, object] = {}
+
+        async def _capture_prompt(**kwargs: object) -> str:
+            seen["system_prompt"] = str(kwargs["system_prompt"])
+            seen["messages"] = kwargs["messages"]
+            return "<summary>compact</summary>"
+
+        monkeypatch.setattr("openharness.services.compact.summarize", _capture_prompt)
+        messages = [_user_text(f"msg-{i}") for i in range(5)]
+
+        _new_messages, changed = await full_compact(
+            messages,
+            model="qwen-plus",
+            api_client=_StubLLMClient("unused"),
+            preserve_recent=2,
+        )
+
+        assert changed is True
+        prompt = str(seen["system_prompt"])
+        assert "Tool/Skill provenance" in prompt
+        assert "opaque identifiers" in prompt
+        assert "verbatim" in prompt
+        assert "chronological order" in prompt
+        assert "latest error" in prompt
+        assert "most recent evidence" in prompt
+        assert "filler" in prompt
+        summary_messages = seen["messages"]
+        assert isinstance(summary_messages, list)
+        final_message = summary_messages[-1]
+        assert isinstance(final_message, ConversationMessage)
+        assert final_message.role == "user"
+        final_text = final_message.content[0]
+        assert isinstance(final_text, TextBlock)
+        assert "summarize the preceding conversation now" in final_text.text.lower()
+        assert "every uppercase key=value marker line" in final_text.text.lower()
+        assert "synthetic tool-use envelope" in final_text.text.lower()
+
+    @pytest.mark.asyncio
+    async def test_default_timeout_allows_long_context_summarization(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: dict[str, float] = {}
+
+        async def _capture_timeout(**kwargs: object) -> str:
+            seen["timeout_seconds"] = float(kwargs["timeout_seconds"])
+            return "<summary>compact</summary>"
+
+        monkeypatch.setattr("openharness.services.compact.summarize", _capture_timeout)
+        messages = [_user_text(f"msg-{i}") for i in range(5)]
+
+        _new_messages, changed = await full_compact(
+            messages,
+            model="qwen-plus",
+            api_client=_StubLLMClient("unused"),
+            preserve_recent=2,
+        )
+
+        assert changed is True
+        assert seen["timeout_seconds"] == 120.0
+
+    @pytest.mark.asyncio
     async def test_too_few_messages_skips(self) -> None:
         # < preserve_recent=12, no work to do
         client = _StubLLMClient(response="<summary>x</summary>")
@@ -320,6 +425,103 @@ class TestL4FullCompact:
         assert changed is False
         assert new_messages == messages
 
+    @pytest.mark.asyncio
+    async def test_explicit_unexpected_failure_reports_type_only(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def _unexpected(**_kwargs: object) -> str:
+            raise ValueError("sensitive implementation detail")
+
+        monkeypatch.setattr("openharness.services.compact.summarize", _unexpected)
+        messages = [_user_text(f"msg-{i}") for i in range(5)]
+
+        with pytest.raises(FullCompactError, match=r"^summarization failed: ValueError$"):
+            await full_compact(
+                messages,
+                model="qwen-plus",
+                api_client=_StubLLMClient("unused"),
+                preserve_recent=2,
+                raise_on_failure=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_empty_summary_fail_open_returns_unchanged(self) -> None:
+        messages = [_user_text(f"msg-{i}") for i in range(5)]
+
+        new_messages, changed = await full_compact(
+            messages,
+            model="qwen-plus",
+            api_client=_StubLLMClient("   "),
+            preserve_recent=2,
+        )
+
+        assert changed is False
+        assert new_messages == messages
+
+    @pytest.mark.asyncio
+    async def test_explicit_timeout_reports_timeout_budget(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def _timeout(**_kwargs: object) -> str:
+            raise asyncio.TimeoutError
+
+        monkeypatch.setattr("openharness.services.compact.summarize", _timeout)
+        messages = [_user_text(f"msg-{i}") for i in range(5)]
+
+        with pytest.raises(
+            FullCompactError,
+            match=r"summarization timed out after 25s",
+        ):
+            await full_compact(
+                messages,
+                model="qwen-plus",
+                api_client=_StubLLMClient("unused"),
+                timeout_seconds=25,
+                preserve_recent=2,
+                raise_on_failure=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_explicit_provider_failure_reports_safe_typed_summary(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def _provider_failure(**_kwargs: object) -> str:
+            raise RequestFailure("bad request for sk-secret-value", status_code=400)
+
+        monkeypatch.setattr("openharness.services.compact.summarize", _provider_failure)
+        messages = [_user_text(f"msg-{i}") for i in range(5)]
+
+        with pytest.raises(FullCompactError) as caught:
+            await full_compact(
+                messages,
+                model="qwen-plus",
+                api_client=_StubLLMClient("unused"),
+                preserve_recent=2,
+                raise_on_failure=True,
+            )
+
+        message = str(caught.value)
+        assert (
+            message == "summarization failed: RequestFailure (HTTP 400): bad request for [redacted]"
+        )
+        assert "sk-secret-value" not in message
+
+    @pytest.mark.asyncio
+    async def test_explicit_empty_summary_reports_no_usable_summary(self) -> None:
+        messages = [_user_text(f"msg-{i}") for i in range(5)]
+
+        with pytest.raises(
+            FullCompactError,
+            match="summarizer returned no usable summary",
+        ):
+            await full_compact(
+                messages,
+                model="qwen-plus",
+                api_client=_StubLLMClient("   "),
+                preserve_recent=2,
+                raise_on_failure=True,
+            )
+
 
 # ---------------------------------------------------------------------------
 # 5. Orchestrator escalation order
@@ -327,6 +529,27 @@ class TestL4FullCompact:
 
 
 class TestAutoCompactEscalation:
+    @pytest.mark.asyncio
+    async def test_default_l4_timeout_is_forwarded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        seen: dict[str, float] = {}
+
+        async def _capture_timeout(
+            messages: list[ConversationMessage], **kwargs: object
+        ) -> tuple[list[ConversationMessage], bool]:
+            seen["timeout_seconds"] = float(kwargs["timeout_seconds"])
+            return messages, False
+
+        monkeypatch.setattr("openharness.services.compact.full_compact", _capture_timeout)
+        messages = [_user_text("x" * 1_000) for _ in range(200)]
+
+        await auto_compact_if_needed(
+            messages,
+            model="qwen-plus",
+            api_client=_StubLLMClient("unused"),
+        )
+
+        assert seen["timeout_seconds"] == 120.0
+
     @pytest.mark.asyncio
     async def test_below_threshold_no_op(self) -> None:
         # 2 short messages → way under any threshold

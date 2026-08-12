@@ -52,6 +52,11 @@ class TestQueryContext:
     def test_max_turns_defaults_to_model_terminated(self, context: QueryContext) -> None:
         assert context.max_turns is None
 
+    def test_full_compact_timeout_allows_long_context_summarization(
+        self, context: QueryContext
+    ) -> None:
+        assert context.compact_full_timeout_s == 120.0
+
     def test_max_turns_override_accepted(self) -> None:
         ctx = QueryContext(
             api_client=_stub_client(),

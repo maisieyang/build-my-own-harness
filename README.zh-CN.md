@@ -255,8 +255,16 @@ $EDITOR .env
 从当前 checkout 启动 Agent：
 
 ```bash
+# 使用当前配置的交互姿态
 uv run oh
+
+# 明确启用自动 exact-request reviewer 与 verified sandbox
+uv run oh --auto --sandbox
 ```
+
+普通交互工作使用第一条命令。无人值守 dogfood 使用第二条命令：精确权限请求会交给
+自动 reviewer，同时本地执行仍位于 verified sandbox 内。这些参数只影响本次启动，
+不会修改 `.env` 默认值。
 
 看到 `>>>` 后，直接输入任务即可开始。输入 `/` 可以打开当前 session 的命令菜单。
 

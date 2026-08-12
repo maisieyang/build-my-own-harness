@@ -1250,18 +1250,24 @@ def _split_slash_invocation(prompt: str) -> tuple[str, str]:
 
 
 def _emit_skill_catalog(skill_store: SkillStore) -> None:
-    """Render ``/skills`` output — alphabetical ``<name>  <description>``
-    (D38.4). Empty catalog → ``(no skills installed)``.
-    """
+    """Render a compact human catalog; full metadata loads with the Skill."""
     catalog = skill_store.discover()
     if not catalog:
         typer.echo("(no skills installed)")
         return
     names = sorted(catalog.keys())
     width = max(len(n) for n in names)
+    # Keep the directory scan-friendly even when a Claude Code-format Skill
+    # uses a YAML block scalar for routing details. The complete description
+    # remains in the Skill object and the model-facing catalog; only this
+    # human menu is summarized.
+    description_width = max(24, 100 - width - 4)
     for name in names:
         skill = catalog[name]
-        typer.echo(f"  {name.ljust(width)}  {skill.description}")
+        description = " ".join(skill.description.split())
+        if len(description) > description_width:
+            description = f"{description[: description_width - 1].rstrip()}…"
+        typer.echo(f"  {name.ljust(width)}  {description}")
 
 
 def _emit_memory_catalog(memory_store: MemoryStore | None, memory_dir: Path | None) -> None:
@@ -1647,7 +1653,9 @@ async def _run_chat(
             estimate_message_tokens as _goal_estimate_tokens,
         )
         from openharness.services.snapshot import (
+            SnapshotError,
             append_messages_to_snapshot,
+            clear_conversation_snapshot,
             update_permission_runtime_snapshot,
         )
 
@@ -1766,6 +1774,14 @@ async def _run_chat(
                     goal = None
                     goal_auto_turns = 0
                 history = []
+                permission_runtime.clear_pending_state()
+                try:
+                    clear_conversation_snapshot(cwd=env.cwd, runtime=permission_runtime)
+                except SnapshotError as exc:
+                    typer.echo(
+                        f"(/clear snapshot failed: {exc}; old conversation may still resume)",
+                        err=True,
+                    )
                 if cleared_goal is None:
                     typer.echo("(conversation cleared)")
                 else:
@@ -1978,6 +1994,12 @@ async def _run_chat(
                 # to the last exchange (2) and, when it still doesn't apply,
                 # report the real reason.
                 _explicit_preserve = 2
+                if len(history) <= _explicit_preserve:
+                    typer.echo(
+                        f"(/compact: nothing to compact; history has {len(history)} "
+                        f"message(s), all within the preserved tail of {_explicit_preserve})"
+                    )
+                    continue
                 try:
                     new_history, did_apply = await full_compact(
                         history,
@@ -1986,16 +2008,15 @@ async def _run_chat(
                         max_tokens=settings.compact.full_compact_max_tokens,
                         timeout_seconds=settings.compact.full_compact_timeout_s,
                         preserve_recent=_explicit_preserve,
+                        raise_on_failure=True,
                     )
                 except Exception as exc:
                     typer.echo(f"(/compact failed: {exc})", err=True)
                     continue
                 if not did_apply:
                     typer.echo(
-                        f"(/compact: history has {len(history)} message(s); "
-                        f"nothing older than the preserved tail of "
-                        f"{_explicit_preserve} to fold, or the summarize call "
-                        "did not apply — history unchanged)"
+                        "(/compact failed: summarizer did not apply a compacted history; "
+                        "history unchanged)"
                     )
                     continue
                 history = new_history

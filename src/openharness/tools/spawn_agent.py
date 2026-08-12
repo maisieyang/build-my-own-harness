@@ -2,8 +2,8 @@
 
 The capability Phase 6 unlocks: the LLM can call ``Agent(description=...,
 prompt=...)`` like any other tool. ``execute`` builds a sub-:class:`QueryContext`
-via ``dataclasses.replace`` (inheriting most fields, overriding
-``system_prompt`` / ``max_turns`` / ``agent_depth``), drives the **same**
+via ``dataclasses.replace`` (inheriting every runtime field by default and
+incrementing ``agent_depth``), drives the **same**
 :func:`run_query` against the same engine, collects the sub-agent's final
 assistant text, and returns it as a single :class:`ToolResult`.
 
@@ -14,10 +14,11 @@ exactly like they see ``Read`` — the fact that ``execute`` internally
 re-enters ``run_query`` is an implementation detail of this one
 ``BaseTool`` subclass.
 
-Per ``decisions/13``:
+Runtime contract:
 
-- D16.2: inherit most QueryContext fields; override only
-  ``system_prompt`` / ``max_turns`` / ``agent_depth``
+- inherit all QueryContext fields by default, including the parent's optional
+  ``max_turns`` circuit breaker; a specialized variant may explicitly override
+  ``system_prompt`` or ``max_turns``
 - D16.4: parent's conversation grows by exactly one tool_use/tool_result
   pair regardless of sub-agent length (internal events not surfaced)
 - D16.5: depth check lives ENTIRELY in ``execute`` — engine is
@@ -71,7 +72,8 @@ class SpawnAgent(BaseTool[SpawnAgentInput]):
     description = (
         "Delegate a sub-task to a fresh agent loop with its own conversation "
         "context. The sub-agent receives `prompt` as its initial user message, "
-        "runs independently through tool dispatch (with its own turn budget), "
+        "runs independently through tool dispatch (inheriting your optional "
+        "turn circuit breaker), "
         "and returns its final text response as the tool result. Use when a "
         "sub-task warrants isolated context — e.g., focused research that "
         "would clutter your main conversation, or a multi-step investigation "
@@ -89,7 +91,7 @@ class SpawnAgent(BaseTool[SpawnAgentInput]):
         name: str = "Agent",
         description: str | None = None,
         system_prompt: str | None = None,
-        max_turns: int = 20,
+        max_turns: int | None = None,
         tool_filter: set[str] | None = None,  # noqa: ARG002 — D16.3 forward-compat
     ) -> None:
         """Construct a configurable :class:`SpawnAgent` variant.
@@ -110,7 +112,7 @@ class SpawnAgent(BaseTool[SpawnAgentInput]):
         if description is not None:
             self.description = description
         self._sub_system_prompt = system_prompt
-        self._max_turns = max_turns
+        self._max_turns_override = max_turns
 
     async def execute(
         self,
@@ -144,13 +146,17 @@ class SpawnAgent(BaseTool[SpawnAgentInput]):
         # tool_registry, same canonical profile/boundary, same hook_registry, same
         # skill_store, same cwd, same model, same max_tokens, same
         # reviewer/execution postures. Only the
-        # three fields per D16.2 change.
+        # Agent depth always changes. System prompt and max_turns change only
+        # for an explicitly configured specialized variant; the default Agent
+        # inherits the parent's optional circuit breaker (including None).
         sub_context = dataclasses.replace(
             parent,
             system_prompt=self._sub_system_prompt
             if self._sub_system_prompt is not None
             else parent.system_prompt,
-            max_turns=self._max_turns,
+            max_turns=parent.max_turns
+            if self._max_turns_override is None
+            else self._max_turns_override,
             agent_depth=parent.agent_depth + 1,
         )
 
@@ -177,7 +183,7 @@ class SpawnAgent(BaseTool[SpawnAgentInput]):
             # as ToolError in the parent's dispatch loop).
             return ToolResult(
                 is_error=True,
-                output=(f"sub-agent exceeded max_turns={self._max_turns} without completing"),
+                output=(f"sub-agent exceeded max_turns={sub_context.max_turns} without completing"),
             )
 
         if final_event is None:

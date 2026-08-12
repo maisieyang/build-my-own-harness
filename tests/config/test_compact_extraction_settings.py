@@ -32,7 +32,7 @@ class TestCompactSettingsDefaults:
         assert s.enabled is True
         assert s.threshold_ratio == 0.83
         assert s.full_compact_max_tokens == 20_000
-        assert s.full_compact_timeout_s == 25.0
+        assert s.full_compact_timeout_s == 120.0
 
     def test_threshold_ratio_bounds(self) -> None:
         # 0.0 and 1.0 inclusive per Field(ge=0.0, le=1.0)

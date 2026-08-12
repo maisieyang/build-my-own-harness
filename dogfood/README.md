@@ -14,6 +14,32 @@
 两条路径必须共享 fixture、初始状态、启动命令、输入文本和验收标准。自动化可以收集
 证据、重置 fixture 和断言结果，但不能用 mock 替代真实模型或产品 runtime。
 
+## 自动化 Runner
+
+Runner 只允许手动触发，不接入 CI。它使用真实 `oh` 进程、当前 `.env` 中配置的
+模型和真实工具，并通过 PTY 保持 `stdin/stdout isatty=True`，走与手动操作相同的
+prompt-toolkit REPL 路径。先执行不调用模型的 fixture 检查：
+
+```bash
+uv run python -m dogfood.repl_runner --prepare-only
+```
+
+再按需运行一组 live dogfood：
+
+```bash
+# DPG-001～003：Default、Plan approve 与基础 Goal
+uv run python -m dogfood.repl_runner --suite core
+
+# DPG-004～005：Plan keep/discard 与 Goal auto-continue
+uv run python -m dogfood.repl_runner --suite depth
+
+# 运行全部 case；会产生多次真实模型调用
+uv run python -m dogfood.repl_runner --suite all
+```
+
+单次等待默认最多 900 秒，可使用 `--timeout` 显式调整。Runner 会实时转发 REPL
+输出，并把 transcript、fixture hash、验证输出和结构化结果写入 `.dogfood/artifacts/`。
+
 ## 证据优先级
 
 1. 外部状态：文件 hash、文件内容、命令退出状态和测试输出。
@@ -42,8 +68,25 @@
 
 - [`repl-core-workflows.md`](./cases/repl-core-workflows.md)：Default、Plan 与 Goal 基础链路。
 - [`repl-controller-depth.md`](./cases/repl-controller-depth.md)：Plan 分支与 Goal 自动续跑。
+- [`context-management-lifecycle.md`](./cases/context-management-lifecycle.md)：Context 的来源、
+  Tool Result、Skills、Compact、Snapshot/Resume、Plugins 与 Agent 隔离。
+
+Context suite 使用一个不会调用模型的只读 inspector 收集阶段证据：
+
+```bash
+uv run python -m dogfood.context_inspector prepare \
+  --target .dogfood/work/context-management-20260812-01
+
+uv run python -m dogfood.context_inspector capture \
+  --cwd .dogfood/work/context-management-20260812-01 \
+  --run-id 20260812-context-01 \
+  --label 00-before-session
+```
+
+完整手动输入、双终端操作方式和通过标准见对应 runbook。
 
 ## 后续扩展
 
-后续 case 将覆盖 permission parking 与审批、resume 与 snapshot、compaction、skill、
-command、长程任务，以及工具或 provider 失败后的恢复。
+后续 case 将继续覆盖 permission parking 与审批、长程任务，以及工具或 provider 失败
+后的恢复。Context suite 先手动执行；契约稳定后，再把相同输入和 inspector 断言接入
+PTY runner。

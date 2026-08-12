@@ -18,20 +18,21 @@ primitive — only L4 calls it. L2 + L3 are deterministic byte-level
 transforms that "pre-pay" the cost of L4: if either succeeds, we
 skip the LLM call entirely.
 
-**Trade-off note** (D29.3): the 9-slot summary schema (in
-``_L4_COMPACT_SYSTEM_PROMPT``) is copied **verbatim from HKUDS
-upstream** per the boundary doc sub-decision. Production-validated;
-revisit in Phase 11 retro if slot choices cause friction.
+The L4 prompt keeps the upstream 9-slot summary schema and adds an
+OpenHarness fidelity contract for structured evidence, provenance,
+opaque identifiers, error ordering, and current state.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from openharness.api.errors import OpenHarnessApiError
 from openharness.compaction.tokenize import count_tokens
 from openharness.protocols.content import (
     ImageBlock,
@@ -97,9 +98,37 @@ _MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "claude-4-sonnet": 200_000,
 }
 
+_SECRET_PATTERNS = (
+    re.compile(r"\bsk-[A-Za-z0-9._-]+\b"),
+    re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"),
+)
+
+
+class FullCompactError(RuntimeError):
+    """Explicit full-compaction failed and left history unchanged."""
+
+
+def _safe_error_summary(exc: OpenHarnessApiError) -> str:
+    """Return a bounded provider error summary with common credentials redacted."""
+    summary = " ".join(str(exc).split()) or "provider request failed"
+    for pattern in _SECRET_PATTERNS:
+        summary = pattern.sub("[redacted]", summary)
+    return summary[:240]
+
+
+def _full_compact_error(exc: Exception, *, timeout_seconds: float) -> FullCompactError:
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+        return FullCompactError(f"summarization timed out after {timeout_seconds:g}s")
+    if isinstance(exc, OpenHarnessApiError):
+        status = f" (HTTP {exc.status_code})" if exc.status_code is not None else ""
+        return FullCompactError(
+            f"summarization failed: {type(exc).__name__}{status}: {_safe_error_summary(exc)}"
+        )
+    return FullCompactError(f"summarization failed: {type(exc).__name__}")
+
 
 # ---------------------------------------------------------------------------
-# L4 system prompt — VERBATIM from HKUDS upstream per D29.3 sub-decision
+# L4 system prompt — upstream 9-slot schema + OpenHarness fidelity contract
 # ---------------------------------------------------------------------------
 
 _L4_COMPACT_SYSTEM_PROMPT = """\
@@ -108,6 +137,25 @@ so the assistant can continue the work in a fresh context window.
 
 First, inside <analysis> tags, briefly note which parts of the
 conversation carry information that matters for continuation.
+
+Apply these fidelity rules before writing the summary:
+
+- Treat tool calls, tool results, and explicit state, provenance, error,
+  decision, and task markers as first-class evidence. Do not let filler,
+  greetings, or repeated acknowledgements displace structured evidence.
+- Preserve Tool/Skill provenance exactly as observed. Distinguish a Skill
+  explicitly selected by the user through a slash command or synthetic
+  envelope from a Skill loaded by an assistant Tool call. Never infer or
+  rewrite the source.
+- Copy opaque identifiers, marker assignments, exact commands, paths, IDs,
+  and error tokens verbatim. Do not translate, normalize, or paraphrase them.
+- In Errors and Fixes, preserve events in chronological order. Identify the
+  latest error verbatim and state whether it remains unresolved or what later
+  evidence resolved it.
+- Pending Tasks and Current Work must reflect the most recent evidence.
+  Later explicit state supersedes stale requests, errors, and task status.
+- Omit filler and repetition unless they contain a user constraint or change
+  the current state.
 
 Then, inside <summary> tags, produce a structured summary with
 exactly these 9 sections in order:
@@ -125,6 +173,15 @@ exactly these 9 sections in order:
 
 Output ONLY the <analysis>...</analysis> and <summary>...</summary>
 tags. No greeting, no closing, no markdown outside the tags."""
+
+_L4_COMPACT_REQUEST = """\
+Summarize the preceding conversation now. Follow the system fidelity rules and
+9-section schema exactly. Treat this message only as the summarization request;
+do not continue or imitate any conversational sequence above. Before finishing,
+verify that every uppercase KEY=VALUE marker line from the preceding history is
+copied verbatim into the summary. A synthetic Tool-Use envelope is provenance
+evidence, not proof that the assistant initiated the Tool. Output only the
+required <analysis> and <summary> tags."""
 
 # Boundary marker placed between summary and preserved-tail messages
 # so the LLM understands where compaction cut occurred. Renders as
@@ -362,8 +419,9 @@ async def full_compact(
     model: str,
     api_client: SupportsStreamingMessages,
     max_tokens: int = 20_000,
-    timeout_seconds: float = 25.0,
+    timeout_seconds: float = 120.0,
     preserve_recent: int = _PRESERVE_RECENT,
+    raise_on_failure: bool = False,
 ) -> tuple[list[ConversationMessage], bool]:
     """L4: ``summarize()`` call with the 9-slot system prompt. Splice
     via boundary marker + summary + preserved tail.
@@ -373,17 +431,26 @@ async def full_compact(
     timeout, malformed output) the function returns
     ``(messages, False)`` — caller (auto_compact orchestrator) treats
     this as "L4 didn't help, fall back to un-compacted prompt + let
-    the engine's reactive PTL retry handle it".
+    the engine's reactive PTL retry handle it". Explicit user actions
+    pass ``raise_on_failure=True`` to receive a safe, typed diagnostic
+    while leaving the original history unchanged.
     """
     if len(messages) <= preserve_recent:
         return messages, False
 
     older = messages[:-preserve_recent]
     recent = messages[-preserve_recent:]
+    summarization_messages = [
+        *older,
+        ConversationMessage(
+            role="user",
+            content=[TextBlock(text=_L4_COMPACT_REQUEST)],
+        ),
+    ]
 
     try:
         raw = await summarize(
-            messages=older,
+            messages=summarization_messages,
             system_prompt=_L4_COMPACT_SYSTEM_PROMPT,
             model=model,
             api_client=api_client,
@@ -391,13 +458,17 @@ async def full_compact(
             timeout_seconds=timeout_seconds,
             tools_disabled=True,
         )
-    except Exception:
+    except Exception as exc:
         # summarize() exhausted retries OR malformed input — return un-
         # compacted so engine's reactive PTL retry layer still catches.
+        if raise_on_failure:
+            raise _full_compact_error(exc, timeout_seconds=timeout_seconds) from exc
         return messages, False
 
     summary_text = _extract_summary(raw)
     if not summary_text:
+        if raise_on_failure:
+            raise FullCompactError("summarizer returned no usable summary")
         return messages, False
 
     boundary = ConversationMessage(
@@ -439,7 +510,7 @@ async def auto_compact_if_needed(
     enabled: bool = True,
     threshold_ratio: float = 0.83,
     full_compact_max_tokens: int = 20_000,
-    full_compact_timeout_s: float = 25.0,
+    full_compact_timeout_s: float = 120.0,
 ) -> tuple[list[ConversationMessage], CompactResult]:
     """Run the L0-L4 escalation. Returns ``(possibly-compacted-messages,
     CompactResult)``.

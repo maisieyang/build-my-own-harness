@@ -283,8 +283,17 @@ credentials.
 Start the Agent from this checkout:
 
 ```bash
+# Use the configured interactive posture.
 uv run oh
+
+# Explicitly use the automated exact-request reviewer and verified sandbox.
+uv run oh --auto --sandbox
 ```
+
+Use the first command for ordinary interactive work. Use the second for
+unattended dogfood where exact permission requests should be reviewed
+automatically while local execution remains inside the verified sandbox. The
+flags affect only that invocation; they do not change `.env` defaults.
 
 When the `>>>` prompt appears, enter a task to begin. Type `/` to open the
 current session's command menu.

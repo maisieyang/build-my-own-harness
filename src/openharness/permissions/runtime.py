@@ -775,6 +775,20 @@ class PermissionRuntime:
         self.last_decided_request = request
         self._last_decision_resumed = False
 
+    def clear_pending_state(self) -> None:
+        """Drop conversation-bound permission UI state, preserving the ledger.
+
+        ``/clear`` starts a fresh conversation, so an exact request parked by
+        the old transcript and an unconsumed approve/deny transition must not
+        reappear on resume. One-shot grants and denial records remain part of
+        the session authorization ledger and retain their existing semantics.
+        """
+        self.parked_request = None
+        self.parked_reason = None
+        self.last_human_decision = None
+        self.last_decided_request = None
+        self._last_decision_resumed = False
+
     def resume_decided(self) -> PermissionResumeTransition:
         request = self.last_decided_request
         decision = self.last_human_decision

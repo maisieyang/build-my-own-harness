@@ -162,6 +162,41 @@ class TestSkillsBuiltinCommand:
         assert "alphabetically first" in result.stdout
         assert "alphabetically last" in result.stdout
 
+    def test_catalog_collapses_and_truncates_multiline_descriptions(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
+        home = _home(monkeypatch)
+        skill_path = home / ".openharness" / "skills" / "long-description-skill.md"
+        skill_path.parent.mkdir(parents=True, exist_ok=True)
+        skill_path.write_text(
+            """---
+name: long-description-skill
+description: |
+  第一行说明这个 Skill 的适用任务,并且故意写得很长以模拟 Plugin metadata。
+  第二行继续补充输入来源、输出约束和边界条件。
+
+  FULL_DETAIL_SENTINEL 只应在完整 metadata 中出现,不应淹没目录。
+---
+
+Skill body.
+""",
+            encoding="utf-8",
+        )
+        _stub_input_sequence(monkeypatch, ["/skills", "/exit"])
+
+        result = CliRunner().invoke(cli_module.app, ["chat"])
+
+        assert result.exit_code == 0
+        catalog_line = next(
+            line for line in result.stdout.splitlines() if "long-description-skill" in line
+        )
+        assert len(catalog_line) <= 100
+        assert catalog_line.endswith("…")
+        assert "\n  第二行" not in result.stdout
+        assert "FULL_DETAIL_SENTINEL" not in result.stdout
+
     def test_help_text_mentions_slash_skills(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_minimum_env(monkeypatch)
         monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())

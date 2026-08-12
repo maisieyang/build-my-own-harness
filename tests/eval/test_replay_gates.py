@@ -1,10 +1,13 @@
-"""CI 回放门 — 概率层的第一道 CI 级 gate(2026-07-12)。
+"""手动 replay gate — 概率层的确定性回放检查(2026-08-12)。
 
 D41 世代各 eval 的 cassette 回放是**确定性**的(D33.2:replay 永不
 落回 live,零 API 成本),因此它们 ratified 的 pass bar 可以直接作为
-pytest 断言进 CI:任何改动若破坏了「被测 prompt/描述 ↔ 录制行为 ↔ bar」
+pytest 断言:任何改动若破坏了「被测 prompt/描述 ↔ 录制行为 ↔ bar」
 三者的一致性(例如改了 scorer 语义、改了 dataset 而没重录、cassette
 损坏),这里立即红。
+
+整组测试带 ``eval`` marker,默认 CI 用 ``-m \"not integration and not eval\"``
+排除;只有开发者手动触发 replay 时运行。
 
 注意边界:回放门守的是**回归**(录制行为不再通过 scorer),不是模型
 行为本身——模型行为变化要靠重录 + N=4 画像(spike 脚本,手动)。改了
@@ -15,7 +18,7 @@ Bar 出处(各 dataset_card ratified 值):
 - tool_choice     12/12(全稳定绿)
 - skill_trigger   ≥7/9 且 7 稳定绿必须全绿(v2 措辞,ratchet 后)
 - error_feedback  ≥9/11 且 9 稳定绿必须全绿
-- memory_compact  6/6(全稳定绿,B2 / D45)
+- memory_compact  9/9(历史 qwen-max 3 条 + 当前 qwen3.7-max 6 条)
 - verify_judge    13/13(判官与金标一致 + 抗注入 + dogfood 回归,B3 / D45.2)
 - memory_read     6/6(must-read 契约 + restraint,C4 / 面 #4)
 - permission_review 6/6(exact verdict + reviewer lifecycle,G1 / D52)
@@ -56,7 +59,22 @@ from openharness.eval.verify_judge_scorers import VerdictAgreementScorer
 _ROOT = Path(__file__).parents[2] / "evals"
 _MODEL = "qwen-max"
 _ERROR_FEEDBACK_MODEL = "qwen3.7-max"
+_MEMORY_COMPACT_CURRENT_MODEL = "qwen3.7-max"
 _VERIFY_JUDGE_MODEL = "qwen3.7-max"
+
+_MEMORY_COMPACT_LEGACY_CASES = {
+    "MC1-config-facts",
+    "MC3-error-fix-facts",
+    "MC6-noise-exclusion",
+}
+_MEMORY_COMPACT_CURRENT_CASES = {
+    "MC2-decision-facts",
+    "MC4-user-request-facts",
+    "MC5-pending-tasks-facts",
+    "MC7-current-state-supersedes-stale",
+    "MC8-slash-skill-provenance",
+    "MC9-latest-error-ordering",
+}
 
 pytestmark = pytest.mark.eval
 
@@ -131,18 +149,31 @@ class TestReplayGates:
         assert len(passing) >= 9, f"error_feedback bar ≥9/11 broken: passing={len(passing)}"
 
     async def test_memory_compact_replay_holds_bar(self) -> None:
-        results = await run_memory_compact_eval(
-            _ROOT / "memory_compact" / "dataset.yaml",
-            [FactRecallScorer(), NoiseExclusionScorer()],
-            api_client=None,
-            model=_MODEL,
-            cassette_root=_ROOT / "memory_compact" / "cassettes",
-            cassette_mode="replay",
+        results = []
+        cohorts = (
+            (_MODEL, _MEMORY_COMPACT_LEGACY_CASES),
+            (_MEMORY_COMPACT_CURRENT_MODEL, _MEMORY_COMPACT_CURRENT_CASES),
         )
+        for model, case_ids in cohorts:
+            for case_id in sorted(case_ids):
+                results.extend(
+                    await run_memory_compact_eval(
+                        _ROOT / "memory_compact" / "dataset.yaml",
+                        [FactRecallScorer(), NoiseExclusionScorer()],
+                        api_client=None,
+                        model=model,
+                        cassette_root=_ROOT / "memory_compact" / "cassettes",
+                        cassette_mode="replay",
+                        case_id=case_id,
+                        include_candidates=False,
+                    )
+                )
         passing = _passing_ids(results)
-        # B2 bar = 6/6 全稳定绿(dataset_card ratify)
-        assert len(passing) == len(results) == 6, (
-            f"memory_compact bar 6/6 broken: failing={sorted({r.sample.case_id for r in results} - passing)}"
+        # B2 trustworthy baseline is model-cohorted: the three historical
+        # cases retain their qwen-max identity; six newly ratified cases use
+        # the current qwen3.7-max reference policy.
+        assert len(passing) == len(results) == 9, (
+            f"memory_compact bar 9/9 broken: failing={sorted({r.sample.case_id for r in results} - passing)}"
         )
 
     async def test_verify_judge_replay_holds_bar(self) -> None:

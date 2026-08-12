@@ -4,8 +4,9 @@ Drives the memory_compact consumer (loader, fixture catalog, single-shot
 infer, two `=`-grade scorers) over ``evals/memory_compact/dataset.yaml``
 against the currently-configured model. Mirrors spike_tool_choice_eval.
 
-Reference policy (dataset_card declaration 4): qwen-max. Runs on other
-models are information, not gate signals.
+The model comes from project settings (or the CLI's explicit ``--model``
+override). Historical qwen-max cassettes contain MC1-MC6, but only
+MC1/MC3/MC6 remain ratified; candidate policy lives in the dataset card.
 
 Run::
 

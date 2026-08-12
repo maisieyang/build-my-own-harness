@@ -1,8 +1,8 @@
 # REPL Controller 深入链路
 
-状态：DPG-004 与 DPG-005 已由用户在 2026-08-11 手动运行并报告符合预期。首次
-证据不足、Judge 判定未完成、自动续跑、验证完成和 Goal 熄灭的顺序均符合设计。
-自动化 runner 与完整 artifacts 尚未建立，因此这仍是“仅手动通过”。
+状态：DPG-004 与 DPG-005 已完成双线验证。用户于 2026-08-11 手动运行并报告符合
+预期；PTY runner 于 2026-08-12 使用真实模型和工具完成 live 运行。证据保存在
+`.dogfood/artifacts/20260812-depth-01/`。
 
 基础链路通过后，这组实验保持编码任务简单，只增加状态机深度。同一个 session 依次
 验证 Plan 的 `keep planning`、`discard`，以及 Goal 在首次证据不足时的自动续跑。
@@ -85,3 +85,33 @@ Goal 报告完成后输入 `/goal` 查看状态，再输入 `/exit`。
 - 续跑没有携带已有证据或 Judge reason：continuation context 错误。
 - 测试失败却显示完成：证据声明或 Judge verification policy 错误。
 - 测试通过但 Goal 永不结束：Judge false negative 或 controller 终止错误。
+
+## 2026-08-12 自动化运行结果
+
+DPG-004：
+
+- 两轮 Plan 只调用 Read/Grep；没有 Bash、Edit、Write 或 Agent。
+- `2` 保持 Plan，`3` 丢弃并返回 Default。
+- Fixture 前后 hash 完全相同，外部验证保持 `1 failed, 1 passed`。
+
+DPG-005：
+
+- 第一轮只解释问题，没有修改或 Bash。
+- Judge 返回 `goal not met — continuing (1/100)`，controller 自动进入第二轮。
+- 第二轮修改两个 fixture 文件，精确验证得到 `6 passed`。
+- 最终显示 `goal met after 2 checked turns (1 continuation)`。
+- `/goal` 显示没有 active Goal；独立外部 pytest 复跑仍为 `6 passed`。
+
+### 非阻塞发现：隐藏目录 Grep 造成错误推断
+
+DPG-004 第二轮使用 `Grep path='.'` 时，默认 `hidden=false`，因此结果没有包含
+`.dogfood/`。模型随后错误推断用户给出的目标可能是旧路径或 symlink，尽管第一轮
+已经成功读取该文件。这个问题没有破坏 Plan 的只读边界或后续 Goal，但暴露了两点：
+
+1. 对隐藏工作目录执行仓库级搜索时，模型需要显式设置 `hidden=true` 或继续使用精确
+   path；
+2. 模型不应让一次范围更窄的 Grep 结果推翻同一 conversation 中已有的直接 Read
+   证据。
+
+这项发现应作为独立 case 或 tool-use 行为改进处理，不改变 DPG-004/005 的 controller
+通过结论。

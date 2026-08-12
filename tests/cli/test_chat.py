@@ -8,6 +8,7 @@ turns.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 from typer.testing import CliRunner
@@ -28,6 +29,7 @@ from openharness.protocols.usage import UsageSnapshot
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from pathlib import Path
 
     import pytest
 
@@ -204,6 +206,61 @@ class TestBuiltinSlashCommands:
         # Should be exactly 1 user message ("world"), not accumulated history.
         assert len(third_turn_messages) == 1
         assert third_turn_messages[0].role == "user"
+
+    def test_clear_then_exit_persists_empty_snapshot_even_when_auto_writes_disabled(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from openharness.services.snapshot import (
+            SNAPSHOT_SCHEMA,
+            SNAPSHOT_VERSION,
+            get_snapshot_dir,
+            load_snapshot,
+        )
+
+        monkeypatch.chdir(tmp_path)
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("OPENHARNESS_SNAPSHOT__ENABLED", "false")
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _ChatStubClient())
+        snapshot_dir = get_snapshot_dir(tmp_path)
+        snapshot_dir.mkdir(parents=True)
+        (snapshot_dir / "current.json").write_text(
+            json.dumps(
+                {
+                    "version": SNAPSHOT_VERSION,
+                    "schema": SNAPSHOT_SCHEMA,
+                    "created_at": "2026-08-12T08:43:00+00:00",
+                    "git_head": None,
+                    "cwd": str(tmp_path.resolve()),
+                    "model": "qwen3.7-max",
+                    "permission_profile_fingerprint": "old",
+                    "system_prompt": "old prompt",
+                    "max_tokens": 8192,
+                    "messages": [
+                        ConversationMessage(
+                            role="user", content=[TextBlock(text="must not resume")]
+                        ).model_dump(mode="json")
+                    ],
+                    "tool_metadata": {"keep": True},
+                    "extra": {"permission_runtime": {"parked_request": {"old": True}}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        _stub_input_sequence(monkeypatch, ["/clear", "/exit"])
+
+        result = CliRunner().invoke(cli_module.app, ["chat"])
+
+        assert result.exit_code == 0, result.stderr
+        loaded = load_snapshot(tmp_path)
+        assert loaded["messages"] == []
+        assert loaded["tool_metadata"] == {"keep": True}
+        assert loaded["extra"]["permission_runtime"]["parked_request"] is None
+
+        _stub_input_sequence(monkeypatch, ["/exit"])
+        resumed = CliRunner().invoke(cli_module.app, ["chat", "--resume"])
+        assert resumed.exit_code == 0, resumed.stderr
+        assert "resumed: 0 messages" in resumed.stdout
+        assert "must not resume" not in resumed.stdout
 
 
 class TestVerifiedSandboxStatus:

@@ -190,7 +190,7 @@ class TestCompactReplCommand:
 
         monkeypatch.setattr(compact_module, "full_compact", _fake_full_compact)
 
-        _stub_inputs(monkeypatch, ["hi", "/compact", "/exit"])
+        _stub_inputs(monkeypatch, ["hi", "second turn", "/compact", "/exit"])
 
         runner = CliRunner()
         result = runner.invoke(cli_module.app, ["chat"])
@@ -205,19 +205,20 @@ class TestCompactReplCommand:
         monkeypatch.setattr(cli_module, "run_query", fake)
 
         from openharness.services import compact as compact_module
+        from openharness.services.compact import FullCompactError
 
         async def _boom(*_a: object, **_kw: object) -> object:
-            raise RuntimeError("compact bus error")
+            raise FullCompactError("summarization timed out after 25s")
 
         monkeypatch.setattr(compact_module, "full_compact", _boom)
 
-        _stub_inputs(monkeypatch, ["hi", "/compact", "/exit"])
+        _stub_inputs(monkeypatch, ["hi", "second turn", "/compact", "/exit"])
 
         runner = CliRunner()
         result = runner.invoke(cli_module.app, ["chat"])
         # REPL must NOT die on /compact failure
         assert result.exit_code == 0
-        assert "/compact failed" in result.stderr
+        assert "/compact failed: summarization timed out after 25s" in result.stderr
 
 
 # --------------------------------------------------------------------------- #
@@ -278,14 +279,17 @@ class TestCompactExplicitCommandGuard:
             return [summary], True
 
         monkeypatch.setattr(compact_module, "full_compact", _fake_full_compact)
-        _stub_inputs(monkeypatch, ["hi", "/compact", "/exit"])
+        _stub_inputs(monkeypatch, ["hi", "second turn", "/compact", "/exit"])
 
         result = CliRunner().invoke(cli_module.app, ["chat"])
         assert result.exit_code == 0, result.stderr
         # 显式命令传一个小保留窗 (2), 不用 auto 场景的 12 条默认
         assert seen.get("preserve_recent") == 2
+        assert seen.get("raise_on_failure") is True
 
-    def test_honest_message_when_still_nothing_to_do(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_exactly_one_exchange_reports_nothing_to_compact(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         _set_min_env(monkeypatch)
         monkeypatch.setattr(cli_module, "_build_client", lambda _s: _StubClient())
         _, fake = _capture_query_context()
@@ -293,16 +297,15 @@ class TestCompactExplicitCommandGuard:
 
         from openharness.services import compact as compact_module
 
-        async def _fake_full_compact(
+        async def _unexpected_full_compact(
             messages: list[ConversationMessage], **_kwargs: object
         ) -> tuple[list[ConversationMessage], bool]:
-            return messages, False  # 守卫未过
+            raise AssertionError(f"should not summarize {len(messages)} messages")
 
-        monkeypatch.setattr(compact_module, "full_compact", _fake_full_compact)
+        monkeypatch.setattr(compact_module, "full_compact", _unexpected_full_compact)
         _stub_inputs(monkeypatch, ["hi", "/compact", "/exit"])
 
         result = CliRunner().invoke(cli_module.app, ["chat"])
         assert result.exit_code == 0, result.stderr
-        # 不再撒谎说 "nothing to summarize" -- 报出真实原因 (消息数与保留窗)
-        assert "nothing to summarize" not in result.stdout
-        assert "preserved tail" in result.stdout or "messages" in result.stdout
+        assert "/compact: nothing to compact" in result.stdout
+        assert "history has 2 message(s)" in result.stdout

@@ -126,7 +126,7 @@ class QueryContext:
     compact_enabled: bool = True
     compact_threshold_ratio: float = 0.83
     compact_full_max_tokens: int = 20_000
-    compact_full_timeout_s: float = 25.0
+    compact_full_timeout_s: float = 120.0
     # When set, compact L3 reads this 5-slot checkpoint file (written
     # by ``services.session_memory.update_session_memory_file``) to
     # skip the L4 LLM call entirely. ``None`` (default) skips L3 — L0
@@ -195,7 +195,7 @@ class QueryContext:
         compact_enabled: bool = True,
         compact_threshold_ratio: float = 0.83,
         compact_full_max_tokens: int = 20_000,
-        compact_full_timeout_s: float = 25.0,
+        compact_full_timeout_s: float = 120.0,
         max_turns: int | None = None,
         max_agent_depth: int = 3,
     ) -> tuple[QueryContext, list[ConversationMessage]]:

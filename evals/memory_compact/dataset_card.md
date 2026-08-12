@@ -1,6 +1,6 @@
 # memory_compact Eval Dataset Card
 
-> D45 / 决策面 #1 B2 · 2026-07-23 · four-declaration header(D35.3 + D41.5)
+> D45 / 决策面 #1 B2 · 2026-08-12 · four-declaration header(D35.3 + D41.5)
 
 ## Declarations(四声明头)
 
@@ -16,11 +16,17 @@
 - L1-L3 分级压缩的触发逻辑(那是确定性代码,归 TDD)
 
 **2. Input spec**:每 case = 一段 ~28 条消息的合成对话(> preserve_recent=12,
-才会触发 full_compact),关键事实埋在**中段**(会被压掉的 older 区)。N=6:
-5 个 fact-recall(各埋 3 个事实,分别对应 9-slot 的 Primary Request /
-Decisions / Errors&Fixes / User Request / Pending Tasks 槽)+ 1 个
-noise-exclusion(既测事实保留、又测逐字填充语不该进摘要的双向探针)。
-扩量走 D41.6 飞轮。
+才会触发 full_compact),关键事实埋在**中段**(会被压掉的 older 区)。当前 N=9：
+
+- 历史 ratified 3 cases：MC1、MC3、MC6，reference model 为 `qwen-max`；
+- 修复后重新 ratified 3 cases：MC2、MC4、MC5。它们原本各有一个 must-recall 事实落在
+  preserved tail，移入真正被摘要的 older 区后由 `qwen3.7-max` 重新 live/record；
+- dogfood ratified 3 cases：MC7～MC9，分别验证最新状态覆盖旧状态、Slash Skill
+  provenance、错误时间顺序，reference model 为 `qwen3.7-max`。
+
+当前 9 条均为 `status: ratified`。确定性 dataset 测试要求每个 `must_recall` 都真实出现
+在 `messages[:-12]`，防止 preserved tail 假阳性复发。未来新增 case 仍应先标记为
+`candidate`，完成 live → record → replay 后再晋级。
 
 **3. Judgment spec**:全确定性 keyword,零 LLM-judge。**种植事实回收
 (D45.1 核心手法)**:摘要没有唯一正确答案(措辞无穷),但"关键事实在不在"
@@ -29,18 +35,20 @@ noise-exclusion(既测事实保留、又测逐字填充语不该进摘要的双�
   出现在 summary;任一缺失 → FAIL 并点名;did_apply=False → 必 FAIL
 - `noise_exclusion`(binary)— must_not_recall 噪声不得出现;空列表 vacuous
 
-**4. Reference policy**:参照模型 **qwen-max**(与其余 eval 一致,跨 eval
-可比)。注意:**参照模型 qwen-max ≠ 生产/benchmark 用的 qwen3.7-max**——
-eval 测的是"参照系上 harness 逻辑/prompt 没坏",非"今日部署模型好坏"
-(D41.5)。qwen-max 上限更低更挑剔,反而更易逼出兼容 bug(见 F15/F16)。
+**4. Reference policy**:所有新 live/record 都使用项目 `.env` 当前配置的
+`OPENHARNESS_MODEL`；CLI 的 `--model` 只作为本次显式覆盖。脚本不提供历史模型的隐式
+fallback。2026-07-23 的历史 cassette 身份仍是 `qwen-max`；其中 MC1、MC3、MC6
+继续作为可信 replay baseline。MC2、MC4、MC5 与 MC7～MC9 的当前可信 cassette 均为
+2026-08-12 使用 `qwen3.7-max` 录制。稳定 gate 按 model cohort 回放，不篡改历史模型身份。
 
-## Pass bar(ratify 2026-07-23)
+## Pass bar
 
-- **Gate:qwen-max 上 `cases all-dims-pass = 6/6`**(全稳定绿)。
-- 依据(N=4 画像):6,6,6,6 /6——四轮零方差全绿。9-slot 摘要在 8192 token
-  预算下把全部埋入事实保住、噪声未漏。bar 满格有画像支撑(同 tool_choice)。
+- **可信 ratified baseline**：9/9；历史 `qwen-max` cohort 3/3，当前
+  `qwen3.7-max` cohort 6/6。
+- **promotion bar**：candidate 必须在 `.env` 当前模型上定向 live 通过，再逐条 record
+  并 replay；不能先写 cassette 再反向降低 scorer 或断言。
 
-## 建设中挖出的 harness 真 bug(eval 的价值实证)
+## 建设中挖出的真 bug
 
 B2 第一次真跑(qwen-max)连挖两个跨 provider 兼容 bug,层层剥笋:
 - **F15**(已修,同批 commit):`summarize` 用 `tools=[]` 禁用工具,translation
@@ -51,12 +59,43 @@ B2 第一次真跑(qwen-max)连挖两个跨 provider 兼容 bug,层层剥笋:
   任何低上限 provider 会挂。eval 用 8192(短摘要绰绰有余)规避;生产的
   "按模型夹取 max_tokens"是独立切片(需模型上限表),记 backlog。
 
-**两个 bug 都是 qwen-max 挑出来的,qwen3.7-max 一个不报——用更严的参照
-模型是意外的好处。** 这正是 eval 的价值:在挑剔环境替你跑一遍,把"恰好
-没爆"的隐患提前暴露。
+这两个 bug 都由历史 `qwen-max` ratification 暴露。保留这段记录是为了说明旧 cassette
+的来源，不用于决定今天 live eval 应读取哪个模型。
+
+2026-08-12 又发现一个 eval 自身的假阳性：`_extract_summary_from_messages` 把模型生成的
+summary 与 12 条 preserved recent messages 全部拼进 `summary_text`。MC2 的“蓝绿”、
+MC4 的“UTF-8/BOM”、MC5 的“v2”都位于 recent tail，因此旧 scorer 即使摘要丢事实也会
+通过。修复后 evaluator 只提取 `Summary of prior conversation:` 对应的生成摘要；三条
+fixture 的事实也已移入 older 区；MC2、MC4、MC5 随后按当前 reference policy 重新
+live/record/replay 并晋级 ratified。
+
+2026-08-12 的 candidate ratification 又发现两个生产缺陷。第一，原 L4 prompt 没有明确
+要求保留 Tool/Skill provenance、opaque marker、错误时间顺序和最新状态，MC8/MC9 live
+会静默丢事实。第二，`full_compact` 直接以历史最后一条 assistant message 结束请求；
+MC9 因而把“填充回复 15”续写成“填充消息 16”，而不是执行摘要。修复为：保留 9-slot
+schema，同时加入 fidelity contract；并在待摘要历史末尾追加专用 user summarization
+request，明确禁止续写对话序列、要求逐字核对 `KEY=VALUE` marker 与 synthetic envelope
+provenance。MC8 曾在首次 record 时暴露一次不稳定遗漏，prompt 再收紧后重新 live/record
+通过；失败 cassette 已被同 case/model 的通过记录覆盖。最终 6 条新 cohort replay 6/6。
 
 ## Cassettes & results
 
-- `cassettes/qwen-max/infer/` — 6 case 回放基线(record 6/6;回放一致已验证)
-- `results/qwen-max-run{1..4}.txt` — N=4 画像原始输出
-- 复跑:`uv run oh dev eval memory_compact --mode replay`
+- `cassettes/qwen-max/infer/` — MC1～MC6 历史记录；当前 replay gate 只采信
+  MC1、MC3、MC6
+- `cassettes/qwen3.7-max/infer/` — MC2、MC4、MC5、MC7、MC8、MC9 当前可信记录
+- `results/qwen-max-run{1..4}.txt` — 历史 N=4 画像原始输出
+- 稳定基线 replay gate：
+  `uv run pytest tests/eval/test_replay_gates.py -k memory_compact -q`
+- 手动定向运行（会读取 `.env` 的 `OPENHARNESS_MODEL`）：
+
+```bash
+uv run oh dev eval memory_compact --mode live --case MC7-current-state-supersedes-stale
+uv run oh dev eval memory_compact --mode live --case MC8-slash-skill-provenance
+uv run oh dev eval memory_compact --mode live --case MC9-latest-error-ordering
+uv run oh dev eval memory_compact --mode live --case MC2-decision-facts
+uv run oh dev eval memory_compact --mode live --case MC4-user-request-facts
+uv run oh dev eval memory_compact --mode live --case MC5-pending-tasks-facts
+```
+
+新增或修改 case 时，先用 `live` 运行；全部符合预期后改为 `record`，最后用 `replay`
+确认 cassette 与 scorer 契约。2026-08-12 上述六条已完成完整链路并晋级 ratified。

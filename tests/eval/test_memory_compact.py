@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from openharness.eval.memory_compact import (
     MemoryCompactOutput,
     MemoryCompactSample,
+    infer_memory_compact,
     load_memory_compact_dataset,
     run_memory_compact_eval,
 )
@@ -140,8 +141,49 @@ class TestLoadDataset:
         samples = load_memory_compact_dataset(DATASET)
         assert any(s.must_not_recall for s in samples)
 
+    def test_required_facts_are_in_the_compacted_older_region(self) -> None:
+        for sample in load_memory_compact_dataset(DATASET):
+            older_text = "\n".join(
+                block.text if isinstance(block, TextBlock) else getattr(block, "content", "")
+                for message in sample.messages[:-12]
+                for block in message.content
+            )
+            for fact in sample.must_recall:
+                assert fact in older_text, f"{sample.case_id}: {fact} leaked into preserved tail"
+
+    def test_includes_context_lifecycle_dogfood_regressions(self) -> None:
+        samples = {sample.case_id: sample for sample in load_memory_compact_dataset(DATASET)}
+        dogfood_cases = {
+            "MC7-current-state-supersedes-stale",
+            "MC8-slash-skill-provenance",
+            "MC9-latest-error-ordering",
+        }
+        repaired_cases = {
+            "MC2-decision-facts",
+            "MC4-user-request-facts",
+            "MC5-pending-tasks-facts",
+        }
+        newly_ratified = dogfood_cases | repaired_cases
+
+        assert newly_ratified <= samples.keys()
+        for case_id in dogfood_cases:
+            assert len(samples[case_id].must_recall) >= 3
+            assert len(samples[case_id].messages) > 12
+        assert all(sample.status == "ratified" for sample in samples.values())
+
 
 class TestRunEval:
+    async def test_inference_scores_only_the_generated_summary_not_preserved_tail(self) -> None:
+        sample = make_sample(must_recall=("Tavily", "8080"))
+        output = await infer_memory_compact(
+            sample=sample,
+            api_client=_FakeClient("SUMMARY_ONLY_SENTINEL"),
+            model="fake",
+        )
+
+        assert output.summary_text.strip() == "SUMMARY_ONLY_SENTINEL"
+        assert "filler turn" not in output.summary_text
+
     async def test_end_to_end_calls_production_full_compact(self) -> None:
         client = _FakeClient("used Tavily, port 8080, tests via uv run pytest -q")
         results = await run_memory_compact_eval(

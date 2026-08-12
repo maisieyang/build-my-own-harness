@@ -131,6 +131,10 @@ class SnapshotMalformed(SnapshotError):
     """
 
 
+class SnapshotClearError(SnapshotError):
+    """An explicit conversation clear could not replace the current snapshot."""
+
+
 def load_snapshot(
     cwd: str | Path,
     *,
@@ -449,6 +453,50 @@ def update_permission_runtime_snapshot(
             error=str(exc),
         )
         return None
+    return snapshot_path
+
+
+def clear_conversation_snapshot(
+    *,
+    cwd: str | Path,
+    runtime: PermissionRuntime,
+) -> Path | None:
+    """Atomically persist an empty conversation without rotating old history.
+
+    ``/clear`` is a state replacement, not a completed assistant turn. It
+    preserves snapshot metadata and the independent session-memory file while
+    replacing typed messages and conversation-bound permission UI state. A
+    missing snapshot is already equivalent to a fresh conversation.
+
+    Raises:
+        SnapshotClearError: the existing snapshot cannot be read or replaced.
+    """
+    storage_dir = get_snapshot_dir(Path(cwd).resolve())
+    snapshot_path = storage_dir / "current.json"
+    try:
+        payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SnapshotClearError(f"unable to read current snapshot: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise SnapshotClearError("current snapshot root is not a JSON object")
+
+    payload["messages"] = []
+    payload["created_at"] = datetime.now(timezone.utc).isoformat()
+    extra = payload.get("extra")
+    if not isinstance(extra, dict):
+        extra = {}
+        payload["extra"] = extra
+    extra["permission_runtime"] = runtime.export_state().model_dump(mode="json")
+    try:
+        _atomic_write(
+            storage_dir=storage_dir,
+            target=snapshot_path,
+            content=json.dumps(payload, indent=2, ensure_ascii=False),
+        )
+    except OSError as exc:
+        raise SnapshotClearError(f"unable to replace current snapshot: {exc}") from exc
     return snapshot_path
 
 

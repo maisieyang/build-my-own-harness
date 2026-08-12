@@ -192,10 +192,11 @@ class CompactSettings(BaseModel):
         ),
     )
     full_compact_timeout_s: float = Field(
-        default=25.0,
+        default=120.0,
         gt=0.0,
         description=(
-            "Timeout for the L4 summarize LLM call. Above this, the "
+            "Timeout for the L4 summarize LLM call. Long conversations need "
+            "a larger budget than short secondary passes. Above this, the "
             "summarize() asyncio.wait_for raises TimeoutError and L4 "
             "returns un-compacted (engine reactive PTL still catches)."
         ),

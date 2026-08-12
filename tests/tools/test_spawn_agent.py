@@ -220,6 +220,63 @@ class TestSpawnAgentHappyPath:
         # Sub-agent used the same model as the parent.
         assert stub.captured_requests[0].model == "qwen-plus"
 
+    async def test_default_sub_agent_inherits_unbounded_parent_loop(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        parent_ctx = dataclasses.replace(
+            _make_parent_context(events_per_turn=[], tmp_path=tmp_path),
+            max_turns=None,
+        )
+        captured: list[QueryContext] = []
+
+        async def _capture_context(
+            messages: list[ConversationMessage],
+            context: QueryContext,
+        ) -> AsyncIterator[ApiStreamEvent]:
+            del messages
+            captured.append(context)
+            yield _end_turn_with_text("ok")
+
+        monkeypatch.setattr("openharness.tools.spawn_agent.run_query", _capture_context)
+
+        result = await SpawnAgent().execute(
+            SpawnAgentInput(description="capture", prompt="capture"),
+            ToolExecutionContext(cwd=tmp_path, parent_query=parent_ctx),
+        )
+
+        assert result.is_error is False
+        assert captured[0].max_turns is None
+
+    async def test_default_sub_agent_inherits_explicit_parent_loop_cap(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        parent_ctx = dataclasses.replace(
+            _make_parent_context(events_per_turn=[], tmp_path=tmp_path),
+            max_turns=73,
+        )
+        captured: list[QueryContext] = []
+
+        async def _capture_context(
+            messages: list[ConversationMessage],
+            context: QueryContext,
+        ) -> AsyncIterator[ApiStreamEvent]:
+            del messages
+            captured.append(context)
+            yield _end_turn_with_text("ok")
+
+        monkeypatch.setattr("openharness.tools.spawn_agent.run_query", _capture_context)
+
+        await SpawnAgent().execute(
+            SpawnAgentInput(description="capture", prompt="capture"),
+            ToolExecutionContext(cwd=tmp_path, parent_query=parent_ctx),
+        )
+
+        assert captured[0].max_turns == 73
+
     async def test_g0_sub_agent_inherits_verified_permission_runtime(
         self,
         tmp_path: Path,

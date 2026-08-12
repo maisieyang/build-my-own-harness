@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from openharness.api.client import SupportsStreamingMessages
     from openharness.eval.protocol import Score
 
-_SUMMARY_MARKER = "[Conversation history summarized below — older messages elided]"
+_SUMMARY_CONTENT_PREFIX = "Summary of prior conversation:"
 
 
 @dataclass(frozen=True)
@@ -47,6 +47,7 @@ class MemoryCompactSample:
     must_recall: tuple[str, ...]
     must_not_recall: tuple[str, ...]
     notes: str
+    status: str = "ratified"
 
 
 @dataclass(frozen=True)
@@ -72,26 +73,23 @@ def load_memory_compact_dataset(path: Path) -> list[MemoryCompactSample]:
                 must_recall=tuple(entry["must_recall"]),
                 must_not_recall=tuple(entry.get("must_not_recall", [])),
                 notes=entry.get("notes", ""),
+                status=entry.get("status", "ratified"),
             )
         )
     return samples
 
 
 def _extract_summary_from_messages(new_messages: list[ConversationMessage], did_apply: bool) -> str:
-    """从 full_compact 返回的 messages 里捞出摘要文本。full_compact 把摘要
-    拼成一个 boundary marker + summary 的 user message;取 marker 之后的
-    那条(们)拼起来。did_apply=False 时返回空串。"""
+    """Extract only the generated summary, excluding the preserved recent tail."""
     if not did_apply:
         return ""
-    parts: list[str] = []
     for m in new_messages:
         for b in m.content:
             if isinstance(b, TextBlock):
-                t = b.text
-                if _SUMMARY_MARKER in t:
-                    t = t.split(_SUMMARY_MARKER, 1)[1]
-                parts.append(t)
-    return "\n".join(parts)
+                text = b.text.strip()
+                if text.startswith(_SUMMARY_CONTENT_PREFIX):
+                    return text.removeprefix(_SUMMARY_CONTENT_PREFIX).strip()
+    return ""
 
 
 async def infer_memory_compact(
@@ -103,10 +101,9 @@ async def infer_memory_compact(
 ) -> MemoryCompactOutput:
     """真调生产 full_compact,提取摘要文本。
 
-    ``max_tokens=8192``:适配参照模型 qwen-max 的输出上限(F16——生产
-    full_compact 默认 20_000 超 qwen-max 的 8192 硬顶,是潜在可移植性 bug,
-    生产用 qwen3.7-max 上限够高未爆;短对话的 9-slot 摘要 8192 绰绰有余,
-    非掩盖而是用合身预算)。
+    ``max_tokens=8192`` 是 eval 固定输出预算:本 dataset 的短 9-slot 摘要不需要
+    生产默认的 20_000 tokens,同时避免把 eval 绑定到某个 provider 的更高输出上限。
+    被测 model 本身仍完全来自运行时配置。
     """
     new_messages, did_apply = await full_compact(
         list(sample.messages),
@@ -193,9 +190,13 @@ async def run_memory_compact_eval(
     cassette_root: Path | None = None,
     cassette_mode: CassetteMode = "live",
     case_id: str | None = None,
+    include_candidates: bool = True,
 ) -> list[MemoryCompactCaseResult]:
     """End-to-end: dataset → per-sample compact (cassette-aware) → scorers."""
-    samples = select_cases(load_memory_compact_dataset(dataset_path), case_id)
+    samples = load_memory_compact_dataset(dataset_path)
+    if not include_candidates:
+        samples = [sample for sample in samples if sample.status == "ratified"]
+    samples = select_cases(samples, case_id)
     store = CassetteStore(cassette_root) if cassette_root is not None else None
     results: list[MemoryCompactCaseResult] = []
     for sample in samples:

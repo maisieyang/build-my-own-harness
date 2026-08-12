@@ -125,6 +125,7 @@ samples:
   notes: 三个配置事实埋在中段(会被压掉的 older 区), 摘要必须保留
 - case_id: MC2-decision-facts
   capability: fact-recall
+  status: ratified
   messages:
   - role: user
     content:
@@ -185,7 +186,7 @@ samples:
   - role: user
     content:
     - type: text
-      text: 闲聊填充第14轮, 无关紧要的内容
+      text: 部署走蓝绿, 不用滚动更新
   - role: assistant
     content:
     - type: text
@@ -193,7 +194,7 @@ samples:
   - role: user
     content:
     - type: text
-      text: 部署走蓝绿, 不用滚动更新
+      text: 闲聊填充第16轮, 无关紧要的内容
   - role: assistant
     content:
     - type: text
@@ -365,6 +366,7 @@ samples:
   notes: 错误+修复的事实链(对应 Errors and Fixes 槽)
 - case_id: MC4-user-request-facts
   capability: fact-recall
+  status: ratified
   messages:
   - role: user
     content:
@@ -425,7 +427,7 @@ samples:
   - role: user
     content:
     - type: text
-      text: 闲聊填充第14轮, 无关紧要的内容
+      text: 编码用 UTF-8 带 BOM, Excel 才不乱码
   - role: assistant
     content:
     - type: text
@@ -441,7 +443,7 @@ samples:
   - role: user
     content:
     - type: text
-      text: 编码用 UTF-8 带 BOM, Excel 才不乱码
+      text: 闲聊填充第18轮, 无关紧要的内容
   - role: assistant
     content:
     - type: text
@@ -485,6 +487,7 @@ samples:
   notes: 用户原始需求的关键约束(对应 Primary Request 槽)
 - case_id: MC5-pending-tasks-facts
   capability: fact-recall
+  status: ratified
   messages:
   - role: user
     content:
@@ -545,7 +548,7 @@ samples:
   - role: user
     content:
     - type: text
-      text: 闲聊填充第14轮, 无关紧要的内容
+      text: 文档里 API 版本号要从 v1 改 v2
   - role: assistant
     content:
     - type: text
@@ -569,7 +572,7 @@ samples:
   - role: user
     content:
     - type: text
-      text: 文档里 API 版本号要从 v1 改 v2
+      text: 闲聊填充第20轮, 无关紧要的内容
   - role: assistant
     content:
     - type: text
@@ -726,3 +729,129 @@ samples:
   - 闲聊填充第1轮
   - 闲聊填充第5轮
   notes: 既测事实保留, 又测噪声不该进摘要 —— 双向探针
+- case_id: MC7-current-state-supersedes-stale
+  capability: current-state-fidelity
+  status: ratified
+  messages:
+  - {role: user, content: [{type: text, text: "开始 context lifecycle dogfood"}]}
+  - {role: assistant, content: [{type: text, text: "收到，开始收集证据"}]}
+  - {role: user, content: [{type: text, text: "早期状态是等待用户提供 Skill 的具体任务"}]}
+  - {role: assistant, content: [{type: text, text: "我会等待，不继续执行"}]}
+  - {role: user, content: [{type: text, text: "现在已经提供了具体任务，继续测试 compact 和 resume"}]}
+  - {role: assistant, content: [{type: text, text: "已继续执行后续链路"}]}
+  - {role: user, content: [{type: text, text: "完成 DPG-010 compact 和 DPG-011 resume"}]}
+  - {role: assistant, content: [{type: text, text: "两项结果已经记录"}]}
+  - {role: user, content: [{type: text, text: "RESOLVED=USER_INPUT_RECEIVED"}]}
+  - {role: assistant, content: [{type: text, text: "确认，不再等待用户输入"}]}
+  - {role: user, content: [{type: text, text: "CURRENT_STATE=READY_FOR_PLUGIN_AND_AGENT_TESTS"}]}
+  - {role: assistant, content: [{type: text, text: "当前阶段已经推进到后续隔离测试"}]}
+  - {role: user, content: [{type: text, text: "PENDING_WORK=DPG-013_AND_DPG-014"}]}
+  - {role: assistant, content: [{type: text, text: "将按顺序继续"}]}
+  - {role: user, content: [{type: text, text: "填充消息 14"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 15"}]}
+  - {role: user, content: [{type: text, text: "填充消息 16"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 17"}]}
+  - {role: user, content: [{type: text, text: "填充消息 18"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 19"}]}
+  - {role: user, content: [{type: text, text: "填充消息 20"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 21"}]}
+  - {role: user, content: [{type: text, text: "填充消息 22"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 23"}]}
+  - {role: user, content: [{type: text, text: "填充消息 24"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 25"}]}
+  - {role: user, content: [{type: text, text: "填充消息 26"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 27"}]}
+  must_recall:
+  - RESOLVED=USER_INPUT_RECEIVED
+  - CURRENT_STATE=READY_FOR_PLUGIN_AND_AGENT_TESTS
+  - PENDING_WORK=DPG-013_AND_DPG-014
+  notes: 来自 DPG-010；摘要必须以最新状态为准，不能停留在早期“等待输入”状态
+- case_id: MC8-slash-skill-provenance
+  capability: skill-provenance-fidelity
+  status: ratified
+  messages:
+  - {role: user, content: [{type: text, text: "检查 Slash Skill 如何进入 conversation"}]}
+  - {role: assistant, content: [{type: text, text: "先观察实际结构"}]}
+  - {role: user, content: [{type: text, text: "用户输入了 /context-probe"}]}
+  - role: assistant
+    content:
+    - {type: tool_use, id: synth_context_probe_1, name: LoadSkill, input: {name: context-probe}}
+  - role: user
+    content:
+    - type: tool_result
+      tool_use_id: synth_context_probe_1
+      is_error: false
+      content: "SKILL_PROVENANCE=SYNTHETIC_SLASH_ENVELOPE\nSKILL_SELECTED_BY=USER\nSKILL_RULE_2=USE_GREP_AFTER_TRUNCATED_READ"
+  - {role: assistant, content: [{type: text, text: "Skill 正文已经可用"}]}
+  - {role: user, content: [{type: text, text: "这不是模型主动调用真实 LoadSkillTool"}]}
+  - {role: assistant, content: [{type: text, text: "应从 synth_ envelope 判断来源"}]}
+  - {role: user, content: [{type: text, text: "填充消息 8"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 9"}]}
+  - {role: user, content: [{type: text, text: "填充消息 10"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 11"}]}
+  - {role: user, content: [{type: text, text: "填充消息 12"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 13"}]}
+  - {role: user, content: [{type: text, text: "填充消息 14"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 15"}]}
+  - {role: user, content: [{type: text, text: "填充消息 16"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 17"}]}
+  - {role: user, content: [{type: text, text: "填充消息 18"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 19"}]}
+  - {role: user, content: [{type: text, text: "填充消息 20"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 21"}]}
+  - {role: user, content: [{type: text, text: "填充消息 22"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 23"}]}
+  - {role: user, content: [{type: text, text: "填充消息 24"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 25"}]}
+  - {role: user, content: [{type: text, text: "填充消息 26"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 27"}]}
+  must_recall:
+  - SKILL_PROVENANCE=SYNTHETIC_SLASH_ENVELOPE
+  - SKILL_SELECTED_BY=USER
+  - SKILL_RULE_2=USE_GREP_AFTER_TRUNCATED_READ
+  notes: 来自 DPG-009/010；摘要必须保留 Slash Skill 的结构化来源，不能臆测为用户粘贴正文
+- case_id: MC9-latest-error-ordering
+  capability: error-order-fidelity
+  status: ratified
+  messages:
+  - {role: user, content: [{type: text, text: "开始记录 context probe 错误链"}]}
+  - role: assistant
+    content:
+    - {type: tool_use, id: read_offset_1, name: Read, input: {path: large_context.txt, offset: 9990}}
+  - role: user
+    content:
+    - {type: tool_result, tool_use_id: read_offset_1, content: "ERROR_EVENT_1=READ_OFFSET_OUT_OF_RANGE", is_error: true}
+  - {role: assistant, content: [{type: text, text: "随后用 Grep 找回了 MIDDLE anchor"}]}
+  - {role: user, content: [{type: text, text: "继续执行故意失败探针"}]}
+  - role: assistant
+    content:
+    - {type: tool_use, id: bash_probe_1, name: Bash, input: {command: "python3 context_probe.py fail"}}
+  - role: user
+    content:
+    - {type: tool_result, tool_use_id: bash_probe_1, content: "ERROR_EVENT_2=PROBE_ERROR_EXPECTED_CONTEXT_FAILURE", is_error: true}
+  - {role: assistant, content: [{type: text, text: "第二个错误发生在 Read offset 错误之后"}]}
+  - {role: user, content: [{type: text, text: "LATEST_ERROR=PROBE_ERROR_EXPECTED_CONTEXT_FAILURE"}]}
+  - {role: assistant, content: [{type: text, text: "确认最新错误是失败探针"}]}
+  - {role: user, content: [{type: text, text: "ERROR_ORDER=READ_OFFSET_OUT_OF_RANGE_THEN_PROBE_ERROR_EXPECTED_CONTEXT_FAILURE"}]}
+  - {role: assistant, content: [{type: text, text: "错误顺序已确认"}]}
+  - {role: user, content: [{type: text, text: "填充消息 12"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 13"}]}
+  - {role: user, content: [{type: text, text: "填充消息 14"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 15"}]}
+  - {role: user, content: [{type: text, text: "填充消息 16"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 17"}]}
+  - {role: user, content: [{type: text, text: "填充消息 18"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 19"}]}
+  - {role: user, content: [{type: text, text: "填充消息 20"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 21"}]}
+  - {role: user, content: [{type: text, text: "填充消息 22"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 23"}]}
+  - {role: user, content: [{type: text, text: "填充消息 24"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 25"}]}
+  - {role: user, content: [{type: text, text: "填充消息 26"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 27"}]}
+  must_recall:
+  - ERROR_EVENT_1=READ_OFFSET_OUT_OF_RANGE
+  - LATEST_ERROR=PROBE_ERROR_EXPECTED_CONTEXT_FAILURE
+  - ERROR_ORDER=READ_OFFSET_OUT_OF_RANGE_THEN_PROBE_ERROR_EXPECTED_CONTEXT_FAILURE
+  notes: 来自 DPG-010/011；摘要必须保留错误时间顺序，不能把较早 Read error 当作最后错误

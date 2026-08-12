@@ -1,7 +1,8 @@
 # REPL 核心工作流：Default、Plan 与 Goal
 
-状态：DPG-001 至 DPG-003 已由用户在 2026-08-11 手动运行并报告符合预期；自动化
-runner 与完整 artifacts 尚未建立，因此这不是双线 ratification。
+状态：DPG-001 至 DPG-003 已完成双线验证。用户于 2026-08-11 手动运行并报告符合
+预期；PTY runner 于 2026-08-12 使用真实模型和工具完成 live 运行。证据保存在
+`.dogfood/artifacts/20260812-core-01/`。
 
 这组实验使用一个简单的折扣计算错误验证 harness 状态转换，而不是模型解决复杂算法
 问题的能力。
@@ -55,8 +56,8 @@ uv run oh --auto --sandbox
 ## 基础验收结论
 
 手动链路已经观察到以下结果：Plan 未修改 fixture；批准后只返回 Default；Goal 立即
-执行；Judge 正常收口；最终外部验证通过。由于 transcript、hash 与结构化 result
-尚未归档，自动化 runner 完成前仍保留“仅手动通过”的标记。
+执行；Judge 正常收口；最终外部验证通过。自动化 runner 随后使用同一 contract
+复跑，并归档 transcript、hash、外部验证输出和结构化 result。
 
 ## Dogfood 发现：Goal 完成轮次文案
 
@@ -82,4 +83,29 @@ goal met after 3 checked turns (2 continuations)
 ```
 
 确定性测试已经覆盖首次完成、连续续跑和 permission park/resume；修复后的真实 REPL
-文案仍需在下一次手动 DPG-003 中复核。
+文案已在自动化 DPG-003 中复核为：
+
+```text
+goal met after 1 checked turn (0 continuations)
+```
+
+## 2026-08-12 自动化运行结果
+
+DPG-001：
+
+- Default 直接完成修改，没有出现 Plan menu 或 Goal controller 文案。
+- Agent 验证得到 `8 passed`；runner 的独立外部验证同样通过。
+- Working loop 自然结束并返回 `>>>`。
+
+DPG-002：
+
+- Plan 只调用 Read，没有 Bash、Edit、Write 或 Agent。
+- Fixture 前后 hash 完全相同。
+- 输入 `1` 只返回 Default，没有自动执行计划；外部验证仍为失败基线。
+
+DPG-003：
+
+- 设置 Goal 后立即开工，修改范围限制在 fixture。
+- 精确验证得到 `8 passed`，独立外部 pytest 复跑仍为 `8 passed`。
+- Judge 在第一次 checked turn 判定完成，正确显示 `0 continuations`。
+- 随后输入 `/goal`，显示没有 active Goal。

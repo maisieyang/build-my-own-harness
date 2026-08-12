@@ -22,6 +22,7 @@ ENV/
 
 # Testing & coverage
 .pytest_cache/
+pytest-of-unknown/
 .coverage
 .coverage.*
 htmlcov/

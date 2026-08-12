@@ -914,6 +914,27 @@ def test_human_approve_and_deny_are_typed_and_exact() -> None:
     assert runtime.last_human_decision is PermissionReviewDecision.DENY
 
 
+def test_clear_pending_state_drops_conversation_decision_but_keeps_ledger() -> None:
+    profile = workspace_runtime_profile()
+    runtime = PermissionRuntime(
+        profile=profile,
+        boundary=_boundary(profile_fingerprint=profile.fingerprint),
+    )
+    request = _request()
+    runtime.park(request, reason="needs a person")
+    runtime.approve_parked(request.request_id)
+
+    runtime.clear_pending_state()
+
+    state = runtime.export_state()
+    assert state.parked_request is None
+    assert state.parked_reason is None
+    assert state.last_human_decision is None
+    assert state.last_decided_request is None
+    assert state.last_decision_resumed is False
+    assert runtime.consume_grant(request) is True
+
+
 @pytest.mark.asyncio
 async def test_hard_deny_never_calls_reviewer() -> None:
     profile = workspace_runtime_profile()

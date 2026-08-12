@@ -1,0 +1,6 @@
+"""Pricing fixture for REPL dogfood cases."""
+
+
+def apply_discount(subtotal: float, discount_percent: float) -> float:
+    """Return the subtotal after applying a percentage discount."""
+    return subtotal - discount_percent

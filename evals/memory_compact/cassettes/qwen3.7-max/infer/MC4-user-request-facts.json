@@ -1,0 +1,11 @@
+{
+  "case_id": "MC4-user-request-facts",
+  "model": "qwen3.7-max",
+  "kind": "infer",
+  "recorded_at": "2026-08-12T10:36:55.298678+00:00",
+  "request_summary": "MC4-user-request-facts: recall=('CSV', 'UTF-8', 'BOM')",
+  "response": {
+    "summary_text": "1. **Primary Request and Intent**: The user requested a CSV export functionality specifically for \"completed orders\" (已完成订单). Subsequent messages refined this request to include exactly three fields (order number, amount, completion time) and specified UTF-8 with BOM encoding to prevent Excel garbling.\n\n2. **Key Technical Concepts**: CSV export, data filtering (completed status), column selection (order_no, amount, completed_at), character encoding (UTF-8 with BOM / EF BB BF), Excel compatibility.\n\n3. **Files and Code Sections**: No files were created, modified, or discussed. No code was generated.\n\n4. **Errors and Fixes**: No errors encountered as no implementation was attempted.\n\n5. **Problem Solving**: No problem solving occurred; the conversation remained at the requirements gathering stage without transitioning to implementation.\n\n6. **All User Messages**: \n   - \"我要一个导出 CSV 的功能, 只导已完成订单\" (Request for CSV export of completed orders only)\n   - \"字段要含订单号/金额/完成时间三列\" (Specify three columns: order number, amount, completion time)\n   - \"编码用 UTF-8 带 BOM, Excel 才不乱码\" (Specify UTF-8 with BOM encoding for Excel compatibility)\n   - Multiple filler messages (\"闲聊填充第N轮...\") which carry no functional intent.\n\n7. **Pending Tasks**: Implement the CSV export feature according to the gathered specifications: filter for completed orders, output three specific columns, and encode as UTF-8 with BOM.\n\n8. **Current Work**: The user finished specifying requirements for the CSV export feature. The assistant has not yet acknowledged or begun implementation. The last substantive user message defined the encoding requirement.\n\n9. **Optional Next Step**: Acknowledge the complete specification and generate code or a plan for the CSV export function that filters completed orders, includes order number/amount/completion time columns, and uses UTF-8 with BOM encoding. Direct quote from most recent substantive request: \"编码用 UTF-8 带 BOM, Excel 才不乱码\".",
+    "did_apply": true
+  }
+}
