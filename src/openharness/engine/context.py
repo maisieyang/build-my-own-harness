@@ -23,7 +23,7 @@ explicit positive integer.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from openharness.execution.host import _HOST_EXECUTION
 from openharness.hooks import HookRegistry
@@ -79,6 +79,10 @@ class QueryContext:
     # Human-authored or human-derived authorization scope. Subagents inherit
     # this immutable envelope; their delegated user-role prompt cannot widen it.
     authorization_context: tuple[str, ...] = ()
+    # Harness controller facts are persisted with a parked exact tool call so
+    # Default, Plan, and Goal can share one permission continuation path.
+    controller_mode: Literal["default", "plan", "goal"] = "default"
+    controller_goal_condition: str | None = None
     # P6-T1 (D16.5): sub-agent recursion tracking. Top-level runs
     # constructs with default ``agent_depth=0``; ``SpawnAgent.execute``
     # builds the sub-context via ``dataclasses.replace(parent,

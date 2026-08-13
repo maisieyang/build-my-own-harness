@@ -66,6 +66,8 @@ from openharness.permissions import (
     ExecutionPosture,
     ExternalToolMode,
     LocalBoundaryEvidence,
+    ParkedContinuation,
+    ParkedControllerState,
     PermissionDelta,
     PermissionDeltaKind,
     PermissionDeltaRequest,
@@ -82,6 +84,7 @@ from openharness.protocols import (
     ToolExecutionCompletedEvent,
     ToolExecutionStartedEvent,
     ToolResultBlock,
+    ToolUseBlock,
 )
 from openharness.services.compact import auto_compact_if_needed
 from openharness.tools.base import (
@@ -100,7 +103,6 @@ if TYPE_CHECKING:
     from openharness.protocols import (
         ApiStreamEvent,
         ConversationMessage,
-        ToolUseBlock,
     )
 
 
@@ -123,6 +125,187 @@ class _DispatchOutcome:
 
 def _outcome(value: tuple[str, bool]) -> _DispatchOutcome:
     return _DispatchOutcome(output=value[0], is_error=value[1], metadata={})
+
+
+@dataclass(frozen=True)
+class _DispatchBatchComplete:
+    tool_results: tuple[ToolResultBlock, ...]
+    parked_index: int | None = None
+
+
+async def _dispatch_tool_batch(
+    tool_uses: tuple[ToolUseBlock, ...],
+    context: QueryContext,
+    *,
+    start_index: int,
+    initial_results: tuple[ToolResultBlock, ...],
+    authorization_context: tuple[str, ...],
+) -> AsyncIterator[ApiStreamEvent | _DispatchBatchComplete]:
+    """Dispatch a model-selected tool batch while preserving interruption position."""
+    exec_context = ToolExecutionContext(
+        cwd=context.cwd,
+        parent_query=context,
+        execution_env=context.execution_env,
+        sandbox_session=context.sandbox_session,
+    )
+    tool_results = list(initial_results)
+    for tool_index in range(start_index, len(tool_uses)):
+        tool_use = tool_uses[tool_index]
+        yield ToolExecutionStartedEvent(
+            tool_use_id=tool_use.id,
+            tool_name=tool_use.name,
+            tool_input=tool_use.input,
+        )
+        try:
+            trust_source = context.tool_registry.get(tool_use.name).trust_source
+        except KeyError:
+            trust_source = "unknown"
+        logger.info(
+            "tool_dispatch",
+            tool=tool_use.name,
+            tool_use_id=tool_use.id,
+            input=_sanitize_tool_input(tool_use.input, context.cwd),
+            trust_source=trust_source,
+        )
+        t0 = time.monotonic()
+        outcome = _DispatchOutcome(output="", is_error=False, metadata={})
+        if context.execution_posture is ExecutionPosture.DRY_RUN:
+            output = f"would call {tool_use.name} with {tool_use.input}"
+            is_error = False
+        else:
+            outcome = await _dispatch_one(
+                tool_use,
+                context,
+                exec_context,
+                authorization_context=authorization_context,
+            )
+            output, is_error = outcome.output, outcome.is_error
+        duration_ms = round((time.monotonic() - t0) * 1000, 2)
+        logger.info(
+            "tool_complete",
+            tool=tool_use.name,
+            tool_use_id=tool_use.id,
+            is_error=is_error,
+            duration_ms=duration_ms,
+            output_len=len(output),
+        )
+        yield ToolExecutionCompletedEvent(
+            tool_use_id=tool_use.id,
+            tool_name=tool_use.name,
+            output=output,
+            is_error=is_error,
+        )
+        violation = outcome.metadata.get("boundary_violation")
+        if isinstance(violation, dict):
+            dimension = violation.get("dimension")
+            requested = violation.get("requested")
+            evidence = violation.get("evidence")
+            if (
+                isinstance(dimension, str)
+                and isinstance(requested, str)
+                and isinstance(evidence, str)
+            ):
+                yield BoundaryViolationEvent(
+                    tool_use_id=tool_use.id,
+                    tool_name=tool_use.name,
+                    dimension=dimension,
+                    requested=requested,
+                    evidence=evidence,
+                )
+        if (
+            context.permission_runtime is not None
+            and context.permission_runtime.parked_request is not None
+        ):
+            # The visible permission error is control-plane evidence. Do not
+            # append it (or synthetic skipped calls) to model conversation.
+            yield _DispatchBatchComplete(tuple(tool_results), parked_index=tool_index)
+            return
+        tool_results.append(
+            ToolResultBlock(
+                tool_use_id=tool_use.id,
+                content=output,
+                is_error=is_error,
+            )
+        )
+    yield _DispatchBatchComplete(tuple(tool_results))
+
+
+def _build_parked_continuation(
+    *,
+    context: QueryContext,
+    messages: list[ConversationMessage],
+    assistant_message: ConversationMessage,
+    tool_uses: tuple[ToolUseBlock, ...],
+    tool_results: tuple[ToolResultBlock, ...],
+    parked_index: int,
+) -> ParkedContinuation:
+    runtime = context.permission_runtime
+    if runtime is None or runtime.parked_request is None:
+        raise ValueError("cannot build continuation without a parked permission request")
+    dispatch_tool_uses = list(tool_uses)
+    original = dispatch_tool_uses[parked_index]
+    dispatch_tool_uses[parked_index] = ToolUseBlock(
+        id=original.id,
+        name=original.name,
+        input=runtime.parked_request.final_arguments,
+    )
+    controller_mode = context.controller_mode
+    if controller_mode == "default" and context.controller_goal_condition is not None:
+        controller_mode = "goal"
+    continuation = ParkedContinuation.create(
+        request=runtime.parked_request,
+        messages=tuple(messages),
+        assistant_message=assistant_message,
+        tool_uses=tuple(dispatch_tool_uses),
+        completed_tool_results=tool_results,
+        next_tool_index=parked_index,
+        controller=ParkedControllerState(
+            mode=controller_mode,
+            goal_condition=context.controller_goal_condition,
+        ),
+    )
+    runtime.bind_continuation(continuation)
+    return continuation
+
+
+def _permission_parked_event(
+    *,
+    context: QueryContext,
+    continuation: ParkedContinuation,
+) -> PermissionParkedEvent:
+    runtime = context.permission_runtime
+    if runtime is None or runtime.parked_request is None:
+        raise ValueError("permission runtime is not parked")
+    parked = runtime.parked_request
+    local_evidence = (
+        parked.enforcement if isinstance(parked.enforcement, LocalBoundaryEvidence) else None
+    )
+    return PermissionParkedEvent(
+        request_id=parked.request_id,
+        tool_use_id=parked.tool_use_id,
+        tool_name=parked.tool_name,
+        delta_kind=parked.delta.kind.value,
+        delta_value=parked.delta.value,
+        profile_fingerprint=parked.profile_fingerprint,
+        enforcement=parked.enforcement.model_dump(mode="json"),
+        boundary_fingerprint=(
+            local_evidence.boundary_fingerprint if local_evidence is not None else None
+        ),
+        backend=local_evidence.backend if local_evidence is not None else None,
+        backend_fingerprint=(
+            local_evidence.backend_fingerprint if local_evidence is not None else None
+        ),
+        final_arguments=parked.final_arguments,
+        data_sources=parked.data_sources,
+        data_destinations=parked.data_destinations,
+        boundary_facts=(local_evidence.boundary_facts if local_evidence is not None else None),
+        reason=runtime.parked_reason or "human review required",
+        review_status=(
+            runtime.parked_review_status.value if runtime.parked_review_status else "manual"
+        ),
+        continuation=continuation,
+        messages=list(continuation.messages),
+    )
 
 
 async def _maybe_write_turn_end_metadata(
@@ -228,6 +411,8 @@ def extract_authorization_context(
 async def run_query(
     initial_messages: list[ConversationMessage],
     context: QueryContext,
+    *,
+    continuation: ParkedContinuation | None = None,
 ) -> AsyncIterator[ApiStreamEvent]:
     """Drive the agent loop until a non-tool response, or until an optional
     caller-selected ``max_turns`` cap is reached.
@@ -254,6 +439,16 @@ async def run_query(
     # Defensive copy: the caller's list must not be mutated even though the
     # messages helpers (engine.messages) all return new lists.
     messages = list(initial_messages)
+    if continuation is not None:
+        runtime = context.permission_runtime
+        if runtime is None:
+            raise ValueError("permission continuation requires a permission runtime")
+        continuation.validate_for(runtime)
+        if runtime.parked_continuation != continuation:
+            raise ValueError("permission continuation is not active")
+        if not runtime.decision_ready_for_continuation:
+            raise ValueError("permission continuation has no consumed human decision")
+        messages = list(continuation.messages)
     authorization_context = (
         context.authorization_context
         if context.authorization_context
@@ -276,6 +471,40 @@ async def run_query(
                     model=context.model,
                     max_tokens=context.max_tokens,
                 )
+
+                # Resume the exact saved dispatch before any model request.
+                # This reconnects the original tool result path without a
+                # synthetic user message or a reconstruction model turn.
+                if continuation is not None:
+                    resumed_batch: _DispatchBatchComplete | None = None
+                    async for dispatch_event in _dispatch_tool_batch(
+                        continuation.tool_uses,
+                        context,
+                        start_index=continuation.next_tool_index,
+                        initial_results=continuation.completed_tool_results,
+                        authorization_context=authorization_context,
+                    ):
+                        if isinstance(dispatch_event, _DispatchBatchComplete):
+                            resumed_batch = dispatch_event
+                        else:
+                            yield dispatch_event
+                    assert resumed_batch is not None
+                    if resumed_batch.parked_index is not None:
+                        # A restored request that immediately parks again did
+                        # not consume the exact decision; fail closed instead
+                        # of replacing the preserved continuation.
+                        raise ValueError("permission continuation did not consume exact decision")
+                    messages = append_assistant_message(
+                        messages,
+                        list(continuation.assistant_message.content),
+                    )
+                    messages = append_tool_results(messages, list(resumed_batch.tool_results))
+                    runtime = context.permission_runtime
+                    assert runtime is not None
+                    runtime.consume_continuation(continuation)
+                    continuation = None
+                    # Continue this loop iteration with the ordinary model
+                    # request that consumes the newly attached Tool Results.
 
                 # P11-T3.3f (D29.3): proactive compact escalation. Runs
                 # BEFORE PreApiCall hooks so hooks see compact-modified
@@ -458,176 +687,36 @@ async def run_query(
                     yield ConversationCompleteEvent(messages=final_messages)
                     return  # end_turn / max_tokens / stop_sequence -> exit
 
-                # Tool dispatch (D6.3 serial). Per D10.4, four recovery paths
-                # all produce ``is_error=True`` results that go back to the
-                # LLM: tool-not-found / Pydantic validation / permission
-                # denied / tool's own is_error. Programming exceptions
-                # propagate (D8.5 / D10.5).
-                tool_uses = extract_tool_uses(complete_event.message)
-                # P6-T2 (D16.8): pass ``context`` through so ``SpawnAgent``
-                # can build sub-context via ``dataclasses.replace``. This is
-                # the ONLY engine dispatch change Phase 6 introduces; every
-                # other tool ignores ``parent_query`` and behaves identically.
-                # P7-T2 (D17.3 / D17.4): pass through ``execution_env`` so
-                # ``BashTool`` can delegate shell commands to the configured
-                # substrate (HostExecution by default; SandboxExecution in
-                # Phase 7b). Every other tool ignores the field.
-                exec_context = ToolExecutionContext(
-                    cwd=context.cwd,
-                    parent_query=context,
-                    execution_env=context.execution_env,
-                    sandbox_session=context.sandbox_session,
-                )
-                tool_results: list[ToolResultBlock] = []
-
-                for tool_index, tool_use in enumerate(tool_uses):
-                    yield ToolExecutionStartedEvent(
-                        tool_use_id=tool_use.id,
-                        tool_name=tool_use.name,
-                        tool_input=tool_use.input,
-                    )
-
-                    # 5c: log dispatch-start with sanitized input + start clock
-                    # for duration_ms on tool_complete.
-                    # P5-T5: trust_source from tool.trust_source for the
-                    # observability trail (local / trusted-server /
-                    # strict-default). Lookup uses try/except since
-                    # _dispatch_one will also do a registry.get() — the
-                    # cost of one extra lookup is negligible.
-                    try:
-                        trust_source = context.tool_registry.get(tool_use.name).trust_source
-                    except KeyError:
-                        trust_source = "unknown"
-                    logger.info(
-                        "tool_dispatch",
-                        tool=tool_use.name,
-                        tool_use_id=tool_use.id,
-                        input=_sanitize_tool_input(tool_use.input, context.cwd),
-                        trust_source=trust_source,
-                    )
-                    t0 = time.monotonic()
-
-                    # DRY_RUN bypasses authorization review and execute(),
-                    # emitting a synthetic "would call X with Y"
-                    # result so the LLM sees the loop progressing but no side
-                    # effects occur.
-                    if context.execution_posture is ExecutionPosture.DRY_RUN:
-                        output = f"would call {tool_use.name} with {tool_use.input}"
-                        is_error = False
-                    else:
-                        outcome = await _dispatch_one(
-                            tool_use,
-                            context,
-                            exec_context,
-                            authorization_context=authorization_context,
-                        )
-                        output, is_error = outcome.output, outcome.is_error
-
-                    # 5c: log dispatch-complete. Per D13.6, output content
-                    # itself is NOT logged (size + PII risk); only its length.
-                    duration_ms = round((time.monotonic() - t0) * 1000, 2)
-                    logger.info(
-                        "tool_complete",
-                        tool=tool_use.name,
-                        tool_use_id=tool_use.id,
-                        is_error=is_error,
-                        duration_ms=duration_ms,
-                        output_len=len(output),
-                    )
-
-                    yield ToolExecutionCompletedEvent(
-                        tool_use_id=tool_use.id,
-                        tool_name=tool_use.name,
-                        output=output,
-                        is_error=is_error,
-                    )
-                    violation = (
-                        outcome.metadata.get("boundary_violation")
-                        if context.execution_posture is not ExecutionPosture.DRY_RUN
-                        else None
-                    )
-                    if isinstance(violation, dict):
-                        dimension = violation.get("dimension")
-                        requested = violation.get("requested")
-                        evidence = violation.get("evidence")
-                        if (
-                            isinstance(dimension, str)
-                            and isinstance(requested, str)
-                            and isinstance(evidence, str)
-                        ):
-                            yield BoundaryViolationEvent(
-                                tool_use_id=tool_use.id,
-                                tool_name=tool_use.name,
-                                dimension=dimension,
-                                requested=requested,
-                                evidence=evidence,
-                            )
-                    tool_results.append(
-                        ToolResultBlock(
-                            tool_use_id=tool_use.id,
-                            content=output,
-                            is_error=is_error,
-                        ),
-                    )
-                    if (
-                        context.permission_runtime is not None
-                        and context.permission_runtime.parked_request is not None
-                    ):
-                        tool_results.extend(
-                            ToolResultBlock(
-                                tool_use_id=skipped.id,
-                                content="not executed: permission request parked",
-                                is_error=True,
-                            )
-                            for skipped in tool_uses[tool_index + 1 :]
-                        )
-                        break
-
-                # Append the assistant turn (with the tool_use block) and the
-                # bundled tool_results -- mirrors the loop pseudocode in
-                # messages.py docstring.
-                messages = append_assistant_message(messages, list(complete_event.message.content))
-                messages = append_tool_results(messages, tool_results)
-                if (
-                    context.permission_runtime is not None
-                    and context.permission_runtime.parked_request is not None
+                tool_uses = tuple(extract_tool_uses(complete_event.message))
+                batch_complete: _DispatchBatchComplete | None = None
+                async for dispatch_event in _dispatch_tool_batch(
+                    tool_uses,
+                    context,
+                    start_index=0,
+                    initial_results=(),
+                    authorization_context=authorization_context,
                 ):
-                    parked = context.permission_runtime.parked_request
-                    local_evidence = (
-                        parked.enforcement
-                        if isinstance(parked.enforcement, LocalBoundaryEvidence)
-                        else None
-                    )
-                    await _maybe_write_turn_end_metadata(context, messages)
-                    yield PermissionParkedEvent(
-                        request_id=parked.request_id,
-                        tool_use_id=parked.tool_use_id,
-                        tool_name=parked.tool_name,
-                        delta_kind=parked.delta.kind.value,
-                        delta_value=parked.delta.value,
-                        profile_fingerprint=parked.profile_fingerprint,
-                        enforcement=parked.enforcement.model_dump(mode="json"),
-                        boundary_fingerprint=(
-                            local_evidence.boundary_fingerprint
-                            if local_evidence is not None
-                            else None
-                        ),
-                        backend=local_evidence.backend if local_evidence is not None else None,
-                        backend_fingerprint=(
-                            local_evidence.backend_fingerprint
-                            if local_evidence is not None
-                            else None
-                        ),
-                        final_arguments=parked.final_arguments,
-                        data_sources=parked.data_sources,
-                        data_destinations=parked.data_destinations,
-                        boundary_facts=(
-                            local_evidence.boundary_facts if local_evidence is not None else None
-                        ),
-                        reason=context.permission_runtime.parked_reason or "human review required",
+                    if isinstance(dispatch_event, _DispatchBatchComplete):
+                        batch_complete = dispatch_event
+                    else:
+                        yield dispatch_event
+                assert batch_complete is not None
+                if batch_complete.parked_index is not None:
+                    continuation = _build_parked_continuation(
+                        context=context,
                         messages=messages,
+                        assistant_message=complete_event.message,
+                        tool_uses=tool_uses,
+                        tool_results=batch_complete.tool_results,
+                        parked_index=batch_complete.parked_index,
                     )
+                    # Save the typed pre-dispatch history plus continuation
+                    # atomically through the existing turn-end writer.
+                    await _maybe_write_turn_end_metadata(context, messages)
+                    yield _permission_parked_event(context=context, continuation=continuation)
                     return
+                messages = append_assistant_message(messages, list(complete_event.message.content))
+                messages = append_tool_results(messages, list(batch_complete.tool_results))
 
         # Only a caller-supplied finite range can fall through. With no cap,
         # the model owns loop termination by returning a clean non-tool turn.

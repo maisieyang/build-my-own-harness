@@ -9,11 +9,15 @@ repl.py 的设计契约是"unit-testable without a TTY"——plan 模式的状�
 
 from __future__ import annotations
 
+import pytest
+
 from openharness.repl import (
     BUILTIN_SLASH_COMMANDS,
     PLAN_MENU_TEXT,
+    PermissionMenuChoice,
     PlanMenuChoice,
     format_status_bar,
+    parse_permission_menu_choice,
     parse_plan_menu_choice,
     shape_plan_tool_registry,
 )
@@ -39,6 +43,16 @@ class TestParsePlanMenuChoice:
         assert parse_plan_menu_choice("") is None
         assert parse_plan_menu_choice("yes") is None
         assert parse_plan_menu_choice("4") is None
+
+
+class TestParsePermissionMenuChoice:
+    def test_explicit_numbered_choices(self) -> None:
+        assert parse_permission_menu_choice("1") is PermissionMenuChoice.APPROVE
+        assert parse_permission_menu_choice("2") is PermissionMenuChoice.DENY
+
+    @pytest.mark.parametrize("raw", ["", "yes", "approve", "0", "3"])
+    def test_has_no_default_or_natural_language_approval(self, raw: str) -> None:
+        assert parse_permission_menu_choice(raw) is None
 
     def test_menu_text_lists_all_three(self) -> None:
         for key in ("1", "2", "3"):

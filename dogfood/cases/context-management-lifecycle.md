@@ -472,6 +472,34 @@ Capture `12-agent-isolation`。
   Read 与内部 conversation 没有泄漏进父 context；
 - active Goal 为空，parked permission 为 false，因此 DPG-014 通过。
 
+## DPG-015：Permission continuation 与同步审批
+
+这条 case 验证权限审批属于 Harness control plane，而不是一条新的用户消息。使用
+不带 `--auto` 的 REPL，让 Agent 发起一次需要 Web policy `ask` 的 WebSearch。
+
+预期立即出现 exact request 详情和同步菜单：
+
+```text
+[1] Approve once and continue
+[2] Deny and continue
+```
+
+验收点：
+
+- 空输入不批准，只重新提示 `enter 1 or 2`；
+- 选择 `1` 后 exact Tool Call 只执行一次，并直接接回原 Agent Loop，不输入
+  `/resume`；
+- 选择 `2` 后模型收到明确 denied Tool Result，并在现有边界内继续；
+- Goal 被 park 时不运行 Judge，Tool continuation 自然完成后才运行；
+- Plan 被 park 时不显示 Plan approval menu，规划 continuation 完成后才显示；
+- transcript 不出现伪装成用户消息的 `[permission decision]`；
+- Ctrl+C 只推迟决定，`/approve` 与 `/deny` 可恢复并直接继续；
+- park 后退出并用 `oh --resume` 启动，会恢复同一个 exact request 和二选一菜单；
+- `/clear` 清除 conversation-bound continuation，不清 Session Memory，也不复活授权。
+
+`/resume` 不属于正常人工审批路径；它只处理外部控制面已记录 approve/deny、但
+continuation 尚未消费的异步恢复。
+
 ## 五、自动 Compact 的定向实验
 
 真实 262k window 不适合手工堆到 83%。为了观察 L2 自动路径，单独启动开发者实验：

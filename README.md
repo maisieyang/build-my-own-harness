@@ -467,8 +467,18 @@ exchange. `/clear` clears the conversation and any active goal.
 #### Handle permission decisions
 
 `/permissions` shows configured intent and the verified runtime boundary. When
-a permission request is parked, use `/approve [id]` or `/deny [id]`, then
-`/resume` to continue from that decision.
+an exact request needs a person, the REPL immediately shows a no-default menu:
+
+```text
+[1] Approve once and continue
+[2] Deny and continue
+```
+
+Either choice continues the interrupted Agent Loop directly; it does not need
+`/resume` and does not ask the model to reconstruct the Tool Call. Pressing
+Ctrl+C postpones the decision without discarding it; `/approve [id]` and
+`/deny [id]` remain available for that recovery path. `/resume` is reserved for
+an externally recorded decision whose saved continuation has not been consumed.
 
 #### Inspect and extend context
 

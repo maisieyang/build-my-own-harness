@@ -183,8 +183,7 @@ async def render_stream(
                     f"  delta: {event.delta_kind}={event.delta_value}\n"
                     f"  data flow: {sources} -> {destinations}\n"
                     f"  {enforcement}\n"
-                    f"  review: /approve {event.request_id[:12]} or "
-                    f"/deny {event.request_id[:12]}\n"
+                    f"  review status: {event.review_status}\n"
                 )
                 err.flush()
     finally:

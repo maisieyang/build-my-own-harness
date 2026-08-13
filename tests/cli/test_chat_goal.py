@@ -101,11 +101,12 @@ def _install_judge(
         condition: str,
         transcript: str,
         *,
+        evidence_messages: list[ConversationMessage] | None = None,
         api_client: object,
         model: str,
         timeout_seconds: float = 15.0,
     ) -> GoalJudgeResult:
-        del api_client, model, timeout_seconds
+        del evidence_messages, api_client, model, timeout_seconds
         calls.append((condition, transcript))
         passed, feedback = verdicts[min(len(calls) - 1, len(verdicts) - 1)]
         return GoalJudgeResult(

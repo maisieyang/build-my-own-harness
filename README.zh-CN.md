@@ -391,9 +391,18 @@ OPENHARNESS_GOAL_MAX_AUTO_TURNS=100
 
 #### 处理权限决策
 
-`/permissions` 显示已配置的授权意图与已验证 runtime boundary。当 permission
-request 被 parked 时，使用 `/approve [id]` 或 `/deny [id]`，再通过 `/resume`
-按该决定继续。
+`/permissions` 显示已配置的授权意图与已验证 runtime boundary。当一个 exact
+request 需要人工决定时，REPL 会立即显示没有默认项的二选一菜单：
+
+```text
+[1] Approve once and continue
+[2] Deny and continue
+```
+
+选择后会直接接回被中断的 Agent Loop，不需要 `/resume`，也不会让模型重新生成
+Tool Call。按 Ctrl+C 会推迟决定但保留 request；此后仍可用 `/approve [id]` 或
+`/deny [id]` 恢复。`/resume` 只用于外部控制面已经记录决定、但保存的 continuation
+尚未消费的异步恢复。
 
 #### 查看和扩展 Context
 
@@ -470,8 +479,9 @@ uv run ruff format --check
   原始 human authorization context、精确 final arguments、data flow 与最小 delta。
   local grant 只有在 replacement boundary 证明 same backend 并覆盖目标 effect 后才安装
   一次 exact overlay；external exact grant 无需 local boundary 也可 review、park、resume，
-  且仍是 one-shot。hard deny 不进入 review。无法裁决的 request 会被持久化 park；
-  `/goal` 在 judge 前暂停，只有明确 `/approve` 或 `/deny` 后再 `/resume` 才继续。
+  且仍是 one-shot。hard deny 不进入 review。无法裁决的 request 会连同 typed
+  continuation 一起持久化 park；`/goal` 在 judge 前暂停，二选一决定后直接继续原
+  Agent Loop，只有跨进程未消费决定才使用 `/resume`。
 
 ## 设计留痕
 

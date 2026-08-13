@@ -23,13 +23,18 @@ the Provider does not ripple beyond the API client layer.
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 from pydantic import Field
 
 from openharness.protocols._base import StrictModel
 from openharness.protocols.messages import ConversationMessage
 from openharness.protocols.usage import UsageSnapshot
+
+if TYPE_CHECKING:
+    from openharness.permissions import ParkedContinuation
+else:
+    ParkedContinuation = Any
 
 
 class ApiTextDeltaEvent(StrictModel):
@@ -127,7 +132,14 @@ class PermissionParkedEvent(StrictModel):
     data_destinations: tuple[str, ...]
     boundary_facts: dict[str, Any] | None = None
     reason: str
-    messages: list[ConversationMessage]
+    review_status: str = "manual"
+    # Kept opaque at the generic stream protocol layer to avoid coupling the
+    # foundational protocol package back to permission orchestration. The
+    # engine always supplies the typed ``ParkedContinuation`` model.
+    continuation: ParkedContinuation | None = None
+    # Compatibility reader for older event producers. New engine code keeps
+    # these byte-equivalent to ``continuation.messages``.
+    messages: list[ConversationMessage] = Field(default_factory=list)
 
 
 class ConversationCompleteEvent(StrictModel):
@@ -149,7 +161,7 @@ class ConversationCompleteEvent(StrictModel):
 
 # Discriminated union -- Pydantic dispatches by the ``type`` field at parse time.
 # Same pattern as ``ContentBlock`` in content.py.
-ApiStreamEvent: TypeAlias = Annotated[
+ApiStreamEvent: TypeAlias = (
     ApiTextDeltaEvent
     | ApiMessageCompleteEvent
     | ApiRetryEvent
@@ -157,6 +169,5 @@ ApiStreamEvent: TypeAlias = Annotated[
     | ToolExecutionCompletedEvent
     | BoundaryViolationEvent
     | PermissionParkedEvent
-    | ConversationCompleteEvent,
-    Field(discriminator="type"),
-]
+    | ConversationCompleteEvent
+)

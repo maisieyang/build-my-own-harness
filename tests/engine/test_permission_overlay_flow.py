@@ -37,7 +37,6 @@ from openharness.protocols import (
     PermissionParkedEvent,
     TextBlock,
     ToolExecutionCompletedEvent,
-    ToolResultBlock,
     UsageSnapshot,
 )
 from openharness.tools import Bash, ToolRegistry
@@ -303,7 +302,7 @@ async def test_local_reviewer_defer_parks_before_next_model_turn() -> None:
     assert len(client.captured_requests) == 1
 
 
-async def test_parked_multi_tool_turn_persists_a_well_formed_tool_result_pair() -> None:
+async def test_parked_multi_tool_turn_preserves_dispatch_without_fake_results() -> None:
     @dataclass
     class _DeferReviewer:
         async def review(self, request: PermissionDeltaRequest) -> PermissionReviewVerdict:
@@ -337,13 +336,13 @@ async def test_parked_multi_tool_turn_persists_a_well_formed_tool_result_pair() 
     events = [event async for event in run_query([], context)]
 
     parked = next(event for event in events if isinstance(event, PermissionParkedEvent))
-    result_blocks = [
-        block for block in parked.messages[-1].content if isinstance(block, ToolResultBlock)
+    assert parked.messages == []
+    assert parked.continuation.next_tool_index == 0
+    assert [tool.id for tool in parked.continuation.remaining_tool_uses] == [
+        "tool-1",
+        "tool-2",
     ]
-    assert [block.tool_use_id for block in result_blocks] == ["tool-1", "tool-2"]
-    assert result_blocks[0].is_error is True
-    assert result_blocks[1].is_error is True
-    assert result_blocks[1].content == "not executed: permission request parked"
+    assert parked.continuation.completed_tool_results == ()
 
 
 async def test_approved_delta_without_overlay_executor_parks_fail_closed() -> None:

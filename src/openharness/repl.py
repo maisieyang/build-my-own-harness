@@ -84,9 +84,9 @@ BUILTIN_SLASH_COMMANDS: tuple[SlashCommand, ...] = (
         "/goal", "set a session goal — an independent checker auto-continues turns until met"
     ),
     SlashCommand("/permissions", "show configured intent and verified runtime boundary"),
-    SlashCommand("/approve", "approve the exact parked permission request"),
-    SlashCommand("/deny", "deny the exact parked permission request"),
-    SlashCommand("/resume", "resume after an explicit permission decision"),
+    SlashCommand("/approve", "approve a postponed exact permission request"),
+    SlashCommand("/deny", "deny a postponed exact permission request"),
+    SlashCommand("/resume", "consume an externally recorded permission decision"),
     SlashCommand("/skills", "list available skills"),
     SlashCommand("/memory", "list memories in this project's memory store"),
     SlashCommand("/exit", "leave the REPL"),
@@ -116,6 +116,28 @@ class PlanMenuChoice(Enum):
     APPROVE = "1"
     KEEP_PLANNING = "2"
     DISCARD = "3"
+
+
+class PermissionMenuChoice(Enum):
+    """No-default decision for one exact parked request."""
+
+    APPROVE = "1"
+    DENY = "2"
+
+
+PERMISSION_MENU_TEXT = """\
+permission required — choose an exact one-shot decision
+  [1] Approve once and continue
+  [2] Deny and continue"""
+
+
+def parse_permission_menu_choice(raw: str) -> PermissionMenuChoice | None:
+    """Parse only explicit numbered decisions; blank is never approval."""
+    value = raw.strip()
+    for choice in PermissionMenuChoice:
+        if value == choice.value:
+            return choice
+    return None
 
 
 def shape_plan_tool_registry(base: ToolRegistry) -> ToolRegistry:

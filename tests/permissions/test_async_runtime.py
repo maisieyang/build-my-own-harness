@@ -862,6 +862,41 @@ async def test_repeated_denial_opens_circuit_without_reviewer_recall() -> None:
     assert reviewer.calls == [request]
 
 
+@pytest.mark.asyncio
+async def test_first_reviewer_deny_opens_only_the_exact_request_circuit() -> None:
+    profile = workspace_runtime_profile()
+    reviewer = _Reviewer(PermissionReviewVerdict.deny("not allowed"))
+    runtime = PermissionRuntime(
+        profile=profile,
+        boundary=_boundary(profile_fingerprint=profile.fingerprint),
+        reviewer=reviewer,
+        denial_limit=2,
+    )
+    original = _request(command="curl https://example.com/a")
+
+    first = await runtime.resolve_external(original)
+    same_exact_request = PermissionDeltaRequest.create(
+        tool_use_id="tool-retry",
+        tool_name=original.tool_name,
+        final_arguments=original.final_arguments,
+        profile=profile,
+        boundary=runtime.boundary,
+        delta=original.delta,
+        crossing=original.crossing,
+        data_sources=original.data_sources,
+        data_destinations=original.data_destinations,
+    )
+    repeated = await runtime.resolve_external(same_exact_request)
+    different_arguments = _request(command="curl https://example.com/b")
+    distinct = await runtime.resolve_external(different_arguments)
+
+    assert first.status is PermissionResolutionStatus.DENIED
+    assert repeated.status is PermissionResolutionStatus.DENIED
+    assert repeated.reason == "denial circuit open"
+    assert distinct.status is PermissionResolutionStatus.DENIED
+    assert reviewer.calls == [original, different_arguments]
+
+
 def test_park_state_round_trips_and_resume_refuses_boundary_drift() -> None:
     profile = workspace_runtime_profile()
     boundary = _boundary(profile_fingerprint=profile.fingerprint)

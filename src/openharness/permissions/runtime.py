@@ -14,6 +14,8 @@ from openharness.execution.boundary import (
     EnforcedBoundary,
     ExecutionResult,
 )
+from openharness.protocols.content import ToolResultBlock, ToolUseBlock
+from openharness.protocols.messages import ConversationMessage
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -516,6 +518,14 @@ class PermissionReviewer(Protocol):
     async def review(self, request: PermissionDeltaRequest) -> PermissionReviewVerdict: ...
 
 
+class PermissionParkedReviewStatus(str, Enum):
+    """Why a reviewable exact request reached the human decision surface."""
+
+    MANUAL = "manual"
+    DEFERRED = "deferred"
+    FAILED = "failed"
+
+
 class PermissionResolutionStatus(str, Enum):
     CONTAINED = "contained"
     RETRY_ONCE = "retry_once"
@@ -529,11 +539,142 @@ class PermissionResolution(_FrozenModel):
     request: PermissionDeltaRequest | None = None
 
 
+class ParkedControllerState(_FrozenModel):
+    """Controller state that must survive a permission interruption."""
+
+    mode: Literal["default", "plan", "goal"]
+    goal_condition: str | None = None
+
+
+class ParkedContinuation(_FrozenModel):
+    """Serializable dispatch continuation owned by the harness.
+
+    It binds the exact permission request to the typed conversation and the
+    position of the interrupted tool inside the assistant's complete tool
+    batch.  The permission error shown in the UI is deliberately not part of
+    ``completed_tool_results``: it is a control-plane event, not model input.
+    """
+
+    schema_version: Literal[1] = 1
+    request: PermissionDeltaRequest
+    messages: tuple[ConversationMessage, ...]
+    assistant_message: ConversationMessage
+    tool_uses: tuple[ToolUseBlock, ...]
+    completed_tool_results: tuple[ToolResultBlock, ...] = ()
+    next_tool_index: int = Field(ge=0)
+    controller: ParkedControllerState
+    continuation_fingerprint: str
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        request: PermissionDeltaRequest,
+        messages: tuple[ConversationMessage, ...],
+        assistant_message: ConversationMessage,
+        tool_uses: tuple[ToolUseBlock, ...],
+        completed_tool_results: tuple[ToolResultBlock, ...],
+        next_tool_index: int,
+        controller: ParkedControllerState,
+    ) -> ParkedContinuation:
+        facts = cls._fingerprint_facts(
+            request=request,
+            messages=messages,
+            assistant_message=assistant_message,
+            tool_uses=tool_uses,
+            completed_tool_results=completed_tool_results,
+            next_tool_index=next_tool_index,
+            controller=controller,
+        )
+        continuation = cls(
+            request=request,
+            messages=messages,
+            assistant_message=assistant_message,
+            tool_uses=tool_uses,
+            completed_tool_results=completed_tool_results,
+            next_tool_index=next_tool_index,
+            controller=controller,
+            continuation_fingerprint=_fingerprint(facts),
+        )
+        continuation.validate_integrity()
+        return continuation
+
+    @staticmethod
+    def _fingerprint_facts(
+        *,
+        request: PermissionDeltaRequest,
+        messages: tuple[ConversationMessage, ...],
+        assistant_message: ConversationMessage,
+        tool_uses: tuple[ToolUseBlock, ...],
+        completed_tool_results: tuple[ToolResultBlock, ...],
+        next_tool_index: int,
+        controller: ParkedControllerState,
+    ) -> dict[str, Any]:
+        return {
+            "request": request.model_dump(mode="json"),
+            "messages": [message.model_dump(mode="json") for message in messages],
+            "assistant_message": assistant_message.model_dump(mode="json"),
+            "tool_uses": [tool.model_dump(mode="json") for tool in tool_uses],
+            "completed_tool_results": [
+                result.model_dump(mode="json") for result in completed_tool_results
+            ],
+            "next_tool_index": next_tool_index,
+            "controller": controller.model_dump(mode="json"),
+        }
+
+    @property
+    def current_tool_use(self) -> ToolUseBlock:
+        try:
+            return self.tool_uses[self.next_tool_index]
+        except IndexError as exc:
+            raise ValueError("continuation dispatch position is out of range") from exc
+
+    @property
+    def remaining_tool_uses(self) -> tuple[ToolUseBlock, ...]:
+        return self.tool_uses[self.next_tool_index :]
+
+    def validate_integrity(self) -> None:
+        self.request.validate_integrity()
+        if self.assistant_message.role != "assistant":
+            raise ValueError("continuation assistant message has invalid role")
+        assistant_tool_uses = tuple(
+            block for block in self.assistant_message.content if isinstance(block, ToolUseBlock)
+        )
+        current = self.current_tool_use
+        completed_ids = tuple(result.tool_use_id for result in self.completed_tool_results)
+        expected_completed_ids = tuple(tool.id for tool in self.tool_uses[: self.next_tool_index])
+        facts = self._fingerprint_facts(
+            request=self.request,
+            messages=self.messages,
+            assistant_message=self.assistant_message,
+            tool_uses=self.tool_uses,
+            completed_tool_results=self.completed_tool_results,
+            next_tool_index=self.next_tool_index,
+            controller=self.controller,
+        )
+        assistant_tool_identities = tuple((tool.id, tool.name) for tool in assistant_tool_uses)
+        dispatch_tool_identities = tuple((tool.id, tool.name) for tool in self.tool_uses)
+        if (
+            assistant_tool_identities != dispatch_tool_identities
+            or completed_ids != expected_completed_ids
+            or current.id != self.request.tool_use_id
+            or current.name != self.request.tool_name
+            or current.input != self.request.final_arguments
+            or self.continuation_fingerprint != _fingerprint(facts)
+        ):
+            raise ValueError("continuation integrity failure")
+
+    def validate_for(self, runtime: PermissionRuntime) -> None:
+        runtime.validate_request(self.request)
+        self.validate_integrity()
+
+
 class PermissionResumeTransition(_FrozenModel):
     request_id: str
     request_fingerprint: str
     grant_fingerprint: str
     decision: PermissionReviewDecision
+    continuation: ParkedContinuation | None = None
 
 
 class PermissionDenialRecord(_FrozenModel):
@@ -546,6 +687,8 @@ class PermissionRuntimeState(_FrozenModel):
     profile_fingerprint: str
     parked_request: PermissionDeltaRequest | None = None
     parked_reason: str | None = None
+    parked_review_status: PermissionParkedReviewStatus | None = None
+    parked_continuation: ParkedContinuation | None = None
     grants: tuple[PermissionDeltaRequest, ...] = ()
     denials: tuple[PermissionDenialRecord, ...] = ()
     request_id_aliases: dict[str, str] = Field(default_factory=dict)
@@ -646,6 +789,8 @@ class PermissionRuntime:
         self.denial_limit = denial_limit
         self.parked_request: PermissionDeltaRequest | None = None
         self.parked_reason: str | None = None
+        self.parked_review_status: PermissionParkedReviewStatus | None = None
+        self.parked_continuation: ParkedContinuation | None = None
         self.last_human_decision: PermissionReviewDecision | None = None
         self.last_decided_request: PermissionDeltaRequest | None = None
         self._last_decision_resumed = False
@@ -697,7 +842,11 @@ class PermissionRuntime:
                 request=request,
             )
         if self.reviewer is None:
-            self.park(request, reason="no automatic reviewer is available")
+            self.park(
+                request,
+                reason="no automatic reviewer is available",
+                review_status=PermissionParkedReviewStatus.MANUAL,
+            )
             return PermissionResolution(
                 status=PermissionResolutionStatus.PARKED,
                 reason=self.parked_reason or "parked",
@@ -706,7 +855,11 @@ class PermissionRuntime:
         try:
             verdict = await self.reviewer.review(request)
         except Exception as exc:
-            self.park(request, reason=f"reviewer failed: {exc}")
+            self.park(
+                request,
+                reason=f"reviewer failed: {exc}",
+                review_status=PermissionParkedReviewStatus.FAILED,
+            )
             return PermissionResolution(
                 status=PermissionResolutionStatus.PARKED,
                 reason=self.parked_reason or "parked",
@@ -720,17 +873,28 @@ class PermissionRuntime:
                 request=request,
             )
         if verdict.decision is PermissionReviewDecision.DENY:
-            count = denial.count + 1 if denial is not None else 1
             self._denials[request.request_fingerprint] = PermissionDenialRecord(
                 request=request,
-                count=count,
+                # A reviewer DENY is a completed decision about this exact
+                # request, not a transient failure to be retried. Open the
+                # exact-request circuit immediately; a different arguments
+                # fingerprint remains independently reviewable.
+                count=self.denial_limit,
             )
             return PermissionResolution(
                 status=PermissionResolutionStatus.DENIED,
                 reason=verdict.reason,
                 request=request,
             )
-        self.park(request, reason=verdict.reason)
+        self.park(
+            request,
+            reason=verdict.reason,
+            review_status=(
+                PermissionParkedReviewStatus.FAILED
+                if verdict.decision is PermissionReviewDecision.FAILED
+                else PermissionParkedReviewStatus.DEFERRED
+            ),
+        )
         return PermissionResolution(
             status=PermissionResolutionStatus.PARKED,
             reason=verdict.reason,
@@ -746,10 +910,18 @@ class PermissionRuntime:
         del self._grants[request.grant_fingerprint]
         return True
 
-    def park(self, request: PermissionDeltaRequest, *, reason: str) -> None:
+    def park(
+        self,
+        request: PermissionDeltaRequest,
+        *,
+        reason: str,
+        review_status: PermissionParkedReviewStatus = PermissionParkedReviewStatus.MANUAL,
+    ) -> None:
         self._validate_request(request)
         self.parked_request = request
         self.parked_reason = reason
+        self.parked_review_status = review_status
+        self.parked_continuation = None
         self.last_human_decision = None
         self.last_decided_request = None
         self._last_decision_resumed = False
@@ -759,6 +931,7 @@ class PermissionRuntime:
         self._grants[request.grant_fingerprint] = request
         self.parked_request = None
         self.parked_reason = None
+        self.parked_review_status = None
         self.last_human_decision = PermissionReviewDecision.APPROVE
         self.last_decided_request = request
         self._last_decision_resumed = False
@@ -771,6 +944,7 @@ class PermissionRuntime:
         )
         self.parked_request = None
         self.parked_reason = reason
+        self.parked_review_status = None
         self.last_human_decision = PermissionReviewDecision.DENY
         self.last_decided_request = request
         self._last_decision_resumed = False
@@ -783,8 +957,22 @@ class PermissionRuntime:
         reappear on resume. One-shot grants and denial records remain part of
         the session authorization ledger and retain their existing semantics.
         """
+        # An approved-but-unconsumed continuation is conversation-bound. If
+        # /clear dropped only its UI transition, the exact grant could later
+        # authorize a newly generated look-alike call in the fresh
+        # conversation. Revoke that one-shot grant before forgetting the
+        # transition. Denial records remain narrowing facts and are safe to
+        # preserve.
+        if (
+            self.last_human_decision is PermissionReviewDecision.APPROVE
+            and self.last_decided_request is not None
+            and self.parked_continuation is not None
+        ):
+            self._grants.pop(self.last_decided_request.grant_fingerprint, None)
         self.parked_request = None
         self.parked_reason = None
+        self.parked_review_status = None
+        self.parked_continuation = None
         self.last_human_decision = None
         self.last_decided_request = None
         self._last_decision_resumed = False
@@ -801,7 +989,36 @@ class PermissionRuntime:
             request_fingerprint=request.request_fingerprint,
             grant_fingerprint=request.grant_fingerprint,
             decision=decision,
+            continuation=self.parked_continuation,
         )
+
+    @property
+    def decision_ready_for_continuation(self) -> bool:
+        return (
+            self.last_human_decision is not None
+            and self.last_decided_request is not None
+            and self._last_decision_resumed
+        )
+
+    def bind_continuation(self, continuation: ParkedContinuation) -> None:
+        request = self.parked_request
+        if request is None or request != continuation.request:
+            raise ValueError("continuation does not match parked permission request")
+        continuation.validate_for(self)
+        self.parked_continuation = continuation
+
+    def consume_continuation(self, continuation: ParkedContinuation) -> None:
+        if self.parked_continuation != continuation:
+            raise ValueError("continuation is not the active permission continuation")
+        continuation.validate_for(self)
+        self.parked_continuation = None
+        self.last_human_decision = None
+        self.last_decided_request = None
+        self._last_decision_resumed = False
+
+    def validate_request(self, request: PermissionDeltaRequest) -> None:
+        """Public fail-closed validation used by continuation orchestration."""
+        self._validate_request(request)
 
     def _require_parked(self, request_id: str) -> PermissionDeltaRequest:
         request = self.parked_request
@@ -857,6 +1074,8 @@ class PermissionRuntime:
             profile_fingerprint=self.profile.fingerprint,
             parked_request=self.parked_request,
             parked_reason=self.parked_reason,
+            parked_review_status=self.parked_review_status,
+            parked_continuation=self.parked_continuation,
             grants=tuple(self._grants[key] for key in sorted(self._grants)),
             denials=tuple(self._denials[key] for key in sorted(self._denials)),
             request_id_aliases=dict(sorted(self._request_id_aliases.items())),
@@ -898,6 +1117,7 @@ class PermissionRuntime:
         for request in (
             parsed.parked_request,
             parsed.last_decided_request,
+            parsed.parked_continuation.request if parsed.parked_continuation is not None else None,
             *parsed.grants,
             *(record.request for record in parsed.denials),
         ):
@@ -918,10 +1138,14 @@ class PermissionRuntime:
                 raise ValueError("permission request id alias integrity failure")
         runtime.parked_request = parsed.parked_request
         runtime.parked_reason = parsed.parked_reason
+        runtime.parked_review_status = parsed.parked_review_status
+        runtime.parked_continuation = parsed.parked_continuation
         runtime.last_human_decision = parsed.last_human_decision
         runtime.last_decided_request = parsed.last_decided_request
         runtime._last_decision_resumed = parsed.last_decision_resumed
         runtime._grants = {request.grant_fingerprint: request for request in parsed.grants}
         runtime._denials = {record.request.request_fingerprint: record for record in parsed.denials}
         runtime._request_id_aliases = dict(parsed.request_id_aliases)
+        if runtime.parked_continuation is not None:
+            runtime.parked_continuation.validate_for(runtime)
         return runtime
