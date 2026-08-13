@@ -1327,9 +1327,9 @@ OpenHarness — multi-turn REPL commands:
                      bare /goal shows status, /goal clear stops early
   /permissions       show configured permission intent, verified runtime
                      boundary facts, and registered tool execution domains
-  /approve [id]      approve one exact parked permission request
-  /deny [id]         deny one exact parked permission request
-  /resume            continue after the recorded permission decision
+  /approve [id]      approve a postponed exact request and continue
+  /deny [id]         deny a postponed exact request and continue
+  /resume            consume an externally recorded, unconsumed decision
   /skills            list available skills (Phase 18 D38.4)
   /memory            list memories in this project's memory store
   /help              show this message
@@ -1727,11 +1727,70 @@ async def _run_chat(
         # door). D43.4: Ctrl+D requires a double-press (armed on first EOF,
         # reset by any successful read) so a slip doesn't drop the session.
         pending_input: str | None = initial_prompt
+        permission_resume_continuation = None
+        permission_menu_deferred = False
         eof_armed = False
+
+        async def _permission_choice() -> _repl.PermissionMenuChoice | None:
+            typer.echo(_repl.PERMISSION_MENU_TEXT)
+            while True:
+                try:
+                    if prompt_session is not None:
+                        raw_choice = await prompt_session.prompt_async("permission> ")
+                    else:
+                        raw_choice = await asyncio.to_thread(input, "permission> ")
+                except (EOFError, KeyboardInterrupt):
+                    typer.echo(
+                        "\n(permission decision postponed; the exact request remains parked. "
+                        "Use /approve or /deny when ready.)"
+                    )
+                    return None
+                parsed = _repl.parse_permission_menu_choice(raw_choice)
+                if parsed is not None:
+                    return parsed
+                typer.echo("(enter 1 or 2; blank input never approves)")
+
         while True:
             manual_input_received = False
+            permission_continuation = permission_resume_continuation
+            permission_resume_continuation = None
+            if (
+                permission_continuation is None
+                and not permission_menu_deferred
+                and permission_runtime.parked_request is not None
+                and permission_runtime.parked_continuation is not None
+            ):
+                permission_choice = await _permission_choice()
+                if permission_choice is None:
+                    permission_menu_deferred = True
+                else:
+                    request_id = permission_runtime.parked_request.request_id
+                    if permission_choice is _repl.PermissionMenuChoice.APPROVE:
+                        permission_runtime.approve_parked(request_id)
+                        decision_label = "approved"
+                    else:
+                        permission_runtime.deny_parked(request_id, reason="user denied")
+                        decision_label = "denied"
+                    transition = permission_runtime.resume_decided()
+                    permission_continuation = transition.continuation
+                    if settings.snapshot.enabled:
+                        update_permission_runtime_snapshot(cwd=env.cwd, runtime=permission_runtime)
+                    typer.echo(f"({decision_label} exact request {request_id[:12]}; continuing)")
+            if permission_continuation is not None:
+                controller = permission_continuation.controller
+                chat_mode = (
+                    _repl.ChatMode.PLAN if controller.mode == "plan" else _repl.ChatMode.DEFAULT
+                )
+                if controller.mode == "goal" and goal is None and controller.goal_condition:
+                    goal = _repl.GoalState(
+                        condition=controller.goal_condition,
+                        set_at=time.time(),
+                        tokens_at_start=_goal_estimate_tokens(history, model=model),
+                    )
             try:
-                if pending_input is not None:
+                if permission_continuation is not None:
+                    user_input = ""
+                elif pending_input is not None:
                     user_input = pending_input
                     pending_input = None
                     if pending_is_goal_feedback:
@@ -1761,7 +1820,7 @@ async def _run_chat(
             eof_armed = False
 
             user_input = user_input.strip()
-            if not user_input:
+            if not user_input and permission_continuation is None:
                 continue
 
             # Built-in REPL commands (D24.3).
@@ -1831,12 +1890,15 @@ async def _run_chat(
                 request_id = supplied_id or permission_runtime.parked_request.request_id
                 try:
                     permission_runtime.approve_parked(request_id)
+                    transition = permission_runtime.resume_decided()
                 except ValueError as exc:
                     typer.echo(f"(permission approval failed: {exc})", err=True)
                     continue
                 if settings.snapshot.enabled:
                     update_permission_runtime_snapshot(cwd=env.cwd, runtime=permission_runtime)
-                typer.echo(f"(approved exact request {request_id[:12]}; use /resume)")
+                permission_resume_continuation = transition.continuation
+                permission_menu_deferred = False
+                typer.echo(f"(approved exact request {request_id[:12]}; continuing)")
                 continue
             if user_input == "/deny" or user_input.startswith("/deny "):
                 if permission_runtime.parked_request is None:
@@ -1846,12 +1908,15 @@ async def _run_chat(
                 request_id = supplied_id or permission_runtime.parked_request.request_id
                 try:
                     permission_runtime.deny_parked(request_id, reason="user denied")
+                    transition = permission_runtime.resume_decided()
                 except ValueError as exc:
                     typer.echo(f"(permission denial failed: {exc})", err=True)
                     continue
                 if settings.snapshot.enabled:
                     update_permission_runtime_snapshot(cwd=env.cwd, runtime=permission_runtime)
-                typer.echo(f"(denied exact request {request_id[:12]}; use /resume)")
+                permission_resume_continuation = transition.continuation
+                permission_menu_deferred = False
+                typer.echo(f"(denied exact request {request_id[:12]}; continuing)")
                 continue
             if user_input == "/resume":
                 try:
@@ -1861,13 +1926,7 @@ async def _run_chat(
                     continue
                 if settings.snapshot.enabled:
                     update_permission_runtime_snapshot(cwd=env.cwd, runtime=permission_runtime)
-                pending_input = (
-                    "[permission decision] The exact request "
-                    f"{transition.request_id} was {transition.decision.value}. "
-                    "If approved, retry the identical tool arguments once. If denied, find a "
-                    "solution inside the current verified boundary."
-                )
-                pending_is_goal_feedback = goal is not None
+                permission_resume_continuation = transition.continuation
                 continue
             # A parked permission is a session-level stop, not a tool-local
             # warning. Starting another model turn before the owner decides
@@ -1887,7 +1946,7 @@ async def _run_chat(
                     request_id = permission_runtime.parked_request.request_id[:12]
                     typer.echo(
                         f"(permission request pending {request_id}; no new Agent turn "
-                        "started. Use /approve or /deny, then /resume)"
+                        "started. Use /approve or /deny.)"
                     )
                     continue
             # D47 — enter plan mode. The clamp itself is the permissions deny
@@ -2030,7 +2089,7 @@ async def _run_chat(
             #   5b's user-priority semantics; SkillStore-second gives CC
             #   ``/<skill>`` zero-migration UX (D38.1 rationale).
             invoked_command = None
-            slash_skill_invoked = False
+            slash_skill_invoked = permission_continuation is not None
             if user_input.startswith("/"):
                 slash_name, slash_args = _split_slash_invocation(user_input)
                 cmd = command_store.get(slash_name) if command_store is not None else None
@@ -2198,6 +2257,12 @@ async def _run_chat(
                 execution_posture=execution_posture,
                 autonomous=(reviewer_posture is ReviewerPosture.AUTO or goal is not None),
                 authorization_context=extract_authorization_context(authorization_messages),
+                controller_mode=(
+                    "plan"
+                    if chat_mode is _repl.ChatMode.PLAN
+                    else ("goal" if goal is not None else "default")
+                ),
+                controller_goal_condition=goal.condition if goal is not None else None,
                 skill_store=skill_store,
                 max_agent_depth=settings.max_agent_depth,
                 execution_env=execution_env,
@@ -2267,7 +2332,12 @@ async def _run_chat(
                     yield ev
 
             try:
-                await render_stream(_capture(run_query(history, context)))
+                query_events = (
+                    run_query(history, context)
+                    if permission_continuation is None
+                    else run_query(history, context, continuation=permission_continuation)
+                )
+                await render_stream(_capture(query_events))
             except LoopLimitExceeded as exc:
                 if exc.messages is None:
                     typer.echo(f"Loop error: {exc}", err=True)
@@ -2297,6 +2367,17 @@ async def _run_chat(
             if captured is not None:
                 history = captured
 
+            if permission_confirmation_required is not None:
+                if goal is not None and chat_mode is _repl.ChatMode.DEFAULT:
+                    typer.echo(
+                        "\a(goal blocked on permission — automation paused before the "
+                        "goal checker. blocker: "
+                        f"{permission_confirmation_required})"
+                    )
+                elif chat_mode is _repl.ChatMode.PLAN:
+                    typer.echo("(plan paused on permission; no plan is ready to approve)")
+                continue
+
             if (
                 goal is not None
                 and chat_mode is _repl.ChatMode.DEFAULT
@@ -2317,12 +2398,7 @@ async def _run_chat(
             # completed turns, option 2 covers "model is still exploring".
             # This is the harness-owned gate: the model has no exit tool, and
             # natural language cannot flip the mode — only a menu choice can.
-            if chat_mode is _repl.ChatMode.PLAN and permission_confirmation_required is not None:
-                typer.echo(
-                    "(plan paused on permission — use /approve or /deny, then "
-                    "/resume; no plan is ready to approve)"
-                )
-            elif chat_mode is _repl.ChatMode.PLAN and conversation_completed:
+            if chat_mode is _repl.ChatMode.PLAN and conversation_completed:
                 typer.echo(_repl.PLAN_MENU_TEXT)
                 choice: _repl.PlanMenuChoice
                 while True:
@@ -2368,14 +2444,6 @@ async def _run_chat(
             # distinguishes incomplete work from a broken judge: only NOT_MET
             # drives another worker turn; ERROR pauses automation.
             if goal is not None and chat_mode is _repl.ChatMode.DEFAULT and pending_input is None:
-                if permission_confirmation_required is not None:
-                    typer.echo(
-                        "\a(goal blocked on permission — automation paused before the "
-                        "goal checker; use /approve or /deny, then /resume, or "
-                        "/goal clear. "
-                        f"blocker: {permission_confirmation_required})"
-                    )
-                    continue
                 evidence = _repl.goal_evidence_messages(history, goal.condition)
                 transcript = render_history_transcript(evidence)
                 result = await judge_goal_completion(

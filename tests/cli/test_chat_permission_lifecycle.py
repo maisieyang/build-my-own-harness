@@ -7,6 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 import openharness.cli as cli_module
+from openharness.engine import QueryContext
 from openharness.execution import (
     BoundaryVerification,
     BoundaryViolation,
@@ -14,6 +15,8 @@ from openharness.execution import (
     ExecutionEffect,
 )
 from openharness.permissions import (
+    ParkedContinuation,
+    ParkedControllerState,
     PermissionDelta,
     PermissionDeltaRequest,
     PermissionReviewDecision,
@@ -25,6 +28,7 @@ from openharness.protocols import (
     ConversationMessage,
     PermissionParkedEvent,
     TextBlock,
+    ToolUseBlock,
     UsageSnapshot,
 )
 from openharness.services.goal_judge import GoalJudgeResult, GoalJudgeVerdict
@@ -32,7 +36,6 @@ from openharness.services.goal_judge import GoalJudgeResult, GoalJudgeVerdict
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from openharness.engine import QueryContext
     from openharness.protocols import ApiStreamEvent
 
 
@@ -94,6 +97,29 @@ def _park_web_request(
         data_destinations=("web",),
     )
     context.permission_runtime.park(request, reason="owner decision needed")
+    assistant_message = ConversationMessage(
+        role="assistant",
+        content=[
+            ToolUseBlock(
+                id=request.tool_use_id,
+                name=request.tool_name,
+                input=request.final_arguments,
+            )
+        ],
+    )
+    continuation = ParkedContinuation.create(
+        request=request,
+        messages=tuple(messages),
+        assistant_message=assistant_message,
+        tool_uses=(assistant_message.content[0],),  # type: ignore[arg-type]
+        completed_tool_results=(),
+        next_tool_index=0,
+        controller=ParkedControllerState(
+            mode=context.controller_mode,
+            goal_condition=context.controller_goal_condition,
+        ),
+    )
+    context.permission_runtime.bind_continuation(continuation)
     return PermissionParkedEvent(
         request_id=request.request_id,
         tool_use_id=request.tool_use_id,
@@ -109,11 +135,13 @@ def _park_web_request(
         data_destinations=request.data_destinations,
         boundary_facts=request.boundary_facts,
         reason="owner decision needed",
+        review_status="manual",
+        continuation=continuation,
         messages=messages,
     )
 
 
-def test_parked_request_blocks_new_agent_and_goal_turns(
+def test_ctrl_c_postpones_permission_and_blocks_new_agent_turns(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -131,25 +159,47 @@ def test_parked_request_blocks_new_agent_and_goal_turns(
     run_calls = 0
 
     async def _run(
-        initial_messages: list[ConversationMessage], context: QueryContext
+        initial_messages: list[ConversationMessage],
+        context: QueryContext,
+        *,
+        continuation: ParkedContinuation | None = None,
     ) -> AsyncIterator[ApiStreamEvent]:
         nonlocal run_calls
         run_calls += 1
-        if run_calls > 1:
-            raise AssertionError("a parked permission must block every new Agent turn")
         assistant = ConversationMessage(role="assistant", content=[TextBlock(text="partial")])
         messages = [*initial_messages, assistant]
-        yield _park_web_request(context, messages, tool_use_id="tool-blocking")
+        if continuation is None:
+            yield _park_web_request(context, messages, tool_use_id="tool-blocking")
+            return
+        yield ConversationCompleteEvent(messages=messages)
 
     monkeypatch.setattr(cli_module, "run_query", _run)
-    _inputs(monkeypatch, ["trigger permission", "start another turn", "/goal finish", "/exit"])
+    inputs: list[str | BaseException] = [
+        "trigger permission",
+        KeyboardInterrupt(),
+        "start another turn",
+        "/approve",
+        "/exit",
+    ]
+    iterator = iter(inputs)
+
+    def _input(prompt: str = "") -> str:
+        del prompt
+        value = next(iterator)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    monkeypatch.setattr("builtins.input", _input)
 
     result = CliRunner().invoke(cli_module.app, ["chat"])
 
     assert result.exit_code == 0
-    assert run_calls == 1
-    assert result.stdout.count("permission request pending") == 2
-    assert "goal set:" not in result.stdout
+    assert run_calls == 2
+    assert "permission decision postponed" in result.stdout
+    assert result.stdout.count("permission request pending") == 1
+    assert "approved exact request" in result.stdout
+    assert "use /resume" not in result.stdout
 
 
 def test_plan_permission_park_suppresses_approval_menu(
@@ -170,23 +220,30 @@ def test_plan_permission_park_suppresses_approval_menu(
     run_calls = 0
 
     async def _run(
-        initial_messages: list[ConversationMessage], context: QueryContext
+        initial_messages: list[ConversationMessage],
+        context: QueryContext,
+        *,
+        continuation: ParkedContinuation | None = None,
     ) -> AsyncIterator[ApiStreamEvent]:
         nonlocal run_calls
         run_calls += 1
         assistant = ConversationMessage(role="assistant", content=[TextBlock(text="partial plan")])
         messages = [*initial_messages, assistant]
-        yield _park_web_request(context, messages, tool_use_id="plan-blocking")
+        if continuation is None:
+            yield _park_web_request(context, messages, tool_use_id="plan-blocking")
+            return
+        yield ConversationCompleteEvent(messages=messages)
 
     monkeypatch.setattr(cli_module, "run_query", _run)
-    _inputs(monkeypatch, ["/plan inspect the repository", "/exit"])
+    _inputs(monkeypatch, ["/plan inspect the repository", "2", "3", "/exit"])
 
     result = CliRunner().invoke(cli_module.app, ["chat"])
 
     assert result.exit_code == 0
-    assert run_calls == 1
+    assert run_calls == 2
     assert "plan paused on permission" in result.stdout
-    assert "approve this plan?" not in result.stdout
+    assert "Deny and continue" in result.stdout
+    assert result.stdout.count("approve this plan?") == 1
 
 
 def test_plan_permission_decision_resumes_planning_before_approval(
@@ -207,7 +264,10 @@ def test_plan_permission_decision_resumes_planning_before_approval(
     run_calls = 0
 
     async def _run(
-        initial_messages: list[ConversationMessage], context: QueryContext
+        initial_messages: list[ConversationMessage],
+        context: QueryContext,
+        *,
+        continuation: ParkedContinuation | None = None,
     ) -> AsyncIterator[ApiStreamEvent]:
         nonlocal run_calls
         run_calls += 1
@@ -215,7 +275,7 @@ def test_plan_permission_decision_resumes_planning_before_approval(
             role="assistant", content=[TextBlock(text=f"plan turn {run_calls}")]
         )
         messages = [*initial_messages, assistant]
-        if run_calls == 1:
+        if continuation is None:
             yield _park_web_request(context, messages, tool_use_id="plan-resume")
             return
         yield ApiMessageCompleteEvent(
@@ -226,7 +286,7 @@ def test_plan_permission_decision_resumes_planning_before_approval(
         yield ConversationCompleteEvent(messages=messages)
 
     monkeypatch.setattr(cli_module, "run_query", _run)
-    _inputs(monkeypatch, ["/plan inspect", "/deny", "/resume", "3", "/exit"])
+    _inputs(monkeypatch, ["/plan inspect", "2", "3", "/exit"])
 
     result = CliRunner().invoke(cli_module.app, ["chat"])
 
@@ -244,7 +304,7 @@ def test_plan_permission_decision_resumes_planning_before_approval(
         ("/deny", PermissionReviewDecision.DENY),
     ],
 )
-def test_park_decision_and_explicit_resume_are_durable_and_skip_judge_until_resume(
+def test_permission_menu_decision_is_durable_and_resumes_before_goal_judge(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     command: str,
@@ -265,7 +325,10 @@ def test_park_decision_and_explicit_resume_are_durable_and_skip_judge_until_resu
     run_calls = 0
 
     async def _run(
-        initial_messages: list[ConversationMessage], context: QueryContext
+        initial_messages: list[ConversationMessage],
+        context: QueryContext,
+        *,
+        continuation: ParkedContinuation | None = None,
     ) -> AsyncIterator[ApiStreamEvent]:
         nonlocal run_calls
         run_calls += 1
@@ -273,41 +336,8 @@ def test_park_decision_and_explicit_resume_are_durable_and_skip_judge_until_resu
             role="assistant", content=[TextBlock(text="permission lifecycle")]
         )
         messages = [*initial_messages, assistant]
-        if run_calls == 2:
-            assert context.permission_runtime is not None
-            request = PermissionDeltaRequest.create(
-                tool_use_id="tool-1",
-                tool_name="WebFetch",
-                final_arguments={"url": "https://example.com"},
-                profile=context.permission_runtime.profile,
-                boundary=context.permission_runtime.boundary,
-                delta=PermissionDelta.external_tool("web"),
-                crossing=BoundaryViolation(
-                    dimension="external.web",
-                    requested="WebFetch",
-                    evidence="outside local sandbox",
-                ),
-                data_sources=("final tool arguments",),
-                data_destinations=("web",),
-            )
-            context.permission_runtime.park(request, reason="owner decision needed")
-            yield PermissionParkedEvent(
-                request_id=request.request_id,
-                tool_use_id=request.tool_use_id,
-                tool_name=request.tool_name,
-                delta_kind=request.delta.kind.value,
-                delta_value=request.delta.value,
-                profile_fingerprint=request.profile_fingerprint,
-                boundary_fingerprint=request.boundary_fingerprint,
-                backend=request.backend,
-                backend_fingerprint=request.backend_fingerprint,
-                final_arguments=request.final_arguments,
-                data_sources=request.data_sources,
-                data_destinations=request.data_destinations,
-                boundary_facts=request.boundary_facts,
-                reason="owner decision needed",
-                messages=messages,
-            )
+        if run_calls == 2 and continuation is None:
+            yield _park_web_request(context, messages, tool_use_id="tool-1")
             return
         yield ApiMessageCompleteEvent(
             message=assistant,
@@ -337,17 +367,18 @@ def test_park_decision_and_explicit_resume_are_durable_and_skip_judge_until_resu
     monkeypatch.setattr(
         "openharness.services.snapshot.update_permission_runtime_snapshot", _persist
     )
-    _inputs(monkeypatch, ["/goal finish", command, "/resume", "/exit"])
+    _inputs(monkeypatch, ["/goal finish", "1" if command == "/approve" else "2", "/exit"])
 
     result = CliRunner().invoke(cli_module.app, ["chat"])
 
     assert result.exit_code == 0
     assert "goal blocked on permission" in result.stdout
-    assert "use /resume" in result.stdout
+    assert "use /resume" not in result.stdout
+    assert "[permission decision]" not in result.stdout
     assert run_calls == 3
     assert judge_calls == 2
     assert "goal met after 2 checked turns (1 continuation)" in result.stdout
-    assert persisted == [decision, decision]
+    assert persisted == [decision]
 
 
 def _snapshot_with_runtime(runtime: object) -> dict[str, object]:
@@ -398,6 +429,285 @@ def test_chat_resume_restores_permission_state_under_same_boundary(
 
     assert result.exit_code == 0
     assert "resumed: 0 messages" in result.stdout
+
+
+def test_chat_resume_reopens_parked_menu_and_continues_exact_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("OPENHARNESS_SANDBOX_ENABLED", "true")
+    monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _Client())
+    session = _Session()
+    from openharness.permissions import PermissionRuntime
+
+    runtime = PermissionRuntime(profile=session.profile, boundary=session.boundary)
+    request = PermissionDeltaRequest.create(
+        tool_use_id="tool-resume",
+        tool_name="WebFetch",
+        final_arguments={"url": "https://example.com"},
+        profile=session.profile,
+        boundary=session.boundary,
+        delta=PermissionDelta.external_tool("web"),
+        crossing=BoundaryViolation(
+            dimension="external.web",
+            requested="WebFetch",
+            evidence="outside local sandbox",
+        ),
+        data_sources=("final tool arguments",),
+        data_destinations=("web",),
+    )
+    assistant = ConversationMessage(
+        role="assistant",
+        content=[
+            ToolUseBlock(
+                id=request.tool_use_id,
+                name=request.tool_name,
+                input=request.final_arguments,
+            )
+        ],
+    )
+    continuation = ParkedContinuation.create(
+        request=request,
+        messages=(),
+        assistant_message=assistant,
+        tool_uses=(assistant.content[0],),  # type: ignore[arg-type]
+        completed_tool_results=(),
+        next_tool_index=0,
+        controller=ParkedControllerState(mode="default"),
+    )
+    runtime.park(request, reason="resume owner decision")
+    runtime.bind_continuation(continuation)
+    monkeypatch.setattr(
+        cli_module,
+        "_load_resume_snapshot",
+        lambda *a, **kw: _snapshot_with_runtime(runtime),
+    )
+
+    async def _open(**kwargs: object) -> tuple[object, _Session]:
+        del kwargs
+        return session.profile, session
+
+    monkeypatch.setattr(cli_module, "_open_sandbox_session", _open)
+    seen: list[ParkedContinuation] = []
+
+    async def _run(
+        initial_messages: list[ConversationMessage],
+        context: QueryContext,
+        *,
+        continuation: ParkedContinuation | None = None,
+    ) -> AsyncIterator[ApiStreamEvent]:
+        del context
+        assert continuation is not None
+        seen.append(continuation)
+        final = [
+            *initial_messages,
+            ConversationMessage(role="assistant", content=[TextBlock(text="resumed")]),
+        ]
+        yield ConversationCompleteEvent(messages=final)
+
+    monkeypatch.setattr(cli_module, "run_query", _run)
+    _inputs(monkeypatch, ["1", "/exit"])
+
+    result = CliRunner().invoke(cli_module.app, ["chat", "--resume"])
+
+    assert result.exit_code == 0
+    assert "Approve once and continue" in result.stdout
+    assert "approved exact request" in result.stdout
+    assert "use /resume" not in result.stdout
+    assert seen == [continuation]
+
+
+def test_resume_menu_has_no_default_and_can_deny(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("OPENHARNESS_SANDBOX_ENABLED", "true")
+    monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _Client())
+    session = _Session()
+    from openharness.permissions import PermissionRuntime
+
+    runtime = PermissionRuntime(profile=session.profile, boundary=session.boundary)
+    event = _park_web_request(
+        QueryContext(
+            api_client=_Client(),
+            tool_registry=cli_module.create_default_tool_registry(),
+            system_prompt="test",
+            cwd=tmp_path,
+            model="qwen-plus",
+            permission_runtime=runtime,
+            runtime_permission_profile=session.profile,
+            enforced_boundary=session.boundary,
+        ),
+        [],
+        tool_use_id="tool-deny",
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_load_resume_snapshot",
+        lambda *a, **kw: _snapshot_with_runtime(runtime),
+    )
+
+    async def _open(**kwargs: object) -> tuple[object, _Session]:
+        del kwargs
+        return session.profile, session
+
+    monkeypatch.setattr(cli_module, "_open_sandbox_session", _open)
+
+    async def _run(
+        initial_messages: list[ConversationMessage],
+        context: QueryContext,
+        *,
+        continuation: ParkedContinuation | None = None,
+    ) -> AsyncIterator[ApiStreamEvent]:
+        del initial_messages, context
+        assert continuation == event.continuation
+        yield ConversationCompleteEvent(messages=[])
+
+    monkeypatch.setattr(cli_module, "run_query", _run)
+    _inputs(monkeypatch, ["", "yes", "2", "/exit"])
+
+    result = CliRunner().invoke(cli_module.app, ["chat", "--resume"])
+
+    assert result.exit_code == 0
+    assert result.stdout.count("blank input never approves") == 2
+    assert "denied exact request" in result.stdout
+
+
+def test_permission_recovery_commands_report_when_nothing_is_pending(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _Client())
+    _inputs(monkeypatch, ["/approve", "/deny", "/resume", "/exit"])
+
+    result = CliRunner().invoke(cli_module.app, ["chat"])
+
+    assert result.exit_code == 0
+    assert result.stdout.count("no parked permission request") == 2
+    assert "no permission decision to resume" in result.stdout
+
+
+def test_external_decision_uses_slash_resume_without_a_model_control_message(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("OPENHARNESS_SANDBOX_ENABLED", "true")
+    monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _Client())
+    session = _Session()
+    from openharness.permissions import PermissionRuntime
+
+    runtime = PermissionRuntime(profile=session.profile, boundary=session.boundary)
+    context = QueryContext(
+        api_client=_Client(),
+        tool_registry=cli_module.create_default_tool_registry(),
+        system_prompt="test",
+        cwd=tmp_path,
+        model="qwen-plus",
+        permission_runtime=runtime,
+        runtime_permission_profile=session.profile,
+        enforced_boundary=session.boundary,
+    )
+    event = _park_web_request(context, [], tool_use_id="tool-external-control")
+    runtime.approve_parked(event.request_id)
+    monkeypatch.setattr(
+        cli_module,
+        "_load_resume_snapshot",
+        lambda *a, **kw: _snapshot_with_runtime(runtime),
+    )
+
+    async def _open(**kwargs: object) -> tuple[object, _Session]:
+        del kwargs
+        return session.profile, session
+
+    monkeypatch.setattr(cli_module, "_open_sandbox_session", _open)
+    seen: list[ParkedContinuation] = []
+
+    async def _run(
+        initial_messages: list[ConversationMessage],
+        query_context: QueryContext,
+        *,
+        continuation: ParkedContinuation | None = None,
+    ) -> AsyncIterator[ApiStreamEvent]:
+        del initial_messages, query_context
+        assert continuation is not None
+        seen.append(continuation)
+        yield ConversationCompleteEvent(messages=[])
+
+    monkeypatch.setattr(cli_module, "run_query", _run)
+    _inputs(monkeypatch, ["/resume", "/exit"])
+
+    result = CliRunner().invoke(cli_module.app, ["chat", "--resume"])
+
+    assert result.exit_code == 0
+    assert seen == [event.continuation]
+    assert "[permission decision]" not in result.stdout
+
+
+def test_postponed_request_rejects_nonmatching_slash_ids(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENHARNESS_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("OPENHARNESS_SANDBOX_ENABLED", "true")
+    monkeypatch.setattr(cli_module, "_build_client", lambda _settings: _Client())
+    session = _Session()
+    from openharness.permissions import PermissionRuntime
+
+    runtime = PermissionRuntime(profile=session.profile, boundary=session.boundary)
+    context = QueryContext(
+        api_client=_Client(),
+        tool_registry=cli_module.create_default_tool_registry(),
+        system_prompt="test",
+        cwd=tmp_path,
+        model="qwen-plus",
+        permission_runtime=runtime,
+        runtime_permission_profile=session.profile,
+        enforced_boundary=session.boundary,
+    )
+    event = _park_web_request(context, [], tool_use_id="tool-bad-id")
+    monkeypatch.setattr(
+        cli_module,
+        "_load_resume_snapshot",
+        lambda *a, **kw: _snapshot_with_runtime(runtime),
+    )
+
+    async def _open(**kwargs: object) -> tuple[object, _Session]:
+        del kwargs
+        return session.profile, session
+
+    monkeypatch.setattr(cli_module, "_open_sandbox_session", _open)
+    values: list[str | BaseException] = [
+        KeyboardInterrupt(),
+        "/approve deadbeef",
+        "/deny deadbeef",
+        "/exit",
+    ]
+    iterator = iter(values)
+
+    def _input(prompt: str = "") -> str:
+        del prompt
+        value = next(iterator)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    monkeypatch.setattr("builtins.input", _input)
+
+    result = CliRunner().invoke(cli_module.app, ["chat", "--resume"])
+
+    assert result.exit_code == 0
+    assert "permission approval failed" in result.output
+    assert "permission denial failed" in result.output
+    assert runtime.parked_request == event.continuation.request
 
 
 def test_chat_resume_refuses_boundary_drift_and_missing_sandbox(

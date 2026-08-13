@@ -21,6 +21,7 @@ from openharness.permissions import (
     ExternalToolMode,
     ExternalToolPolicy,
     PermissionDeltaRequest,
+    PermissionParkedReviewStatus,
     PermissionReviewVerdict,
     PermissionRuntime,
     RuntimePermissionProfile,
@@ -489,8 +490,101 @@ async def test_reviewer_defer_emits_typed_park_and_stops_before_next_model_turn(
     parked = next(event for event in events if isinstance(event, PermissionParkedEvent))
     assert parked.request_id == runtime.parked_request.request_id
     assert parked.reason == "human must decide"
+    assert parked.review_status == PermissionParkedReviewStatus.DEFERRED.value
+    assert parked.continuation == runtime.parked_continuation
+    assert parked.continuation.current_tool_use.id == "tool-1"
     assert tool.executed is False
     assert len(client.captured_requests) == 1
+
+
+async def test_approved_continuation_executes_exact_tool_without_reconstruction_turn() -> None:
+    tool = _ExternalTool()
+    registry = ToolRegistry()
+    registry.register(tool)
+    reviewer = _Reviewer(PermissionReviewVerdict.defer("human must decide"))
+    profile, runtime = _runtime(reviewer)
+    client = _StubApiClient(events_per_turn=[[_tool_turn()], [_end_turn()]])
+    context = QueryContext(
+        api_client=cast("OpenAICompatibleApiClient", client),
+        tool_registry=registry,
+        system_prompt="test",
+        cwd=Path("/tmp"),
+        model="qwen-plus",
+        runtime_permission_profile=profile,
+        enforced_boundary=runtime.boundary,
+        permission_runtime=runtime,
+        controller_mode="goal",
+        controller_goal_condition="obtain the exact result",
+    )
+
+    first_events = [event async for event in run_query([], context)]
+    parked = next(event for event in first_events if isinstance(event, PermissionParkedEvent))
+    runtime.approve_parked(parked.request_id)
+    transition = runtime.resume_decided()
+    assert transition.continuation is not None
+
+    resumed_events = [
+        event
+        async for event in run_query(
+            [],
+            context,
+            continuation=transition.continuation,
+        )
+    ]
+
+    assert tool.executed is True
+    assert len(client.captured_requests) == 2
+    assert any(
+        isinstance(event, ToolExecutionCompletedEvent)
+        and event.tool_use_id == "tool-1"
+        and not event.is_error
+        for event in resumed_events
+    )
+    assert runtime.parked_continuation is None
+
+
+async def test_denied_continuation_returns_tool_error_without_reconstruction_turn() -> None:
+    tool = _ExternalTool()
+    registry = ToolRegistry()
+    registry.register(tool)
+    reviewer = _Reviewer(PermissionReviewVerdict.defer("human must decide"))
+    profile, runtime = _runtime(reviewer)
+    client = _StubApiClient(events_per_turn=[[_tool_turn()], [_end_turn()]])
+    context = QueryContext(
+        api_client=cast("OpenAICompatibleApiClient", client),
+        tool_registry=registry,
+        system_prompt="test",
+        cwd=Path("/tmp"),
+        model="qwen-plus",
+        runtime_permission_profile=profile,
+        enforced_boundary=runtime.boundary,
+        permission_runtime=runtime,
+    )
+
+    first_events = [event async for event in run_query([], context)]
+    parked = next(event for event in first_events if isinstance(event, PermissionParkedEvent))
+    runtime.deny_parked(parked.request_id, reason="user denied")
+    transition = runtime.resume_decided()
+    assert transition.continuation is not None
+
+    resumed_events = [
+        event
+        async for event in run_query(
+            [],
+            context,
+            continuation=transition.continuation,
+        )
+    ]
+
+    denied = next(
+        event
+        for event in resumed_events
+        if isinstance(event, ToolExecutionCompletedEvent) and event.tool_use_id == "tool-1"
+    )
+    assert denied.is_error is True
+    assert "denied" in denied.output
+    assert tool.executed is False
+    assert len(client.captured_requests) == 2
 
 
 async def test_local_boundary_violation_emits_structured_event() -> None:

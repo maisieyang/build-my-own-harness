@@ -96,7 +96,8 @@ async def test_parked_permission_renders_auditable_request_details() -> None:
     assert "delta: network_domain=pypi.org" in rendered
     assert "sandbox-visible data -> pypi.org:443" in rendered
     assert "boundary: macos-seatbelt cccccccccccc" in rendered
-    assert "/approve aaaaaaaaaaaa" in rendered
+    assert "review status: manual" in rendered
+    assert "/approve" not in rendered
 
 
 class TestTextDeltas:

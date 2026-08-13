@@ -327,6 +327,8 @@ class TestSerializeSnapshot:
             "profile_fingerprint",
             "parked_request",
             "parked_reason",
+            "parked_review_status",
+            "parked_continuation",
             "grants",
             "denials",
             "request_id_aliases",
