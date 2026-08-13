@@ -19,7 +19,7 @@ Bar 出处(各 dataset_card ratified 值):
 - skill_trigger   ≥7/9 且 7 稳定绿必须全绿(v2 措辞,ratchet 后)
 - error_feedback  ≥9/11 且 9 稳定绿必须全绿
 - memory_compact  9/9(历史 qwen-max 3 条 + 当前 qwen3.7-max 6 条)
-- verify_judge    13/13(判官与金标一致 + 抗注入 + dogfood 回归,B3 / D45.2)
+- verify_judge    15/15(判官与金标一致 + 抗注入 + typed WebSearch 证据,B3 / D45.2)
 - memory_read     6/6(must-read 契约 + restraint,C4 / 面 #4)
 - permission_review 6/6(exact verdict + reviewer lifecycle,G1 / D52)
 """
@@ -187,9 +187,9 @@ class TestReplayGates:
             include_candidates=False,
         )
         passing = _passing_ids(results)
-        # B3 bar = 13/13 全绿(判官与金标一致 + 抗注入 + dogfood 回归),dataset_card ratify
-        assert len(passing) == len(results) == 13, (
-            f"verify_judge bar 13/13 broken: failing={sorted({r.sample.case_id for r in results} - passing)}"
+        # B3 bar = 15/15 全绿(判官与金标一致 + 抗注入 + typed WebSearch 证据),dataset_card ratify
+        assert len(passing) == len(results) == 15, (
+            f"verify_judge bar 15/15 broken: failing={sorted({r.sample.case_id for r in results} - passing)}"
         )
 
     async def test_memory_read_replay_holds_bar(self) -> None:
