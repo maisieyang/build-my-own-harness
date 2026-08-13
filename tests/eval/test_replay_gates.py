@@ -184,6 +184,7 @@ class TestReplayGates:
             model=_VERIFY_JUDGE_MODEL,
             cassette_root=_ROOT / "verify_judge" / "cassettes",
             cassette_mode="replay",
+            include_candidates=False,
         )
         passing = _passing_ids(results)
         # B3 bar = 13/13 全绿(判官与金标一致 + 抗注入 + dogfood 回归),dataset_card ratify

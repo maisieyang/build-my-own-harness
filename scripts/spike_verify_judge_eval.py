@@ -101,6 +101,7 @@ async def main() -> None:
     print(f"# cassette_mode: {cassette_mode}")
     print()
 
+    case_id = resolve_manual_case_id()
     results = await run_verify_judge_eval(
         dataset_path,
         scorers,
@@ -108,7 +109,11 @@ async def main() -> None:
         model,
         cassette_root=cassette_root,
         cassette_mode=cassette_mode,
-        case_id=resolve_manual_case_id(),
+        case_id=case_id,
+        # A full replay is the stable 13-case ratified gate. A targeted
+        # replay intentionally includes its requested candidate and fails
+        # closed until that case has been manually recorded.
+        include_candidates=cassette_mode != "replay" or case_id is not None,
     )
 
     for result in results:

@@ -26,6 +26,7 @@ from openharness.eval.cassette import (
     CassetteStore,
 )
 from openharness.eval.selection import select_cases
+from openharness.protocols.messages import ConversationMessage
 from openharness.services.goal_judge import GoalJudgeVerdict, judge_goal_completion
 
 if TYPE_CHECKING:
@@ -48,6 +49,8 @@ class VerifyJudgeSample:
     gold_passed: bool
     is_injection: bool
     notes: str
+    evidence_messages: tuple[ConversationMessage, ...] = ()
+    status: str = "ratified"
 
 
 @dataclass(frozen=True)
@@ -73,6 +76,11 @@ def load_verify_judge_dataset(path: Path) -> list[VerifyJudgeSample]:
                 gold_passed=bool(entry["gold_passed"]),
                 is_injection=bool(entry.get("is_injection", False)),
                 notes=entry.get("notes", ""),
+                evidence_messages=tuple(
+                    ConversationMessage.model_validate(message)
+                    for message in entry.get("evidence_messages", ())
+                ),
+                status=entry.get("status", "ratified"),
             )
         )
     return samples
@@ -88,6 +96,7 @@ async def infer_verify_judge(
     result = await judge_goal_completion(
         sample.condition,
         sample.transcript,
+        evidence_messages=(list(sample.evidence_messages) if sample.evidence_messages else None),
         api_client=api_client,
         model=model,
     )
@@ -169,9 +178,13 @@ async def run_verify_judge_eval(
     cassette_root: Path | None = None,
     cassette_mode: CassetteMode = "live",
     case_id: str | None = None,
+    include_candidates: bool = True,
 ) -> list[VerifyJudgeCaseResult]:
     """End-to-end: dataset → per-sample judge (cassette-aware) → scorers."""
-    samples = select_cases(load_verify_judge_dataset(dataset_path), case_id)
+    samples = load_verify_judge_dataset(dataset_path)
+    if not include_candidates:
+        samples = [sample for sample in samples if sample.status == "ratified"]
+    samples = select_cases(samples, case_id)
     store = CassetteStore(cassette_root) if cassette_root is not None else None
     results: list[VerifyJudgeCaseResult] = []
     for sample in samples:

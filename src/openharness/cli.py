@@ -2449,6 +2449,7 @@ async def _run_chat(
                 result = await judge_goal_completion(
                     goal.condition,
                     transcript,
+                    evidence_messages=evidence,
                     api_client=client,
                     model=settings.goal_judge_model or model,
                     timeout_seconds=60.0,

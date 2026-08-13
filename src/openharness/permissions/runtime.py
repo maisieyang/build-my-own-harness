@@ -873,10 +873,13 @@ class PermissionRuntime:
                 request=request,
             )
         if verdict.decision is PermissionReviewDecision.DENY:
-            count = denial.count + 1 if denial is not None else 1
             self._denials[request.request_fingerprint] = PermissionDenialRecord(
                 request=request,
-                count=count,
+                # A reviewer DENY is a completed decision about this exact
+                # request, not a transient failure to be retried. Open the
+                # exact-request circuit immediately; a different arguments
+                # fingerprint remains independently reviewable.
+                count=self.denial_limit,
             )
             return PermissionResolution(
                 status=PermissionResolutionStatus.DENIED,

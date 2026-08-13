@@ -8,7 +8,12 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from openharness.protocols import ConversationMessage, TextBlock
+from openharness.protocols import (
+    ConversationMessage,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+)
 from openharness.protocols.stream_events import ApiMessageCompleteEvent, ApiTextDeltaEvent
 from openharness.protocols.usage import UsageSnapshot
 from openharness.services.goal_judge import (
@@ -101,6 +106,158 @@ class TestJudgeGoalCompletionHappyPath:
         sent_text = stub.last_request.messages[-1].content[0].text
         assert "UNIQUE_CONDITION_MARKER" in sent_text
         assert "UNIQUE_TRANSCRIPT_MARKER" in sent_text
+
+
+class TestRequiredWebSearchEvidence:
+    @pytest.mark.parametrize(
+        "evidence_messages",
+        [
+            [],
+            [
+                ConversationMessage(
+                    role="assistant",
+                    content=[TextBlock(text="I called WebSearch and it succeeded")],
+                )
+            ],
+            [
+                ConversationMessage(
+                    role="assistant",
+                    content=[
+                        ToolUseBlock(
+                            id="web-1",
+                            name="WebSearch",
+                            input={"query": "OpenAI Responses API"},
+                        )
+                    ],
+                )
+            ],
+            [
+                ConversationMessage(
+                    role="assistant",
+                    content=[
+                        ToolUseBlock(
+                            id="web-1",
+                            name="WebSearch",
+                            input={"query": "OpenAI Responses API"},
+                        )
+                    ],
+                ),
+                ConversationMessage(
+                    role="user",
+                    content=[
+                        ToolResultBlock(
+                            tool_use_id="web-1",
+                            content="permission parked: human approval required",
+                            is_error=True,
+                        )
+                    ],
+                ),
+            ],
+        ],
+        ids=("no-evidence", "assistant-prose", "tool-call-only", "error-result"),
+    )
+    async def test_explicit_websearch_goal_fails_closed_without_successful_typed_result(
+        self,
+        evidence_messages: list[ConversationMessage],
+    ) -> None:
+        stub = _JudgeStubClient('{"score": 1, "reason": "assistant says it happened"}')
+
+        result = await judge_goal_completion(
+            "必须成功调用 WebSearch 并给出官方链接",
+            "assistant prose and rendered transcript are not authoritative",
+            evidence_messages=evidence_messages,
+            api_client=stub,
+            model="fake-model",
+        )
+
+        assert result.verdict is GoalJudgeVerdict.NOT_MET
+        assert "successful WebSearch tool result" in result.reason
+        assert stub.last_request is None
+
+    @pytest.mark.parametrize(
+        "condition",
+        [
+            "必须通过 WebSearch 找到 OpenAI Responses API 官方文档",
+            "你必须准备并发起一次 WebSearch, 没有真实结果前不得完成",
+            "The agent must execute WebSearch successfully before completion",
+        ],
+    )
+    async def test_real_dogfood_requirement_phrasings_activate_the_typed_gate(
+        self, condition: str
+    ) -> None:
+        stub = _JudgeStubClient('{"score": 1, "reason": "unsupported claim"}')
+
+        result = await judge_goal_completion(
+            condition,
+            "assistant displayed arguments only",
+            evidence_messages=[],
+            api_client=stub,
+            model="fake-model",
+        )
+
+        assert result.verdict is GoalJudgeVerdict.NOT_MET
+        assert stub.last_request is None
+
+    async def test_successful_matching_websearch_result_allows_judge_to_check_rest(self) -> None:
+        stub = _JudgeStubClient('{"score": 1, "reason": "link and purpose are present"}')
+        evidence = [
+            ConversationMessage(
+                role="assistant",
+                content=[
+                    ToolUseBlock(
+                        id="web-1",
+                        name="WebSearch",
+                        input={"query": "OpenAI Responses API"},
+                    )
+                ],
+            ),
+            ConversationMessage(
+                role="user",
+                content=[
+                    ToolResultBlock(
+                        tool_use_id="web-1",
+                        content="Search results: https://developers.openai.com/api/docs",
+                        is_error=False,
+                    )
+                ],
+            ),
+        ]
+
+        result = await judge_goal_completion(
+            "必须成功调用 WebSearch, 并给出官方链接和用途说明",
+            "rendered transcript",
+            evidence_messages=evidence,
+            api_client=stub,
+            model="fake-model",
+        )
+
+        assert result.verdict is GoalJudgeVerdict.MET
+        assert result.reason == "link and purpose are present"
+        assert stub.last_request is not None
+
+    @pytest.mark.parametrize(
+        "condition",
+        [
+            "解释什么时候应该使用 WebSearch",
+            "审查代码是否错误调用 WebSearch",
+            "Do not use WebSearch; explain why it is unnecessary",
+        ],
+    )
+    async def test_goals_that_only_discuss_websearch_still_use_the_judge(
+        self, condition: str
+    ) -> None:
+        stub = _JudgeStubClient('{"score": 1, "reason": "discussion is complete"}')
+
+        result = await judge_goal_completion(
+            condition,
+            "assistant explained the WebSearch policy",
+            evidence_messages=[],
+            api_client=stub,
+            model="fake-model",
+        )
+
+        assert result.verdict is GoalJudgeVerdict.MET
+        assert stub.last_request is not None
 
 
 class TestJudgeGoalCompletionErrors:

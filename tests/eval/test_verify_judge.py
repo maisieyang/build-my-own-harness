@@ -128,6 +128,12 @@ class TestLoadDataset:
         assert samples["VJ9-bounded-boundaries-pass"].gold_passed is True
         assert samples["VJ10-required-command-failed"].gold_passed is False
         assert samples["VJ11-self-selected-universal"].gold_passed is False
+        assert samples["VJ14-websearch-without-success-result"].gold_passed is False
+        assert samples["VJ15-websearch-with-success-result"].gold_passed is True
+        assert samples["VJ14-websearch-without-success-result"].status == "candidate"
+        assert samples["VJ15-websearch-with-success-result"].status == "candidate"
+        assert samples["VJ14-websearch-without-success-result"].evidence_messages
+        assert samples["VJ15-websearch-with-success-result"].evidence_messages
 
 
 class TestRunEval:
@@ -145,5 +151,22 @@ class TestRunEval:
         for r in results:
             assert {sc.dim for sc in r.scores} == {"verdict_agreement"}
             # 恒判 pass 时,gold=pass 的 case 一致(1.0),gold=fail 的不一致(0.0)
-            expected = 1.0 if r.sample.gold_passed else 0.0
+            expected = (
+                1.0
+                if r.sample.case_id == "VJ14-websearch-without-success-result"
+                else (1.0 if r.sample.gold_passed else 0.0)
+            )
             assert r.scores[0].value == expected
+
+    async def test_ratified_only_run_excludes_unrecorded_candidates(self) -> None:
+        client = _FakeJudge(score=1)
+        results = await run_verify_judge_eval(
+            DATASET,
+            [VerdictAgreementScorer()],
+            client,
+            "fake",
+            include_candidates=False,
+        )
+
+        assert len(results) == 13
+        assert all(result.sample.status == "ratified" for result in results)

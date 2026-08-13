@@ -14,11 +14,17 @@ is three-state.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from openharness.protocols import ConversationMessage, TextBlock
+from openharness.protocols import (
+    ConversationMessage,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+)
 from openharness.services.structured_response import strip_markdown_fence
 from openharness.services.summarize import summarize
 
@@ -97,10 +103,50 @@ def _normalize_reason(reason: str) -> str:
     return " ".join(printable.split())[:500]
 
 
+def _requires_successful_websearch(condition: str) -> bool:
+    """Recognize an explicit positive WebSearch execution requirement.
+
+    This is deliberately a narrow deterministic gate, not a general natural-
+    language requirement parser.  It protects the concrete dogfood contract
+    while leaving goals that merely discuss or prohibit WebSearch to the LLM
+    judge.
+    """
+    normalized = " ".join(condition.casefold().split())
+    patterns = (
+        r"(?:must|required to|needs? to|has to)\s+(?:successfully\s+)?"
+        r"(?:call|use|invoke|run|perform|execute)\s+websearch\b",
+        r"(?:必须|须|需要|要求|应当).{0,24}(?:成功.{0,8})?"
+        r"(?:调用|使用|通过|发起|执行).{0,8}websearch\b",
+    )
+    return any(re.search(pattern, normalized) is not None for pattern in patterns)
+
+
+def _has_successful_websearch_result(messages: list[ConversationMessage]) -> bool:
+    """Require a typed successful result paired to a prior WebSearch call."""
+    pending_ids: set[str] = set()
+    for message in messages:
+        if message.role == "assistant":
+            pending_ids.update(
+                block.id
+                for block in message.content
+                if isinstance(block, ToolUseBlock) and block.name == "WebSearch"
+            )
+            continue
+        for block in message.content:
+            if (
+                isinstance(block, ToolResultBlock)
+                and block.tool_use_id in pending_ids
+                and not block.is_error
+            ):
+                return True
+    return False
+
+
 async def judge_goal_completion(
     condition: str,
     transcript: str,
     *,
+    evidence_messages: list[ConversationMessage] | None = None,
     api_client: SupportsStreamingMessages,
     model: str,
     max_tokens: int = 256,
@@ -112,6 +158,19 @@ async def judge_goal_completion(
     ``transcript`` is untrusted (it can contain text the agent pulled in via
     tools). Both inputs are serialized as one JSON data envelope so content
     cannot forge structural delimiters or escape into ad-hoc prompt text."""
+    if (
+        evidence_messages is not None
+        and _requires_successful_websearch(condition)
+        and not _has_successful_websearch_result(evidence_messages)
+    ):
+        return GoalJudgeResult(
+            verdict=GoalJudgeVerdict.NOT_MET,
+            reason=(
+                "goal requires a successful WebSearch tool result, but no matching "
+                "non-error typed result is present"
+            ),
+        )
+
     payload = json.dumps(
         {"condition": condition, "transcript": transcript},
         ensure_ascii=False,
