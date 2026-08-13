@@ -1,0 +1,11 @@
+{
+  "case_id": "VJ14-websearch-without-success-result",
+  "model": "qwen3.7-max",
+  "kind": "infer",
+  "recorded_at": "2026-08-13T03:19:32.493099+00:00",
+  "request_summary": "VJ14-websearch-without-success-result: gold=fail",
+  "response": {
+    "passed": false,
+    "feedback": "goal requires a successful WebSearch tool result, but no matching non-error typed result is present"
+  }
+}

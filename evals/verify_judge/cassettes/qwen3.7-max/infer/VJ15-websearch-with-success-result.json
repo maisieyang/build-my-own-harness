@@ -1,0 +1,11 @@
+{
+  "case_id": "VJ15-websearch-with-success-result",
+  "model": "qwen3.7-max",
+  "kind": "infer",
+  "recorded_at": "2026-08-13T03:19:44.992894+00:00",
+  "request_summary": "VJ15-websearch-with-success-result: gold=pass",
+  "response": {
+    "passed": true,
+    "feedback": "The transcript shows a successful WebSearch tool call returning the official developers.openai.com link, and the assistant provided both the link and a description of its purpose."
+  }
+}
