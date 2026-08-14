@@ -33,7 +33,7 @@ capture 会生成：
 
 - 当前安全配置摘要、context window、compact 阈值和 Tool 原生输出上限；
 - project instructions、Commands、Skills 与已安装 Plugins；
-- Memory index 与五槽 session-memory checkpoint；
+- Project Memory index 与 conversation snapshot；
 - 当前 snapshot 的 role/block/tool-use/tool-result 计数；
 - snapshot 中真实保存的 system-prompt headings、Tool catalog 与 Skill catalog；
 - active Goal、parked permission、synthetic Skill envelope 和 compact markers；
@@ -337,7 +337,7 @@ uv run --project ../../.. --env-file ../../../.env oh --resume --auto --sandbox
 
 - Resume 不应恢复 clear 前的 conversation。
 - 不应知道 `CONTEXT-LIFECYCLE-0812`，也不应恢复旧 active Goal。
-- `current.json` 应被原子覆写为空 messages；Session Memory 保持独立，不随 `/clear` 删除。
+- `current.json` 应被原子覆写为空 messages；Project Memory 保持独立，不随 `/clear` 删除。
 - conversation-bound parked permission 与尚未消费的 approve/deny transition 被清除；既有权限
   ledger 不因清理对话而重置。
 
@@ -363,7 +363,7 @@ uv run --project ../../.. --env-file ../../../.env oh --resume --auto --sandbox
 | DPG-009 | 结构通过 | Snapshot 有 `synth_` Slash Skill envelope；模型对 provenance 的自述不准确，因此只采信结构证据 |
 | DPG-010 | 机制通过，质量未完全通过 | 首次 25 秒超时被明确诊断；预算改为 120 秒后 `21880 → 2249 tokens`；下一次普通 turn 才把 compact 结果写入 snapshot |
 | DPG-011 | 机制通过 | Resume 恢复 compact summary 与 recent tail，也忠实恢复了摘要中的质量缺口 |
-| DPG-012 | 修复后通过 | `/clear` 后 snapshot 为 `0 messages`；在正确 fixture cwd 执行 `--resume` 显示 `resumed: 0 messages`；Session Memory 保持存在 |
+| DPG-012 | 修复后通过 | `/clear` 后 snapshot 为 `0 messages`；在正确 fixture cwd 执行 `--resume` 显示 `resumed: 0 messages`；Project Memory 保持存在 |
 | DPG-013 | 通过 | Plugin enabled 后 stored catalog 新增 4 个 `credit-report-reviewer__*` Skills；Tools 仍为标准 9 个，Commands 与 MCP surface 未增加 |
 | DPG-014 | 通过 | 父 snapshot 只有 `Agent=1`、一个成功 Tool Result；子 Agent 内部使用的 Read 与内部消息没有展开进父 conversation |
 
@@ -495,7 +495,7 @@ Capture `12-agent-isolation`。
 - transcript 不出现伪装成用户消息的 `[permission decision]`；
 - Ctrl+C 只推迟决定，`/approve` 与 `/deny` 可恢复并直接继续；
 - park 后退出并用 `oh --resume` 启动，会恢复同一个 exact request 和二选一菜单；
-- `/clear` 清除 conversation-bound continuation，不清 Session Memory，也不复活授权。
+- `/clear` 清除 conversation-bound continuation，不清 Project Memory，也不复活授权。
 
 `/resume` 不属于正常人工审批路径；它只处理外部控制面已记录 approve/deny、但
 continuation 尚未消费的异步恢复。
@@ -519,9 +519,9 @@ uv run --project ../../.. --env-file ../../../.env oh \
 hook，再因为 2% threshold 进入 L2 context collapse。这个阈值只用于 dogfood，不应写回
 `.env`。
 
-L3 session-checkpoint replacement 需要超过 12 条 recent messages；Reactive Prompt Too
-Long 还要求 provider 真正拒绝请求。两者不适合靠人工反复粘贴制造，保留为确定性测试
-和后续 PTY runner case。
+如果确定性 collapse 后仍超过预算，Compact 会直接调用结构化 LLM Summary，并保留最近
+12 条原始消息。Reactive Prompt Too Long 还要求 provider 真正拒绝请求，不适合靠人工
+反复粘贴制造，保留为确定性测试和后续 PTY runner case。
 
 ## 六、完成后的证据审查
 
@@ -533,7 +533,6 @@ discovery.project_instruction_files
 discovery.commands
 discovery.skills
 discovery.installed_plugins
-session_memory
 snapshot.message_count
 snapshot.blocks
 snapshot.tool_uses

@@ -1,4 +1,4 @@
-"""Compact L0-L4 escalation pipeline — P11-T3.
+"""Compact escalation pipeline.
 
 Per ``decisions/26-phase-11-boundary.md`` D29.3: 4-layer escalation
 that stacks on top of Phase 4's L1 microcompact + reactive PTL
@@ -10,13 +10,12 @@ enough tokens** to drop below the threshold.
 | L0 | Token estimation + threshold check | ❌ |
 | L1 | Microcompact (PostToolUse hook clears old tool_result) | ❌ (Phase 4) |
 | L2 | Context collapse (head/tail truncate long bodies) | ❌ |
-| L3 | Session memory reuse (read 5-slot checkpoint, splice) | ❌ |
 | L4 | Full compact (9-slot LLM summary) | ✅ |
 
 The substrate is the :func:`openharness.services.summarize.summarize`
-primitive — only L4 calls it. L2 + L3 are deterministic byte-level
-transforms that "pre-pay" the cost of L4: if either succeeds, we
-skip the LLM call entirely.
+primitive — only L4 calls it. L2 is a deterministic byte-level
+transform that "pre-pays" the cost of L4: if it frees enough space,
+the LLM call is skipped.
 
 The L4 prompt keeps the upstream 9-slot summary schema and adds an
 OpenHarness fidelity contract for structured evidence, provenance,
@@ -28,7 +27,6 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -44,8 +42,6 @@ from openharness.protocols.messages import ConversationMessage
 from openharness.services.summarize import summarize
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from openharness.api.client import SupportsStreamingMessages
 
 
@@ -68,12 +64,7 @@ _L2_LONG_TEXT_THRESHOLD = 2_400
 _L2_HEAD_CHARS = 900
 _L2_TAIL_CHARS = 500
 
-# L3 session_memory freshness: 1 hour. Older checkpoints are stale
-# enough that L4 LLM summary is preferred over splicing in outdated
-# state. Tunable in case real usage shows different cadences.
-_L3_FRESHNESS_SECONDS = 60 * 60
-
-# L3 / L4 splice: how many tail messages to preserve un-compacted.
+# Full compact splice: how many tail messages to preserve un-compacted.
 # Recent messages carry the most signal for the LLM's next move;
 # they survive both layers' splicing.
 _PRESERVE_RECENT = 12
@@ -204,11 +195,10 @@ class CompactResult:
 
     - ``"none"`` — L0 estimated under threshold; no transform applied
     - ``"context_collapse"`` — L2 alone freed enough tokens
-    - ``"session_memory"`` — L3 spliced the checkpoint (no LLM call)
     - ``"full"`` — L4 called the LLM for a 9-slot summary
 
-    ``applied_levels`` records EVERY level that ran (e.g., ``(0, 2, 3)``
-    means L0 estimated, L2 collapsed, L3 spliced). Useful for
+    ``applied_levels`` records EVERY level that ran (e.g., ``(0, 2, 4)``
+    means L0 estimated, L2 collapsed, then L4 summarized). Useful for
     observability and debugging escalation behavior.
     """
 
@@ -307,7 +297,7 @@ def try_context_collapse(
 
     Returns ``(new_messages, any_changed)``. ``any_changed=False`` means
     no body was long enough to collapse — L2 didn't help, escalate
-    to L3.
+    to the structured LLM summary.
     """
     any_changed = False
     new_messages: list[ConversationMessage] = []
@@ -343,69 +333,6 @@ def _collapse_string(text: str) -> str:
     head = text[:_L2_HEAD_CHARS]
     tail = text[-_L2_TAIL_CHARS:]
     return f"{head}\n...[collapsed {omitted} chars]...\n{tail}"
-
-
-# ---------------------------------------------------------------------------
-# L3 — Session memory checkpoint reuse (file read, no LLM)
-# ---------------------------------------------------------------------------
-
-
-def try_session_memory_compaction(
-    messages: list[ConversationMessage],
-    session_memory_path: Path | None,
-    *,
-    preserve_recent: int = _PRESERVE_RECENT,
-    fresh_window_seconds: float = _L3_FRESHNESS_SECONDS,
-) -> tuple[list[ConversationMessage], bool]:
-    """Splice older messages with the 5-slot checkpoint markdown file.
-
-    Skip conditions (return ``(messages, False)`` — let L4 try):
-    - ``session_memory_path`` is None or doesn't exist (no checkpoint
-      yet — first turn of project)
-    - Checkpoint older than ``fresh_window_seconds`` (default 1h —
-      stale state, prefer L4's fresh LLM summary)
-    - ``len(messages) <= preserve_recent`` (not enough older messages
-      to splice into checkpoint)
-    - File read fails (permission / decode error)
-
-    When successful, replaces ``messages[:-preserve_recent]`` with a
-    single synthetic user message containing the checkpoint. Tail
-    messages preserved.
-    """
-    if session_memory_path is None or not session_memory_path.exists():
-        return messages, False
-
-    try:
-        age = time.time() - session_memory_path.stat().st_mtime
-    except OSError:
-        return messages, False
-    if age > fresh_window_seconds:
-        return messages, False
-
-    if len(messages) <= preserve_recent:
-        return messages, False
-
-    try:
-        checkpoint = session_memory_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return messages, False
-
-    older = messages[:-preserve_recent]
-    recent = messages[-preserve_recent:]
-    if not older:
-        return messages, False
-
-    synthetic = ConversationMessage(
-        role="user",
-        content=[
-            TextBlock(
-                text=(
-                    f"Session memory checkpoint from earlier in this conversation:\n\n{checkpoint}"
-                )
-            )
-        ],
-    )
-    return [synthetic, *recent], True
 
 
 # ---------------------------------------------------------------------------
@@ -497,7 +424,7 @@ def _extract_summary(raw: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Orchestrator — L0 → L2 → L3 → L4 escalation
+# Orchestrator — L0 → L2 → L4 escalation
 # ---------------------------------------------------------------------------
 
 
@@ -506,7 +433,6 @@ async def auto_compact_if_needed(
     *,
     model: str,
     api_client: SupportsStreamingMessages,
-    session_memory_path: Path | None = None,
     enabled: bool = True,
     threshold_ratio: float = 0.83,
     full_compact_max_tokens: int = 20_000,
@@ -517,7 +443,7 @@ async def auto_compact_if_needed(
 
     L1 (microcompact) is NOT in this pipeline — Phase 4's PostToolUse
     hook handles it before each turn. This function picks up at L0
-    (estimate) and escalates through L2 / L3 / L4.
+    (estimate) and escalates through L2 / L4.
 
     ``enabled=False`` short-circuits everything (returns
     ``CompactResult.no_op``). Same for the under-threshold path —
@@ -550,19 +476,7 @@ async def auto_compact_if_needed(
                 original_tokens=original_tokens,
                 final_tokens=tokens_after_l2,
             )
-        messages = messages_after_l2  # carry forward into L3/L4
-
-    # --- L3 ---
-    messages_after_l3, l3_changed = try_session_memory_compaction(messages, session_memory_path)
-    if l3_changed:
-        levels_applied.append(3)
-        tokens_after_l3 = estimate_message_tokens(messages_after_l3, model=model)
-        return messages_after_l3, CompactResult(
-            compact_kind="session_memory",
-            applied_levels=tuple(levels_applied),
-            original_tokens=original_tokens,
-            final_tokens=tokens_after_l3,
-        )
+        messages = messages_after_l2  # carry forward into L4
 
     # --- L4 (LLM) ---
     messages_after_l4, l4_changed = await full_compact(

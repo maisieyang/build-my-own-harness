@@ -1,7 +1,6 @@
 """Tests for ``engine.messages.collect_turn_metadata`` — P12-T1-1a.
 
-Single producer feeds two consumers (session_memory checkpoint +
-snapshot writer) per D30.6. Deterministic — no LLM call.
+The producer feeds the snapshot writer. Deterministic — no LLM call.
 
 Surfaces:
 
@@ -264,8 +263,7 @@ class TestVerifiedWork:
 
 class TestTaskFocusStatePlaceholder:
     def test_always_present_with_none_values(self) -> None:
-        # Phase 12 ships the schema field present but unpopulated;
-        # session_memory render fills with "(none)" placeholder text.
+        # Phase 12 ships the schema field present but unpopulated.
         meta = collect_turn_metadata([])
         assert meta["task_focus_state"] == {"goal": None, "next_step": None}
 

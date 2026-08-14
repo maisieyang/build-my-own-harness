@@ -12,16 +12,10 @@ D37.3 retired it) the Phase 11 ``extract_memories_from_turn``
 secondary pass. Memory writes are now the main LLM's responsibility
 inline via Write + Edit tools per D36.10/D36.11.
 
-Plus the deterministic checkpoint writer
-(:mod:`openharness.services.session_memory`) that L4's escalation
-predecessor (L3) reads to avoid the LLM call entirely when a fresh
-checkpoint exists.
-
 Public modules:
 
 - :mod:`.summarize` — shared LLM summarization primitive
-- :mod:`.compact` — L2/L3/L4 escalation
-- :mod:`.session_memory` — deterministic per-turn checkpoint
+- :mod:`.compact` — deterministic collapse followed by LLM compaction
 - :mod:`.snapshot` — full session snapshot writer + reader
 - :mod:`.focus_state` — Phase 13 secondary pass for task focus state
 """
@@ -37,17 +31,11 @@ from openharness.services.compact import (
     get_context_window,
     threshold_tokens,
     try_context_collapse,
-    try_session_memory_compaction,
 )
 from openharness.services.focus_state import (
     FOCUS_STATE_SYSTEM_PROMPT,
     FocusState,
     infer_focus_state,
-)
-from openharness.services.session_memory import (
-    get_session_memory_dir,
-    read_session_memory,
-    update_session_memory_file,
 )
 from openharness.services.snapshot import (
     SNAPSHOT_SCHEMA,
@@ -86,16 +74,12 @@ __all__ = [
     "estimate_message_tokens",
     "full_compact",
     "get_context_window",
-    "get_session_memory_dir",
     "get_snapshot_dir",
     "infer_focus_state",
     "load_snapshot",
-    "read_session_memory",
     "summarize",
     "threshold_tokens",
     "try_context_collapse",
-    "try_session_memory_compaction",
     "update_permission_runtime_snapshot",
-    "update_session_memory_file",
     "write_session_snapshot",
 ]

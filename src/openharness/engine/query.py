@@ -312,20 +312,17 @@ async def _maybe_write_turn_end_metadata(
     context: QueryContext,
     final_messages: list[ConversationMessage],
 ) -> None:
-    """P12-T1 + P12-T3 + P13-T3: per-turn-end writers for
-    session_memory checkpoint + Phase 12 snapshot, plus optional
-    LLM-authored ``task_focus_state``.
+    """Write the per-turn snapshot with optional LLM-authored focus state.
 
-    Single ``collect_turn_metadata`` call feeds BOTH consumers
-    (session_memory + snapshot). When ``llm_focus_state_enabled``
+    When ``llm_focus_state_enabled``
     (Phase 13 D31.7) the engine awaits a secondary LLM call
-    BEFORE both writers fire, then injects the inferred focus
+    before the snapshot write, then injects the inferred focus
     state into ``tool_metadata.task_focus_state`` (replacing the
     None placeholder).
 
     All failures caught + WARN-logged. Turn still returns success.
     """
-    if context.session_memory_path is None and not context.snapshot_enabled:
+    if not context.snapshot_enabled:
         return  # no consumer wired — skip the producer too
 
     tool_metadata = collect_turn_metadata(final_messages)
@@ -343,28 +340,19 @@ async def _maybe_write_turn_end_metadata(
         # Overwrite the None placeholder with the inferred values.
         tool_metadata["task_focus_state"] = focus_state.to_dict()
 
-    if context.session_memory_path is not None:
-        from openharness.services.session_memory import update_session_memory_file
+    from openharness.services.snapshot import write_session_snapshot
 
-        try:
-            update_session_memory_file(context.cwd, tool_metadata, final_messages)
-        except OSError as exc:
-            logger.warning("session_memory_write_failed", error=str(exc))
-
-    if context.snapshot_enabled:
-        from openharness.services.snapshot import write_session_snapshot
-
-        try:
-            write_session_snapshot(
-                cwd=context.cwd,
-                tool_metadata=tool_metadata,
-                messages=final_messages,
-                context=context,
-                history_max_count=context.snapshot_history_max_count,
-                history_max_age_days=context.snapshot_history_max_age_days,
-            )
-        except OSError as exc:
-            logger.warning("snapshot_write_failed", error=str(exc))
+    try:
+        write_session_snapshot(
+            cwd=context.cwd,
+            tool_metadata=tool_metadata,
+            messages=final_messages,
+            context=context,
+            history_max_count=context.snapshot_history_max_count,
+            history_max_age_days=context.snapshot_history_max_age_days,
+        )
+    except OSError as exc:
+        logger.warning("snapshot_write_failed", error=str(exc))
 
 
 def _sanitize_tool_input(tool_input: dict[str, Any], cwd: Path) -> dict[str, Any]:
@@ -509,16 +497,15 @@ async def run_query(
                 # P11-T3.3f (D29.3): proactive compact escalation. Runs
                 # BEFORE PreApiCall hooks so hooks see compact-modified
                 # messages (memory-injection hooks etc. operate on the
-                # already-condensed view). L1-L3 are deterministic +
-                # token-cheap; L4 is the only LLM call and only fires
-                # when L1-L3 don't free enough. Reactive PTL retry below
+                # already-condensed view). Deterministic trimming runs first;
+                # L4 is the only LLM call and fires only when trimming does
+                # not free enough space. Reactive PTL retry below
                 # remains the last-resort safety net.
                 if context.compact_enabled:
                     messages, compact_result = await auto_compact_if_needed(
                         messages,
                         model=context.model,
                         api_client=context.api_client,
-                        session_memory_path=context.session_memory_path,
                         enabled=True,
                         threshold_ratio=context.compact_threshold_ratio,
                         full_compact_max_tokens=context.compact_full_max_tokens,
@@ -677,10 +664,8 @@ async def run_query(
                     final_messages = append_assistant_message(
                         messages, list(complete_event.message.content)
                     )
-                    # P12-T1 (D30.6 + D30.9): turn-end writers. Single
-                    # ``collect_turn_metadata`` producer feeds two
-                    # consumers (session_memory checkpoint + Phase 12
-                    # snapshot writer added in T3). Errors caught + logged
+                    # P12-T1 (D30.6 + D30.9): turn-end snapshot writer.
+                    # Errors are caught and logged
                     # — turn still emits ``ConversationCompleteEvent``
                     # so failure isolation matches the extract contract.
                     await _maybe_write_turn_end_metadata(context, final_messages)
@@ -722,7 +707,7 @@ async def run_query(
         # the model owns loop termination by returning a clean non-tool turn.
         assert max_turns is not None
         logger.warning("loop_limit_exceeded", max_turns=max_turns)
-        # Preserve the completed assistant/tool exchanges as a checkpoint.
+        # Persist the completed assistant/tool exchanges in the snapshot.
         # Interactive callers pause and return control without treating this
         # forced stop as completion; private bounded callers still receive
         # LoopLimitExceeded as the safety failure it has always been.

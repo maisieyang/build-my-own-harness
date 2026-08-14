@@ -2,15 +2,9 @@
 
 Per ``decisions/27-phase-12-boundary.md`` D30.2: deterministic
 per-turn JSON snapshot that ``oh --resume`` loads back into a fresh
-``QueryContext``. Parallel to (NOT replacing)
-Phase 11's 5-slot markdown checkpoint at
-``services/session_memory.py`` — two consumers (L3 compact reads the
-markdown, resume reads the JSON), one ``tool_metadata`` producer
-in the engine (P12-T1).
+``QueryContext``.
 
-Storage layout (mirrors :func:`openharness.services.session_memory.get_session_memory_dir`
-hash algorithm, but under a sibling ``snapshots/`` directory so the
-two file families don't collide):
+Storage layout uses a cwd-derived directory:
 
 .. code-block:: text
 
@@ -237,11 +231,8 @@ def load_snapshot(
 def get_snapshot_dir(cwd: str | Path) -> Path:
     """Resolve the per-project snapshot directory for ``cwd``.
 
-    Same hash algorithm as
-    :func:`openharness.services.session_memory.get_session_memory_dir`
-    (basename + sha1[:12] of resolved cwd) — so the snapshot dir is a
-    sibling of the session-memory dir under
-    ``~/.openharness/snapshots/`` vs ``~/.openharness/session-memory/``.
+    Uses basename + sha1[:12] of the resolved cwd so projects with the
+    same basename do not collide.
 
     ``Path.home()`` evaluated at call time (NOT module scope) so the
     HOME-isolation fixture in ``tests/conftest.py`` takes effect.
@@ -464,8 +455,8 @@ def clear_conversation_snapshot(
     """Atomically persist an empty conversation without rotating old history.
 
     ``/clear`` is a state replacement, not a completed assistant turn. It
-    preserves snapshot metadata and the independent session-memory file while
-    replacing typed messages and conversation-bound permission UI state. A
+    preserves snapshot metadata while replacing typed messages and
+    conversation-bound permission UI state. A
     missing snapshot is already equivalent to a fresh conversation.
 
     Raises:
@@ -513,9 +504,7 @@ def write_session_snapshot(
     path written (``<dir>/current.json``).
 
     Lazy ``mkdir`` of parent dir. Atomic rewrite via same-directory
-    ``tempfile + os.replace`` — same pattern as
-    :func:`openharness.services.session_memory.update_session_memory_file`,
-    same atomicity guarantee (concurrent ``load_snapshot`` reads either
+    ``tempfile + os.replace`` guarantees concurrent ``load_snapshot`` reads either
     the previous version or the new one, never partial).
 
     P13-T1 (D31.3): when a pre-existing ``current.json`` is being

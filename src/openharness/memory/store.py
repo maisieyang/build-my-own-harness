@@ -249,8 +249,7 @@ def _build_frontmatter_dict(memory: Memory) -> dict[str, Any]:
 def _atomic_write(target: Path, content: str) -> None:
     """Write ``content`` to ``target`` via same-dir tempfile + os.replace.
 
-    Same primitive shape as :func:`mark_memory_used` and
-    :func:`update_session_memory_file` — concurrent reads see either
+    Same primitive shape as :func:`mark_memory_used`: concurrent reads see either
     old or new file, never a half-written one. Orphan tmp cleanup
     on failure.
     """

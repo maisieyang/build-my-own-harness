@@ -13,7 +13,7 @@
 **不为之设计**:
 - 摘要**写得好不好**(措辞质量,那要软 judge;本 eval 只测信息保真)
 - 跨 model 强弱比较(D35.8 前置未满足)
-- L1-L3 分级压缩的触发逻辑(那是确定性代码,归 TDD)
+- Tool Result 限流与确定性 collapse 的触发逻辑(那是确定性代码,归 TDD)
 
 **2. Input spec**:每 case = 一段 ~28 条消息的合成对话(> preserve_recent=12,
 才会触发 full_compact),关键事实埋在**中段**(会被压掉的 older 区)。当前 N=9：

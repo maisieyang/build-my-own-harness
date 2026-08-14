@@ -1,9 +1,9 @@
-"""Compaction L0-L4 transparency verification for slash-skill synth
+"""Compaction transparency verification for slash-skill synth
 envelopes — Phase 18 T3.
 
 Per D38 §六 wiring audit, ``services/compact.py`` was marked
 ``requires verification``. Synth envelopes (assistant tool_use +
-user tool_result + optional user TextBlock) must flow through L0-L4
+user tool_result + optional user TextBlock) must flow through compaction
 **identically** to envelopes produced by real LLM tool calls, with
 **zero** ``if id.startswith("synth_")`` special-casing in
 ``compact.py``.
@@ -24,9 +24,6 @@ Coverage:
   *did* encounter a synth_ id
 - L2 ``try_context_collapse`` — long synth tool_result body collapses
   identically to a real tool_result body
-- L3 ``try_session_memory_compaction`` — synth envelopes in the
-  ``older`` slice get folded into the synthetic user message; recent
-  tail preserves any synth blocks verbatim
 - L4 ``full_compact`` — older slice containing synth envelopes is
   passed to ``summarize()`` without filtering, summary splices into
   the canonical ``[boundary, summary, *recent]`` shape
@@ -54,7 +51,6 @@ from openharness.services.compact import (
     estimate_message_tokens,
     full_compact,
     try_context_collapse,
-    try_session_memory_compaction,
 )
 from openharness.skills.model import Skill
 
@@ -211,67 +207,6 @@ class TestL2SynthTransparency:
 
 
 # --------------------------------------------------------------------------- #
-# L3 — try_session_memory_compaction                                          #
-# --------------------------------------------------------------------------- #
-
-
-class TestL3SynthTransparency:
-    def test_synth_envelopes_in_older_slice_fold_into_synthetic_user_msg(
-        self, tmp_path: Path
-    ) -> None:
-        # Build a long history: 6 synth envelopes (2 msgs each, no args) +
-        # 13 plain user/assistant pairs. That's 12 + 26 = 38 messages —
-        # well past preserve_recent=12 default.
-        history: list[ConversationMessage] = []
-        for i in range(6):
-            history.extend(_synth_envelope(f"body for skill {i}"))
-        for i in range(13):
-            history.append(ConversationMessage(role="user", content=[TextBlock(text=f"q {i}")]))
-            history.append(
-                ConversationMessage(role="assistant", content=[TextBlock(text=f"a {i}")])
-            )
-
-        checkpoint_path = tmp_path / "checkpoint.md"
-        checkpoint_path.write_text("# Session memory\nslot 1: x\nslot 2: y", encoding="utf-8")
-
-        new_messages, changed = try_session_memory_compaction(history, checkpoint_path)
-
-        assert changed is True
-        # Result shape: [synthetic_user_msg, *recent]
-        assert new_messages[0].role == "user"
-        first_block = new_messages[0].content[0]
-        assert isinstance(first_block, TextBlock)
-        assert "Session memory checkpoint" in first_block.text
-        # Recent tail length matches preserve_recent default
-        assert len(new_messages) == 1 + 12
-
-    def test_synth_envelope_in_recent_tail_preserved_verbatim(self, tmp_path: Path) -> None:
-        # If the recent tail contains a synth envelope, L3 must NOT
-        # mutate it — recent is sliced as-is.
-        history: list[ConversationMessage] = []
-        for i in range(15):
-            history.append(ConversationMessage(role="user", content=[TextBlock(text=f"q {i}")]))
-        # Append a recognisable synth envelope at the end.
-        marker_body = "MARKER_SYNTH_BODY"
-        history.extend(_synth_envelope(marker_body, args="marker args"))
-
-        checkpoint_path = tmp_path / "checkpoint.md"
-        checkpoint_path.write_text("checkpoint", encoding="utf-8")
-
-        new_messages, changed = try_session_memory_compaction(history, checkpoint_path)
-
-        assert changed is True
-        # The synth tool_result body must still appear in the recent tail.
-        tail_contents = [
-            getattr(b, "content", "") + getattr(b, "text", "")
-            for m in new_messages
-            for b in m.content
-        ]
-        assert any(marker_body in c for c in tail_contents)
-        assert any("marker args" in c for c in tail_contents)
-
-
-# --------------------------------------------------------------------------- #
 # L4 — full_compact                                                           #
 # --------------------------------------------------------------------------- #
 
@@ -326,10 +261,8 @@ class TestCompactPyZeroLeakage:
         ``engine.slash_skill`` — forcing a D38.8 ratification before any
         special-case branch lands.
 
-        Note: the existing word "synthetic" appears in L3 docstrings /
-        a variable name predating Phase 18 (the synthetic user message
-        carrying the checkpoint), so we only forbid the ``synth_``
-        prefix + ``slash_skill`` import — the markers unique to D38.2.
+        We forbid the ``synth_`` prefix + ``slash_skill`` import — the
+        markers unique to D38.2.
         """
         import openharness.services.compact as compact_module
 

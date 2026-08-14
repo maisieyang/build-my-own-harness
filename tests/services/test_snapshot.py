@@ -126,19 +126,6 @@ class TestGetSnapshotDir:
             pytest.skip("symlink not supported on this filesystem")
         assert get_snapshot_dir(real) == get_snapshot_dir(link)
 
-    def test_matches_session_memory_hash_algorithm(self, tmp_path: Path) -> None:
-        # Snapshot + session_memory MUST agree on the cwd→dir-suffix
-        # mapping so the two file families are siblings (per D30.2).
-        # Otherwise resume might find a snapshot at "foo-abc123" while
-        # L3 compact looks for session_memory at "foo-def456" and the
-        # two writers would write into mismatched families.
-        from openharness.services.session_memory import get_session_memory_dir
-
-        sm = get_session_memory_dir(tmp_path)
-        sn = get_snapshot_dir(tmp_path)
-        assert sm.name == sn.name  # same basename + suffix
-        assert sm.parent != sn.parent  # different parent dirs
-
     def test_sha1_matches_expected_algorithm(self) -> None:
         # Pin the algorithm so changes are intentional.
         cwd = Path("/tmp/test").resolve()

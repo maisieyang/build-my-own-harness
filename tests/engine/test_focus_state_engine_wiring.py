@@ -155,51 +155,6 @@ class TestFocusStateOptInBehavior:
         focus = snapshot["tool_metadata"]["task_focus_state"]
         assert focus == {"goal": None, "next_step": None}
 
-    @pytest.mark.asyncio
-    async def test_focus_state_passed_to_both_writers(self, tmp_path: Path) -> None:
-        # Wire session_memory + snapshot together; verify the focus state
-        # appears in BOTH (session_memory's markdown checkpoint embeds
-        # it under ## Current State / ## Next Step).
-        from openharness.services.session_memory import (
-            get_session_memory_dir,
-            read_session_memory,
-        )
-
-        session_path = get_session_memory_dir(tmp_path) / "checkpoint.md"
-        stub = _MultiResponseStub(
-            main_response="reply",
-            focus_response=json.dumps({"goal": "build the feature", "next_step": "write tests"}),
-        )
-        ctx = QueryContext(
-            api_client=cast("SupportsStreamingMessages", stub),
-            tool_registry=create_default_tool_registry(),
-            hook_registry=HookRegistry(),
-            system_prompt="t",
-            cwd=tmp_path,
-            model="qwen-plus",
-            max_tokens=64,
-            max_turns=2,
-            compact_enabled=False,
-            session_memory_path=session_path,
-            snapshot_enabled=True,
-            llm_focus_state_enabled=True,
-        )
-
-        async for _ev in run_query([_user("hi")], ctx):
-            pass
-
-        # snapshot has authored state
-        snapshot = load_snapshot(tmp_path)
-        focus = snapshot["tool_metadata"]["task_focus_state"]
-        assert focus["goal"] == "build the feature"
-        assert focus["next_step"] == "write tests"
-
-        # session_memory markdown also has it
-        sm_content = read_session_memory(tmp_path)
-        assert sm_content is not None
-        assert "build the feature" in sm_content
-        assert "write tests" in sm_content
-
 
 class TestFocusStateModelOverride:
     @pytest.mark.asyncio

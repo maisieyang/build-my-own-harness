@@ -1,7 +1,7 @@
 """只读收集 OpenHarness context-management dogfood 证据。
 
 这个模块不启动 Agent、不调用模型,也不加载 plugin Python hooks。它读取当前配置、
-filesystem catalogs、session-memory checkpoint 和 conversation snapshot,把多次手动
+filesystem catalogs、project memory 和 conversation snapshot,把多次手动
 操作之间的上下文变化写成可比较的 JSON 与文本 artifact。
 """
 
@@ -31,7 +31,6 @@ from openharness.services.compact import (
     get_context_window,
     threshold_tokens,
 )
-from openharness.services.session_memory import get_session_memory_dir
 from openharness.services.snapshot import SnapshotError, get_snapshot_dir, load_snapshot
 from openharness.skills.store import FilesystemSkillStore
 from openharness.tools.bash import MAX_OUTPUT_CHARS as BASH_OUTPUT_CHARS
@@ -45,7 +44,7 @@ FIXTURE_SOURCE = REPO_ROOT / "dogfood" / "fixtures" / "context-management"
 WORK_DIR = RUNTIME_ROOT / "work" / "context-management"
 ARTIFACT_ROOT = RUNTIME_ROOT / "artifacts"
 
-_SCHEMA = "openharness.dogfood.context-artifact.v2"
+_SCHEMA = "openharness.dogfood.context-artifact.v3"
 _CATALOG_ITEM = re.compile(r"^- \*\*(.+?)\*\*\s+--", re.MULTILINE)
 _TOOL_RESULT_MARKERS = {
     "collapsed_body": re.compile(r"\[collapsed [^\]]+\]"),
@@ -147,7 +146,6 @@ def _snapshot_summary(cwd: Path, *, model: str) -> dict[str, Any]:
     error_tool_result_count = 0
     synthetic_skill_load_count = 0
     context_marker_patterns = {
-        "session_checkpoint": "Session memory checkpoint from earlier in this conversation:",
         "compact_boundary": "[Conversation history summarized below",
         "full_summary": "Summary of prior conversation:",
     }
@@ -238,7 +236,6 @@ def collect_context_artifact(cwd: Path, *, settings: Settings) -> dict[str, Any]
     )
     memory_dir = get_project_memory_dir(cwd)
     memory_index = memory_dir / "MEMORY.md"
-    session_memory = get_session_memory_dir(cwd) / "checkpoint.md"
     context_window = get_context_window(model)
     compact_threshold = threshold_tokens(
         model,
@@ -291,7 +288,6 @@ def collect_context_artifact(cwd: Path, *, settings: Settings) -> dict[str, Any]
             "index_exists": memory_index.is_file(),
             "index": _file_summary(memory_index),
         },
-        "session_memory": _file_summary(session_memory),
         "snapshot": _snapshot_summary(cwd, model=model),
         "measurement_boundary": {
             "estimated_message_tokens_includes": [
@@ -345,7 +341,6 @@ def render_text_report(artifact: dict[str, Any]) -> str:
                 or "(none)"
             )
         ),
-        (f"session-memory: {'present' if artifact['session_memory']['exists'] else 'missing'}"),
     ]
     if not snapshot.get("exists"):
         lines.append("snapshot: missing")

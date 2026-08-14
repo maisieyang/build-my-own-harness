@@ -15,7 +15,7 @@ usage while waiting for input. Four user-facing contracts:
 3. **Status bar**: pure formatting of model + used/window tokens +
    auto-compact threshold; no new measurement paths.
 4. **History path**: per-project, cwd-hashed, under user home — the
-   same shape as snapshot / session-memory dirs.
+   same shape as snapshot directories.
 """
 
 from __future__ import annotations

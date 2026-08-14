@@ -1,18 +1,17 @@
-"""Tests for compact L0-L4 escalation pipeline — P11-T3.
+"""Tests for the compact escalation pipeline.
 
 5 surfaces:
 
 1. L0 token estimation + threshold computation
 2. L2 context-collapse (deterministic, char-based)
-3. L3 session_memory reuse (file read, no LLM)
-4. L4 full_compact (summarize call + 9-slot prompt + parse)
-5. ``auto_compact_if_needed`` orchestrator escalation order
+3. L4 full_compact (summarize call + 9-slot prompt + parse)
+4. ``auto_compact_if_needed`` orchestrator escalation order
 """
 
 from __future__ import annotations
 
 import asyncio
-import time
+import inspect
 from typing import TYPE_CHECKING
 
 import pytest
@@ -39,12 +38,10 @@ from openharness.services.compact import (
     get_context_window,
     threshold_tokens,
     try_context_collapse,
-    try_session_memory_compaction,
 )
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
-    from pathlib import Path
 
     from openharness.protocols.requests import ApiMessageRequest
     from openharness.protocols.stream_events import ApiStreamEvent
@@ -210,105 +207,7 @@ class TestL2ContextCollapse:
 
 
 # ---------------------------------------------------------------------------
-# 3. L3 session_memory reuse
-# ---------------------------------------------------------------------------
-
-
-class TestL3SessionMemoryReuse:
-    def test_stat_failure_returns_unchanged(self) -> None:
-        class _BrokenStatPath:
-            def exists(self) -> bool:
-                return True
-
-            def stat(self) -> object:
-                raise OSError("stat denied")
-
-        messages = [_user_text(f"msg-{i}") for i in range(20)]
-        path = _BrokenStatPath()
-
-        new_messages, changed = try_session_memory_compaction(messages, path)  # type: ignore[arg-type]
-
-        assert changed is False
-        assert new_messages == messages
-
-    def test_read_failure_returns_unchanged(self) -> None:
-        class _FreshStat:
-            st_mtime = time.time()
-
-        class _BrokenReadPath:
-            def exists(self) -> bool:
-                return True
-
-            def stat(self) -> _FreshStat:
-                return _FreshStat()
-
-            def read_text(self, *, encoding: str) -> str:
-                assert encoding == "utf-8"
-                raise UnicodeDecodeError("utf-8", b"x", 0, 1, "invalid")
-
-        messages = [_user_text(f"msg-{i}") for i in range(20)]
-        path = _BrokenReadPath()
-
-        new_messages, changed = try_session_memory_compaction(messages, path)  # type: ignore[arg-type]
-
-        assert changed is False
-        assert new_messages == messages
-
-    def test_no_checkpoint_path_returns_unchanged(self) -> None:
-        messages = [_user_text(f"msg-{i}") for i in range(20)]
-        new_messages, changed = try_session_memory_compaction(messages, None)
-        assert changed is False
-        assert new_messages == messages
-
-    def test_nonexistent_checkpoint_returns_unchanged(self, tmp_path: Path) -> None:
-        messages = [_user_text(f"msg-{i}") for i in range(20)]
-        fake_path = tmp_path / "nonexistent.md"
-        new_messages, changed = try_session_memory_compaction(messages, fake_path)
-        assert changed is False
-        assert new_messages == messages
-
-    def test_stale_checkpoint_returns_unchanged(self, tmp_path: Path) -> None:
-        # Write a checkpoint then backdate its mtime to >1h ago
-        checkpoint = tmp_path / "checkpoint.md"
-        checkpoint.write_text("# Session Memory\nstale\n")
-        old_time = time.time() - 7_200  # 2 hours ago
-        import os
-
-        os.utime(checkpoint, (old_time, old_time))
-
-        messages = [_user_text(f"msg-{i}") for i in range(20)]
-        new_messages, changed = try_session_memory_compaction(messages, checkpoint)
-        assert changed is False
-        assert new_messages == messages
-
-    def test_fresh_checkpoint_splices_older_messages(self, tmp_path: Path) -> None:
-        checkpoint = tmp_path / "checkpoint.md"
-        checkpoint.write_text("# Session Memory\n## Current State\nfresh state\n")
-        messages = [_user_text(f"msg-{i}") for i in range(20)]
-        new_messages, changed = try_session_memory_compaction(messages, checkpoint)
-        assert changed is True
-        # Synthetic checkpoint message + last 12 preserved = 13 total
-        assert len(new_messages) == 13
-        # First message is the synthetic checkpoint
-        synthetic_text = new_messages[0].content[0].text  # type: ignore[union-attr]
-        assert "Session memory checkpoint" in synthetic_text
-        assert "fresh state" in synthetic_text
-        # Last 12 messages preserved verbatim
-        assert new_messages[-1].content[0].text == "msg-19"  # type: ignore[union-attr]
-        assert new_messages[1].content[0].text == "msg-8"  # type: ignore[union-attr]
-
-    def test_too_few_messages_returns_unchanged(self, tmp_path: Path) -> None:
-        checkpoint = tmp_path / "checkpoint.md"
-        checkpoint.write_text("fresh content\n")
-        # 5 messages < preserve_recent=12 → can't splice
-        messages = [_user_text(f"msg-{i}") for i in range(5)]
-        new_messages, changed = try_session_memory_compaction(messages, checkpoint)
-        assert changed is False
-        assert new_messages == messages
-
-
-# ---------------------------------------------------------------------------
-# 4. L4 full_compact
+# 3. L4 full_compact
 # ---------------------------------------------------------------------------
 
 
@@ -524,11 +423,16 @@ class TestL4FullCompact:
 
 
 # ---------------------------------------------------------------------------
-# 5. Orchestrator escalation order
+# 4. Orchestrator escalation order
 # ---------------------------------------------------------------------------
 
 
 class TestAutoCompactEscalation:
+    def test_public_surface_has_no_session_memory_checkpoint(self) -> None:
+        """Auto compact must not expose the retired L3 checkpoint input."""
+        parameters = inspect.signature(auto_compact_if_needed).parameters
+        assert "session_memory_path" not in parameters
+
     @pytest.mark.asyncio
     async def test_default_l4_timeout_is_forwarded(self, monkeypatch: pytest.MonkeyPatch) -> None:
         seen: dict[str, float] = {}
@@ -578,7 +482,7 @@ class TestAutoCompactEscalation:
     @pytest.mark.asyncio
     async def test_l2_alone_sufficient(self) -> None:
         # Messages with long bodies that L2 can collapse — total
-        # falls under threshold after collapse, L3/L4 don't run.
+        # falls under threshold after collapse, so L4 does not run.
         # ``qwen-plus`` threshold @ 0.83 = 26_560. We need a value
         # where original is > threshold but l2-collapsed is < threshold.
         client = _StubLLMClient(response="<summary>x</summary>")
@@ -598,36 +502,9 @@ class TestAutoCompactEscalation:
         assert client.call_count == 0  # LLM never called
 
     @pytest.mark.asyncio
-    async def test_l3_kicks_in_when_l2_insufficient(self, tmp_path: Path) -> None:
-        # L2 won't help — short messages, but lots of them
-        # L3 has a fresh checkpoint to splice with
-        checkpoint = tmp_path / "checkpoint.md"
-        checkpoint.write_text("# Session Memory\nfresh state\n")
-        client = _StubLLMClient(response="<summary>x</summary>")
-        # 100 small messages *~300 chars = 30k chars → 7k tokens *4/3 = 10k
-        # That's under threshold actually. Let me increase scale.
-        long_enough = "x" * 1_000  # under L2 threshold
-        # 200 messages *1000 chars = 200k chars → 50k tokens *4/3 = 67k tokens
-        # Above 26k threshold → triggers compact.
-        # L2 won't collapse (each message is under 2400 chars).
-        # L3 should splice into checkpoint.
-        messages = [_user_text(long_enough) for _ in range(200)]
-        new_messages, result = await auto_compact_if_needed(
-            messages,
-            model="qwen-plus",
-            api_client=client,
-            session_memory_path=checkpoint,
-        )
-        assert result.compact_kind == "session_memory"
-        assert 3 in result.applied_levels
-        assert client.call_count == 0  # L3 doesn't call LLM
-        # Synthetic checkpoint message + 12 preserved = 13 messages
-        assert len(new_messages) == 13
-
     @pytest.mark.asyncio
-    async def test_l4_when_l2_l3_insufficient(self) -> None:
-        # L2 won't collapse (short messages); no checkpoint → L3 skips;
-        # L4 LLM call.
+    async def test_l4_when_l2_insufficient(self) -> None:
+        # L2 will not collapse these short messages, so L4 summarizes them.
         client = _StubLLMClient(response="<summary>compacted summary content</summary>")
         long_enough = "x" * 1_000
         messages = [_user_text(long_enough) for _ in range(200)]
@@ -635,7 +512,6 @@ class TestAutoCompactEscalation:
             messages,
             model="qwen-plus",
             api_client=client,
-            session_memory_path=None,  # no checkpoint → skip L3
         )
         assert result.compact_kind == "full"
         assert 4 in result.applied_levels
@@ -653,7 +529,6 @@ class TestAutoCompactEscalation:
             messages,
             model="qwen-plus",
             api_client=client,
-            session_memory_path=None,
         )
         assert result.compact_kind == "none"
         # Final tokens didn't change since nothing actually freed bytes

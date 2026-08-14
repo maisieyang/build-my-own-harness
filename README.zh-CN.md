@@ -118,7 +118,7 @@ OpenHarness 在多个边界管理这条生命周期：
 - tool output 采用 head-and-tail 截断，同时保住身份上下文和结尾的汇总或错误；
 - prompt-too-long 触发有上限的反应式恢复，而不是丢失当前 turn；
 - 显式 compaction 把结构化摘要与未经压缩的最近消息尾部拼接；
-- project memory 与逐 turn checkpoint 把持久事实从原始 transcript 中分离；
+- project memory 把跨 session 的持久事实从原始 transcript 中分离；
 - snapshots 与 session resume 把恢复做成持久化状态转换，而不是 prompt 约定。
 
 一次 dogfood 直接说明了为什么这是“证据问题”：Bash 原先只保留输出头部，截掉了

@@ -117,7 +117,7 @@ def drop_oldest_tool_pair(
 
 
 # ---------------------------------------------------------------------------
-# P12-T1 (D30.6): turn_metadata producer for session_memory + snapshot writers
+# P12-T1 (D30.6): turn_metadata producer for snapshot writers
 # ---------------------------------------------------------------------------
 
 
@@ -131,11 +131,10 @@ def collect_turn_metadata(
     messages: list[ConversationMessage],
     prior_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build the ``tool_metadata`` dict consumed by Phase 11's
-    session_memory checkpoint AND Phase 12's snapshot writer.
+    """Build the ``tool_metadata`` dict consumed by the snapshot writer.
 
-    Per D30.6: deterministic, no LLM call. Single producer feeds
-    two consumers via the engine's per-turn-end finally block.
+    Deterministic, with no LLM call. The engine stores the result in
+    the per-turn snapshot.
 
     Schema (locked):
 
@@ -153,9 +152,8 @@ def collect_turn_metadata(
       as "what just happened" context, not a session-long audit log.
     - ``task_focus_state``: ``{"goal": None, "next_step": None}`` —
       placeholder dict; Phase 13 evaluates whether to populate via
-      LLM. The session_memory render already handles None values
-      with placeholder strings, so Phase 12 ships the schema field
-      stably with None values rather than omitting it.
+      LLM. Phase 12 ships the schema field stably with None values
+      rather than omitting it.
 
     ``prior_metadata`` is optional — passed at resume time so the
     rebuilt context's first turn extends the previous session's

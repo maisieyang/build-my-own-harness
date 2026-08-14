@@ -201,10 +201,10 @@ class TestFromSnapshotRuntimeKwargRequirements:
             **_runtime_kwargs(tmp_path),  # type: ignore[arg-type]
         )
         # Defaults: empty hook_registry, EmptySkillStore, _HOST_EXECUTION,
-        # memory_store=None, session_memory_path=None
+        # memory_store=None. Compaction checkpoints are not runtime state.
         assert ctx.hook_registry.is_empty()
         assert ctx.memory_store is None
-        assert ctx.session_memory_path is None
+        assert not hasattr(ctx, "session_memory_path")
         assert ctx.snapshot_enabled is False
 
 

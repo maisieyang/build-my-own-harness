@@ -564,7 +564,7 @@ def format_permissions_status(
 def default_history_path(cwd: str | Path) -> Path:
     """Per-project input-history file, cwd-hashed under user home.
 
-    Same shape as ``~/.openharness/snapshots`` and ``session-memory``
+    Same shape as ``~/.openharness/snapshots``
     (basename + sha1[:12]): history from one project never bleeds into
     another's up-arrow. ``Path.home()`` is evaluated at call time so the
     HOME-isolation test fixture takes effect.

@@ -14,7 +14,6 @@ from dogfood.context_inspector import (
 )
 
 from openharness.config import Settings
-from openharness.services.session_memory import get_session_memory_dir
 from openharness.services.snapshot import get_snapshot_dir
 
 if TYPE_CHECKING:
@@ -65,13 +64,6 @@ def test_collect_context_artifact_reports_discovery_and_persisted_context(
     (plugin / ".claude-plugin").mkdir(parents=True)
     (plugin / ".claude-plugin" / "plugin.json").write_text(
         json.dumps({"name": "installed-only", "version": "0.1.0", "description": "fixture"}),
-        encoding="utf-8",
-    )
-
-    checkpoint = get_session_memory_dir(cwd) / "checkpoint.md"
-    checkpoint.parent.mkdir(parents=True)
-    checkpoint.write_text(
-        "# Session Memory\n\n## Current State\ninspect context\n",
         encoding="utf-8",
     )
 
@@ -140,7 +132,7 @@ def test_collect_context_artifact_reports_discovery_and_persisted_context(
 
     artifact = collect_context_artifact(cwd, settings=_settings())
 
-    assert artifact["schema"] == "openharness.dogfood.context-artifact.v2"
+    assert artifact["schema"] == "openharness.dogfood.context-artifact.v3"
     assert artifact["configuration"]["model"] == "qwen3.7-max"
     assert artifact["configuration"]["context_window"] == 262_144
     assert artifact["configuration"]["compact_threshold_tokens"] == 217_579
@@ -149,8 +141,6 @@ def test_collect_context_artifact_reports_discovery_and_persisted_context(
     assert artifact["discovery"]["skills"] == ["probe-skill"]
     assert artifact["discovery"]["installed_plugins"][0]["name"] == "installed-only"
     assert artifact["discovery"]["installed_plugins"][0]["loaded"] is False
-    assert artifact["session_memory"]["exists"] is True
-    assert artifact["session_memory"]["headings"] == ["# Session Memory", "## Current State"]
     assert artifact["snapshot"]["message_count"] == 4
     assert artifact["snapshot"]["roles"] == {"assistant": 1, "user": 3}
     assert artifact["snapshot"]["blocks"] == {"text": 2, "tool_result": 1, "tool_use": 1}
@@ -161,7 +151,6 @@ def test_collect_context_artifact_reports_discovery_and_persisted_context(
     assert artifact["snapshot"]["context_markers"] == {
         "compact_boundary": 0,
         "full_summary": 0,
-        "session_checkpoint": 0,
     }
     assert artifact["snapshot"]["tool_result_markers"] == {
         "collapsed_body": 0,
@@ -280,7 +269,6 @@ def test_collect_context_artifact_handles_missing_runtime_files(
     artifact = collect_context_artifact(cwd, settings=_settings())
 
     assert artifact["snapshot"]["exists"] is False
-    assert artifact["session_memory"]["exists"] is False
     assert artifact["memory"]["index_exists"] is False
     assert artifact["discovery"]["commands"] == []
     assert artifact["discovery"]["skills"] == []

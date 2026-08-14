@@ -126,8 +126,8 @@ OpenHarness handles that lifecycle at several boundaries:
   the turn;
 - explicit compaction combines a structured summary with an uncompacted recent
   tail;
-- project memory and per-turn checkpoints preserve durable facts separately
-  from the raw transcript;
+- project memory preserves durable cross-session facts separately from the raw
+  transcript;
 - snapshots and session resume make recovery a persisted state transition
   instead of a prompt convention.
 
@@ -172,7 +172,7 @@ The judge runs only after the working loop returns a clean `end_turn`; tool
 failures, permission parking, truncated output, and runtime circuit breakers
 remain execution concerns and never masquerade as completion. Public REPL
 sessions have no loop-count cap by default. An explicit `oh --max-turns N` or
-`OPENHARNESS_MAX_TURNS=N` checkpoints progress and pauses on exhaustion without
+`OPENHARNESS_MAX_TURNS=N` persists progress and pauses on exhaustion without
 calling the judge. Goal auto-continuation is also unbounded by default; setting
 `OPENHARNESS_GOAL_MAX_AUTO_TURNS=N` opts into a separate circuit breaker. Judge
 errors and malformed output fail closed. Goal state is persisted with the

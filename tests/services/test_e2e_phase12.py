@@ -1,4 +1,4 @@
-"""End-to-end Phase 12 integration tests — P12-T6 (7a + 7b + 7c).
+"""End-to-end Phase 12 integration tests — snapshot and resume.
 
 Three closed loops with only the LLM client stubbed:
 
@@ -7,15 +7,7 @@ Three closed loops with only the LLM client stubbed:
    built via ``from_snapshot``; turn 2's LLM request includes the
    prior turn's messages.
 
-2. **Compact L3 actually-hits integration** (7b). Closes Phase 11
-   retro §4 gap: Phase 11 designed L3 to read the session_memory
-   checkpoint but never had a producer wiring it. After P12-T1
-   the checkpoint exists for real; this test forces a turn where
-   L3 fires (instead of L4) by writing the checkpoint, building
-   messages just over threshold, and asserting
-   ``compact_kind == "session_memory"``.
-
-3. **Chat resume e2e** (7c). REPL-level resume: snapshot exists
+2. **Chat resume e2e** (7c). REPL-level resume: snapshot exists
    → ``oh chat --resume`` loads + banner + accepts next input →
    captured request includes prior history.
 """
@@ -37,8 +29,6 @@ from openharness.protocols import (
 )
 from openharness.protocols.stream_events import ApiTextDeltaEvent
 from openharness.protocols.usage import UsageSnapshot
-from openharness.services.compact import auto_compact_if_needed
-from openharness.services.session_memory import get_session_memory_dir
 from openharness.services.snapshot import (
     get_snapshot_dir,
     load_snapshot,
@@ -78,7 +68,6 @@ def _ctx(
     *,
     cwd: Path,
     snapshot_enabled: bool = True,
-    session_memory_path: Path | None = None,
     system_prompt: str = "t",
     model: str = "qwen-plus",
 ) -> QueryContext:
@@ -92,7 +81,6 @@ def _ctx(
         max_tokens=64,
         max_turns=2,
         compact_enabled=False,
-        session_memory_path=session_memory_path,
         snapshot_enabled=snapshot_enabled,
     )
 
@@ -176,73 +164,6 @@ class TestSnapshotRoundTrip:
             cwd=tmp_path,
         )
         assert ctx2.system_prompt == "custom prompt that must survive resume"
-
-
-# --------------------------------------------------------------------------- #
-# 7b — Compact L3 actually-hits integration                                   #
-#                                                                             #
-# Closes Phase 11 retro §4 gap. Before P12-T1, the session_memory             #
-# checkpoint had no engine-side writer — L3 always returned None.             #
-# This test writes a checkpoint AND builds messages above threshold,          #
-# then asserts L3 (not L4) fires.                                             #
-# --------------------------------------------------------------------------- #
-
-
-class TestCompactL3Hits:
-    @pytest.mark.asyncio
-    async def test_l3_fires_when_checkpoint_is_fresh_and_threshold_exceeded(
-        self, tmp_path: Path
-    ) -> None:
-        # Step 1: produce a session_memory checkpoint on disk via the
-        # engine, by running one turn with session_memory_path set.
-        session_path = get_session_memory_dir(tmp_path) / "checkpoint.md"
-        stub1 = _RecordingEndTurnStub()
-        ctx1 = _ctx(
-            stub1,
-            cwd=tmp_path,
-            snapshot_enabled=False,
-            session_memory_path=session_path,
-        )
-        async for _ev in run_query([_user("hi")], ctx1):
-            pass
-        assert session_path.exists(), "Phase 12 T1 wiring should have written this"
-
-        # Step 2: build messages just over threshold (same shape as
-        # Phase 11 T7-7b L4 test — short messages so L2 doesn't help).
-        small_chunk = "x " * 1000  # 2000 chars per message, < L2 threshold
-        many_msgs: list[ConversationMessage] = []
-        for i in range(50):
-            role: str = "user" if i % 2 == 0 else "assistant"
-            many_msgs.append(
-                ConversationMessage(
-                    role=role,  # type: ignore[arg-type]
-                    content=[TextBlock(text=f"m{i}: {small_chunk}")],
-                )
-            )
-
-        # Step 3: invoke auto_compact_if_needed directly with the
-        # session_memory path set. L0 should fire (threshold exceeded),
-        # L2 should be a no-op (no long text), L3 should HIT (fresh
-        # checkpoint just written) before L4 ever runs.
-        class _NeverCalledStub:
-            async def stream_message(self, request: object) -> AsyncIterator[ApiStreamEvent]:
-                del request
-                raise AssertionError("L4 LLM should NOT have been called when L3 hits")
-                yield  # pragma: no cover - never reached
-
-        result_msgs, result = await auto_compact_if_needed(
-            many_msgs,
-            model="qwen-plus",
-            api_client=cast("SupportsStreamingMessages", _NeverCalledStub()),
-            session_memory_path=session_path,
-            enabled=True,
-            threshold_ratio=0.83,
-        )
-        assert result.compact_kind == "session_memory"
-        assert 3 in result.applied_levels
-        # L3 spliced — message count should drop (older messages
-        # replaced by a single synthetic checkpoint message + tail)
-        assert len(result_msgs) < len(many_msgs)
 
 
 # --------------------------------------------------------------------------- #

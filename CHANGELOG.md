@@ -15,6 +15,15 @@ records + framework-level lessons), see
 
 ## [Unreleased]
 
+### Removed — per-turn session-memory checkpoint
+
+Removed the five-slot `session-memory/checkpoint.md` path from compaction and
+turn-end persistence. Compact now proceeds from Tool Result budgeting and
+deterministic collapse directly to the structured LLM summary while preserving
+the recent message tail. Snapshots remain the source of truth for Resume, and
+Project Memory remains the store for durable cross-session knowledge.
+Existing checkpoint files are ignored and are not deleted automatically.
+
 ### Changed — `/goal` owns completion judging (decisions/50)
 
 Moved the independent judge out of the retired verification-gate package and

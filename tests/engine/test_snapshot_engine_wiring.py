@@ -1,9 +1,5 @@
 """Tests for engine per-turn-end snapshot writer wiring — P12-T3-3c.
 
-Companion to ``test_session_memory_engine_wiring.py`` — verifies the
-SECOND consumer (snapshot writer) fires from the same engine call
-site, sharing the ``collect_turn_metadata`` producer per D30.6.
-
 Contract surfaces:
 
 1. ``snapshot_enabled=True`` + end_turn → JSON snapshot written
@@ -12,8 +8,7 @@ Contract surfaces:
    user-turn end)
 4. OSError during write → WARN-logged + turn still emits
    ConversationCompleteEvent
-5. Single ``collect_turn_metadata`` call shared between
-   session_memory writer + snapshot writer (no double-compute)
+5. ``collect_turn_metadata`` is skipped when snapshots are disabled
 """
 
 from __future__ import annotations
@@ -31,7 +26,6 @@ from openharness.protocols import (
     TextBlock,
 )
 from openharness.protocols.usage import UsageSnapshot
-from openharness.services.session_memory import get_session_memory_dir
 from openharness.services.snapshot import (
     SNAPSHOT_VERSION,
     get_snapshot_dir,
@@ -69,7 +63,6 @@ def _ctx(
     *,
     cwd: Path,
     snapshot_enabled: bool,
-    session_memory_path: Path | None = None,
 ) -> QueryContext:
     return QueryContext(
         api_client=cast("SupportsStreamingMessages", client),
@@ -81,7 +74,6 @@ def _ctx(
         max_tokens=64,
         max_turns=2,
         compact_enabled=False,
-        session_memory_path=session_memory_path,
         snapshot_enabled=snapshot_enabled,
     )
 
@@ -133,14 +125,12 @@ class TestSnapshotWriterWiring:
         assert len(completes) == 1
 
 
-class TestSingleProducerSharing:
+class TestSnapshotMetadataProducer:
     @pytest.mark.asyncio
-    async def test_both_writers_share_one_collect_turn_metadata_call(
+    async def test_snapshot_uses_one_collect_turn_metadata_call(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Wire BOTH writers; verify collect_turn_metadata fires ONCE,
-        # not once per writer. The single-producer/two-consumer design
-        # is D30.6's load-bearing claim.
+        # Snapshot metadata is collected exactly once at turn end.
         from openharness.engine import query as query_module
 
         call_count = {"n": 0}
@@ -152,12 +142,10 @@ class TestSingleProducerSharing:
 
         monkeypatch.setattr(query_module, "collect_turn_metadata", _counting)
 
-        session_path = get_session_memory_dir(tmp_path) / "checkpoint.md"
         ctx = _ctx(
             _EndTurnStub(),
             cwd=tmp_path,
             snapshot_enabled=True,
-            session_memory_path=session_path,
         )
 
         async for _ev in run_query([_user("hi")], ctx):
@@ -169,8 +157,7 @@ class TestSingleProducerSharing:
     async def test_neither_consumer_skips_producer(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # When neither session_memory nor snapshot is wired, the producer
-        # should be skipped too (zero overhead for the no-wiring case).
+        # When snapshots are disabled, metadata collection is skipped.
         from openharness.engine import query as query_module
 
         call_count = {"n": 0}
@@ -186,7 +173,6 @@ class TestSingleProducerSharing:
             _EndTurnStub(),
             cwd=tmp_path,
             snapshot_enabled=False,
-            session_memory_path=None,
         )
 
         async for _ev in run_query([_user("hi")], ctx):

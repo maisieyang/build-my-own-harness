@@ -124,26 +124,20 @@ class QueryContext:
     # All defaults match the boundary doc D29.8 — pre-Phase-11 callers
     # using the no-kwarg constructor get the same auto-compact
     # threshold (~26.5k tokens for qwen-plus) without explicit opt-in.
-    # The full-compact L4 LLM call only fires when L1-L3 don't free
+    # The full-compact L4 LLM call only fires when deterministic trimming does not free
     # enough; existing reactive PTL retry in the loop remains the
     # final safety net.
     compact_enabled: bool = True
     compact_threshold_ratio: float = 0.83
     compact_full_max_tokens: int = 20_000
     compact_full_timeout_s: float = 120.0
-    # When set, compact L3 reads this 5-slot checkpoint file (written
-    # by ``services.session_memory.update_session_memory_file``) to
-    # skip the L4 LLM call entirely. ``None`` (default) skips L3 — L0
-    # / L2 / L4 still run.
-    session_memory_path: Path | None = None
     memory_store: Any = None  # FilesystemMemoryStore | None — Any avoids
     # circular imports (FilesystemMemoryStore lives under memory/ and
     # the engine references it as opaque storage). Runtime type-checked
     # by callers that actually use the store.
     # P12-T3 (decisions/27 D30.8): per-turn JSON snapshot writer.
     # When True, the engine calls ``services.snapshot.write_session_snapshot``
-    # at the end of each user turn (alongside the session_memory
-    # writer; both share the same ``tool_metadata`` producer).
+    # at the end of each user turn.
     # **Default False** here so unit tests constructing QueryContext
     # directly don't accidentally write snapshots to ~/.openharness/.
     # The CLI bootstrap opts in via ``settings.snapshot.enabled``
@@ -189,7 +183,6 @@ class QueryContext:
         authorization_context: tuple[str, ...] = (),
         skill_store: SkillStore | None = None,
         memory_store: Any = None,
-        session_memory_path: Path | None = None,
         snapshot_enabled: bool = False,
         snapshot_max_age_warn_days: int = 7,
         snapshot_history_max_count: int = 100,
@@ -297,7 +290,6 @@ class QueryContext:
             compact_threshold_ratio=compact_threshold_ratio,
             compact_full_max_tokens=compact_full_max_tokens,
             compact_full_timeout_s=compact_full_timeout_s,
-            session_memory_path=session_memory_path,
             memory_store=memory_store,
             snapshot_enabled=snapshot_enabled,
             snapshot_max_age_warn_days=snapshot_max_age_warn_days,

@@ -148,7 +148,7 @@ class TestCompactEngineIntegration:
     @pytest.mark.asyncio
     async def test_l4_compact_fires_on_large_input(self) -> None:
         # Large input → L0 over threshold → L2 doesn't help (each
-        # message short) → L3 skipped (no checkpoint) → L4 LLM call.
+        # message short) → L4 LLM call.
         # Use _SummarizingStubClient so the L4 summarize() succeeds
         # AND the subsequent main LLM call also gets a response.
         client = _SummarizingStubClient()

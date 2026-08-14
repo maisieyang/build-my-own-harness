@@ -155,7 +155,6 @@ from openharness.protocols import (
 from openharness.services.goal_judge import GoalJudgeVerdict, judge_goal_completion
 from openharness.services.permission_reviewer import LlmPermissionReviewer
 from openharness.services.run_session import RunSession, open_run_session
-from openharness.services.session_memory import get_session_memory_dir
 from openharness.skills.store import EmptySkillStore, FilesystemSkillStore, SkillStore
 from openharness.tools import LoadSkillTool, create_default_tool_registry
 from openharness.tools.web_fetch import WebFetch
@@ -1053,23 +1052,13 @@ async def _run_ask(
             runtime_permission_profile=active_profile,
             enforced_boundary=(sandbox_session.boundary if sandbox_session is not None else None),
             permission_runtime=permission_runtime,
-            # P11-T5: compact + extraction wiring. memory_store is the
-            # write-path entry for Phase 11 extraction (uses Phase 10's
-            # FilesystemMemoryStore). session_memory_path points at the
-            # 5-slot checkpoint compact L3 reads (None when memory
-            # subsystem disabled — engine still runs L2 + L4).
+            # Compact and project-memory wiring.
             compact_enabled=compact_enabled,
             compact_threshold_ratio=compact_threshold_ratio,
             compact_full_max_tokens=settings.compact.full_compact_max_tokens,
             compact_full_timeout_s=settings.compact.full_compact_timeout_s,
-            session_memory_path=(
-                get_session_memory_dir(env.cwd) / "checkpoint.md" if enable_memory else None
-            ),
             memory_store=memory_store,
-            # P12-T3 (D30.8): per-turn snapshot writer. Engine fires
-            # ``write_session_snapshot`` at user-turn end alongside
-            # the session_memory writer (single tool_metadata producer
-            # feeds both per D30.6). ``--no-resume`` is the user-side
+            # P12-T3 (D30.8): per-turn snapshot writer. ``--no-resume`` is the user-side
             # READ opt-out; writing stays on by default so a snapshot
             # always exists when the user later decides to ``--resume``.
             snapshot_enabled=settings.snapshot.enabled,
@@ -1117,7 +1106,6 @@ async def _run_ask(
                     authorization_context=(prompt,),
                     skill_store=skill_store,
                     memory_store=memory_store,
-                    session_memory_path=context.session_memory_path,
                     snapshot_enabled=context.snapshot_enabled,
                     snapshot_max_age_warn_days=context.snapshot_max_age_warn_days,
                     snapshot_history_max_count=context.snapshot_history_max_count,
@@ -2272,16 +2260,13 @@ async def _run_chat(
                     sandbox_session.boundary if sandbox_session is not None else None
                 ),
                 permission_runtime=permission_runtime,
-                # P11-T5: compact + extraction. Mirrors ``_run_ask``.
+                # Compact and project-memory wiring. Mirrors ``_run_ask``.
                 # Rebuilt per turn so /compact-toggled flags (future)
                 # take effect on the next turn.
                 compact_enabled=compact_enabled,
                 compact_threshold_ratio=compact_threshold_ratio,
                 compact_full_max_tokens=settings.compact.full_compact_max_tokens,
                 compact_full_timeout_s=settings.compact.full_compact_timeout_s,
-                session_memory_path=(
-                    get_session_memory_dir(env.cwd) / "checkpoint.md" if enable_memory else None
-                ),
                 memory_store=memory_store,
                 # P12-T3 (D30.8): snapshot writer mirrored from non-interactive execution.
                 snapshot_enabled=settings.snapshot.enabled,
@@ -2882,8 +2867,8 @@ def _run_headless_command(
         max=1.0,
         help=(
             "Auto-compact threshold as a fraction of the model's context "
-            "window (Phase 11 D29.3). Above this ratio, auto-compact "
-            "escalates L2→L3→L4. Overrides "
+            "window. Above this ratio, auto-compact first collapses "
+            "deterministic long content, then runs the LLM summary. Overrides "
             "OPENHARNESS_COMPACT__THRESHOLD_RATIO (default 0.83)."
         ),
     ),
@@ -2929,7 +2914,7 @@ def _run_headless_command(
             "Opt in to LLM-authored ``tool_metadata.task_focus_state`` "
             "(Phase 13 D31.7). Fires a secondary LLM call at turn "
             "end asking for the current goal + next_step in JSON, "
-            "stores the result in snapshot + session_memory. Adds "
+            "stores the result in the snapshot. Adds "
             "~1-2s per turn. Default OFF preserves Phase 12 zero-"
             "cost behavior. Override: "
             "OPENHARNESS_SNAPSHOT__LLM_FOCUS_STATE env var."
