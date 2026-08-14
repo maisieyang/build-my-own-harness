@@ -147,24 +147,23 @@ class TestCompactEngineIntegration:
 
     @pytest.mark.asyncio
     async def test_l4_compact_fires_on_large_input(self) -> None:
-        # Large input → L0 over threshold → L2 doesn't help (each
-        # message short) → L4 LLM call.
-        # Use _SummarizingStubClient so the L4 summarize() succeeds
+        # Large input crosses the threshold → semantic summary call.
+        # Use _SummarizingStubClient so summarize() succeeds
         # AND the subsequent main LLM call also gets a response.
         client = _SummarizingStubClient()
         context = _build_context(client, compact_enabled=True)
         # 200 messages * ~1k chars each → ~67k tokens after padding,
         # well over the 26.5k threshold. Each message under 2400 char
-        # threshold so L2 won't help.
+        # threshold.
         messages = [_user_text("x" * 1_000) for _ in range(200)]
 
         async for _event in run_query(messages, context):
             pass
 
-        # Two requests issued: one summarize call (L4) + one main LLM
+        # Two requests issued: one summarize call + one main LLM
         # call with compacted messages
         assert len(client.requests) == 2
-        # Main request (last) has FEWER messages than original — L4
+        # Main request (last) has FEWER messages than original — full compact
         # spliced. Original 200 → boundary + summary + 12 preserved = 14
         main_request = client.requests[-1]
         assert len(main_request.messages) < 200

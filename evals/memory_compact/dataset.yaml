@@ -855,3 +855,60 @@ samples:
   - LATEST_ERROR=PROBE_ERROR_EXPECTED_CONTEXT_FAILURE
   - ERROR_ORDER=READ_OFFSET_OUT_OF_RANGE_THEN_PROBE_ERROR_EXPECTED_CONTEXT_FAILURE
   notes: 来自 DPG-010/011；摘要必须保留错误时间顺序，不能把较早 Read error 当作最后错误
+- case_id: MC10-refetchable-result-cleanup
+  capability: recoverable-tool-result-cleanup-fidelity
+  status: ratified
+  messages:
+  - {role: user, content: [{type: text, text: "检查旧 Read 结果清理后的摘要连续性"}]}
+  - role: assistant
+    content:
+    - {type: tool_use, id: old_read_pricing_tests, name: Read, input: {path: .dogfood/work/repl-core-workflows/test_pricing.py}}
+  - role: user
+    content:
+    - type: tool_result
+      tool_use_id: old_read_pricing_tests
+      is_error: false
+      content: >-
+        RAW_READ_BODY_SHOULD_BE_CLEARED=fixture source body from an earlier Read call.
+        pricing-boundary-case-001 pricing-boundary-case-002 pricing-boundary-case-003
+        pricing-boundary-case-004 pricing-boundary-case-005 pricing-boundary-case-006
+        pricing-boundary-case-007 pricing-boundary-case-008 pricing-boundary-case-009
+        pricing-boundary-case-010 pricing-boundary-case-011 pricing-boundary-case-012
+        pricing-boundary-case-013 pricing-boundary-case-014 pricing-boundary-case-015
+        pricing-boundary-case-016 pricing-boundary-case-017 pricing-boundary-case-018
+        pricing-boundary-case-019 pricing-boundary-case-020 pricing-boundary-case-021
+        pricing-boundary-case-022 pricing-boundary-case-023 pricing-boundary-case-024
+        pricing-boundary-case-025 pricing-boundary-case-026 pricing-boundary-case-027
+        pricing-boundary-case-028 pricing-boundary-case-029 pricing-boundary-case-030
+  - {role: assistant, content: [{type: text, text: "VERIFIED_RESULT=PRICING_TESTS_6_PASSED"}]}
+  - {role: user, content: [{type: text, text: "USER_CONSTRAINT=DO_NOT_EDIT_PRODUCTION_CODE"}]}
+  - {role: assistant, content: [{type: text, text: "CURRENT_STATE=READY_FOR_COMPACT"}]}
+  - {role: user, content: [{type: text, text: "填充消息 6"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 7"}]}
+  - {role: user, content: [{type: text, text: "填充消息 8"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 9"}]}
+  - {role: user, content: [{type: text, text: "填充消息 10"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 11"}]}
+  - {role: user, content: [{type: text, text: "填充消息 12"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 13"}]}
+  - {role: user, content: [{type: text, text: "填充消息 14"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 15"}]}
+  - {role: user, content: [{type: text, text: "填充消息 16"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 17"}]}
+  - {role: user, content: [{type: text, text: "填充消息 18"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 19"}]}
+  - {role: user, content: [{type: text, text: "填充消息 20"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 21"}]}
+  - {role: user, content: [{type: text, text: "填充消息 22"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 23"}]}
+  - {role: user, content: [{type: text, text: "填充消息 24"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 25"}]}
+  - {role: user, content: [{type: text, text: "填充消息 26"}]}
+  - {role: assistant, content: [{type: text, text: "填充回复 27"}]}
+  must_recall:
+  - VERIFIED_RESULT=PRICING_TESTS_6_PASSED
+  - USER_CONSTRAINT=DO_NOT_EDIT_PRODUCTION_CODE
+  - CURRENT_STATE=READY_FOR_COMPACT
+  must_not_recall:
+  - RAW_READ_BODY_SHOULD_BE_CLEARED
+  notes: 验证旧成功且清理后确实节省 token 的 Read 正文被省略后，后续已验证结论、用户约束和当前状态仍进入 Summary。

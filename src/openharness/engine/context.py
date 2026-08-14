@@ -118,15 +118,15 @@ class QueryContext:
     )
     enforced_boundary: EnforcedBoundary | None = None
     permission_runtime: PermissionRuntime | None = None
-    # P11-T3.3f (decisions/26 D29.3): proactive auto-compact knobs.
+    # Proactive semantic Conversation compact knobs.
     # Engine calls ``auto_compact_if_needed`` BEFORE each LLM request
     # (in front of PreApiCall hooks) when ``compact_enabled=True``.
     # All defaults match the boundary doc D29.8 — pre-Phase-11 callers
     # using the no-kwarg constructor get the same auto-compact
     # threshold (~26.5k tokens for qwen-plus) without explicit opt-in.
-    # The full-compact L4 LLM call only fires when deterministic trimming does not free
-    # enough; existing reactive PTL retry in the loop remains the
-    # final safety net.
+    # Above the threshold, older refetchable Tool Results may be cleared only
+    # in the summarizer input; full semantic compact always runs and splices
+    # back the original recent tail. Reactive PTL remains the final safety net.
     compact_enabled: bool = True
     compact_threshold_ratio: float = 0.83
     compact_full_max_tokens: int = 20_000

@@ -494,12 +494,11 @@ async def run_query(
                     # Continue this loop iteration with the ordinary model
                     # request that consumes the newly attached Tool Results.
 
-                # P11-T3.3f (D29.3): proactive compact escalation. Runs
-                # BEFORE PreApiCall hooks so hooks see compact-modified
-                # messages (memory-injection hooks etc. operate on the
-                # already-condensed view). Deterministic trimming runs first;
-                # L4 is the only LLM call and fires only when trimming does
-                # not free enough space. Reactive PTL retry below
+                # Proactive semantic compact runs BEFORE PreApiCall hooks so
+                # hooks see the condensed Working Set. Older successful Read
+                # and Grep results may be cleared in the summarizer's private
+                # input; user/assistant text and the original recent tail are
+                # never deterministically rewritten. Reactive PTL retry below
                 # remains the last-resort safety net.
                 if context.compact_enabled:
                     messages, compact_result = await auto_compact_if_needed(

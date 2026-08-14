@@ -2867,8 +2867,8 @@ def _run_headless_command(
         max=1.0,
         help=(
             "Auto-compact threshold as a fraction of the model's context "
-            "window. Above this ratio, auto-compact first collapses "
-            "deterministic long content, then runs the LLM summary. Overrides "
+            "window. Above this ratio, auto-compact summarizes older history "
+            "and preserves the original recent tail. Overrides "
             "OPENHARNESS_COMPACT__THRESHOLD_RATIO (default 0.83)."
         ),
     ),
@@ -2877,10 +2877,10 @@ def _run_headless_command(
         "--no-auto-compact",
         hidden=True,
         help=(
-            "Disable proactive auto-compact (Phase 11). The engine's "
+            "Disable proactive semantic auto-compact. The engine's "
             "reactive prompt-too-long retry remains active as the last-"
             "resort safety net. Useful for tests that need byte-stable "
-            "request shape or when L4 LLM cost is unwanted."
+            "request shape or when summarization cost is unwanted."
         ),
     ),
     resume: bool = typer.Option(

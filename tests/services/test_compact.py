@@ -1,11 +1,11 @@
 """Tests for the compact escalation pipeline.
 
-5 surfaces:
+4 surfaces:
 
-1. L0 token estimation + threshold computation
-2. L2 context-collapse (deterministic, char-based)
-3. L4 full_compact (summarize call + 9-slot prompt + parse)
-4. ``auto_compact_if_needed`` orchestrator escalation order
+1. token estimation + threshold computation
+2. summary preparation clears only old, recoverable tool results
+3. full_compact (summarize call + 9-slot prompt + parse)
+4. ``auto_compact_if_needed`` orchestration
 """
 
 from __future__ import annotations
@@ -37,7 +37,6 @@ from openharness.services.compact import (
     full_compact,
     get_context_window,
     threshold_tokens,
-    try_context_collapse,
 )
 
 if TYPE_CHECKING:
@@ -151,59 +150,201 @@ class TestL0Estimation:
 
 
 # ---------------------------------------------------------------------------
-# 2. L2 context-collapse
+# 2. Summary preparation
 # ---------------------------------------------------------------------------
 
 
-class TestL2ContextCollapse:
-    def test_short_text_unchanged(self) -> None:
-        messages = [_user_text("short")]
-        new_messages, changed = try_context_collapse(messages)
-        assert changed is False
-        # Text passes through unchanged
-        assert new_messages[0].content[0].text == "short"  # type: ignore[union-attr]
+class TestSummaryPreparation:
+    @pytest.mark.asyncio
+    async def test_only_old_successful_read_and_grep_results_are_cleared(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: dict[str, object] = {}
 
-    def test_long_text_collapsed(self) -> None:
-        long = "x" * 5_000  # > 2400 threshold
-        messages = [_user_text(long)]
-        new_messages, changed = try_context_collapse(messages)
+        async def _capture(**kwargs: object) -> str:
+            seen["messages"] = kwargs["messages"]
+            return "<summary>compact</summary>"
+
+        monkeypatch.setattr("openharness.services.compact.summarize", _capture)
+        older: list[ConversationMessage] = []
+        cases = [
+            ("read", "Read", False, "LONG_READ_PAYLOAD" + "r" * 2_000),
+            ("grep", "Grep", False, "LONG_GREP_PAYLOAD" + "g" * 2_000),
+            ("short-read", "Read", False, "SHORT_READ_BODY"),
+            ("bash", "Bash", False, "BASH_BODY"),
+            ("read-error", "Read", True, "READ_ERROR_BODY"),
+            ("skill", "LoadSkill", False, "SKILL_BODY"),
+        ]
+        for tool_use_id, name, is_error, body in cases:
+            older.extend(
+                [
+                    ConversationMessage(
+                        role="assistant",
+                        content=[ToolUseBlock(id=tool_use_id, name=name, input={"value": name})],
+                    ),
+                    ConversationMessage(
+                        role="user",
+                        content=[
+                            ToolResultBlock(
+                                tool_use_id=tool_use_id,
+                                content=body,
+                                is_error=is_error,
+                            )
+                        ],
+                    ),
+                ]
+            )
+        recent = [_user_text(f"recent-{i}") for i in range(4)]
+
+        new_messages, changed = await full_compact(
+            [*older, *recent],
+            model="qwen-plus",
+            api_client=_StubLLMClient("unused"),
+            preserve_recent=4,
+        )
+
         assert changed is True
-        new_text = new_messages[0].content[0].text  # type: ignore[union-attr]
-        # Head 900 + marker + tail 500 — total ≈ 1430 chars
-        assert "[collapsed" in new_text
-        assert len(new_text) < 2_000
+        summary_messages = seen["messages"]
+        assert isinstance(summary_messages, list)
+        summary_input = repr(summary_messages[:-1])
+        assert "LONG_READ_PAYLOAD" not in summary_input
+        assert "LONG_GREP_PAYLOAD" not in summary_input
+        assert "input={'value': 'Read'}" in summary_input
+        assert "input={'value': 'Grep'}" in summary_input
+        assert "older successful Read tool result omitted" in summary_input
+        assert "older successful Grep tool result omitted" in summary_input
+        assert "cannot guarantee the exact historical output" in summary_input
+        assert "SHORT_READ_BODY" in summary_input
+        assert "BASH_BODY" in summary_input
+        assert "READ_ERROR_BODY" in summary_input
+        assert "SKILL_BODY" in summary_input
+        assert new_messages[-4:] == recent
 
-    def test_long_tool_result_collapsed(self) -> None:
-        long = "y" * 5_000
+    @pytest.mark.asyncio
+    async def test_user_and_assistant_text_are_never_cleared(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: dict[str, object] = {}
+        long_user = "USER_FACT=" + "u" * 5_000
+        long_assistant = "ASSISTANT_DECISION=" + "a" * 5_000
+
+        async def _capture(**kwargs: object) -> str:
+            seen["messages"] = kwargs["messages"]
+            return "<summary>compact</summary>"
+
+        monkeypatch.setattr("openharness.services.compact.summarize", _capture)
+        messages = [
+            _user_text(long_user),
+            ConversationMessage(role="assistant", content=[TextBlock(text=long_assistant)]),
+            *[_user_text(f"recent-{i}") for i in range(2)],
+        ]
+
+        await full_compact(
+            messages,
+            model="qwen-plus",
+            api_client=_StubLLMClient("unused"),
+            preserve_recent=2,
+        )
+
+        assert long_user in repr(seen["messages"])
+        assert long_assistant in repr(seen["messages"])
+
+    @pytest.mark.asyncio
+    async def test_recent_tool_result_is_preserved_byte_for_byte(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def _summary(**_kwargs: object) -> str:
+            return "<summary>compact</summary>"
+
+        monkeypatch.setattr("openharness.services.compact.summarize", _summary)
+        recent = [
+            ConversationMessage(
+                role="assistant",
+                content=[ToolUseBlock(id="recent-read", name="Read", input={"path": "x"})],
+            ),
+            ConversationMessage(
+                role="user",
+                content=[
+                    ToolResultBlock(
+                        tool_use_id="recent-read",
+                        content="RECENT_READ_BODY" * 500,
+                    )
+                ],
+            ),
+        ]
+        messages = [_user_text("old-a"), _user_text("old-b"), *recent]
+
+        new_messages, changed = await full_compact(
+            messages,
+            model="qwen-plus",
+            api_client=_StubLLMClient("unused"),
+            preserve_recent=2,
+        )
+
+        assert changed is True
+        assert new_messages[-2:] == recent
+
+    @pytest.mark.asyncio
+    async def test_orphan_tool_result_is_not_cleared(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        seen: dict[str, object] = {}
+
+        async def _capture(**kwargs: object) -> str:
+            seen["messages"] = kwargs["messages"]
+            return "<summary>compact</summary>"
+
+        monkeypatch.setattr("openharness.services.compact.summarize", _capture)
         messages = [
             ConversationMessage(
                 role="user",
-                content=[ToolResultBlock(tool_use_id="x", content=long)],
-            )
+                content=[ToolResultBlock(tool_use_id="missing", content="ORPHAN_BODY")],
+            ),
+            _user_text("old"),
+            _user_text("recent"),
         ]
-        new_messages, changed = try_context_collapse(messages)
-        assert changed is True
-        new_block = new_messages[0].content[0]
-        assert isinstance(new_block, ToolResultBlock)
-        assert "[collapsed" in new_block.content
-        assert new_block.tool_use_id == "x"
 
-    def test_caller_messages_not_mutated(self) -> None:
-        long = "x" * 5_000
-        original = [_user_text(long)]
-        original_first_text = original[0].content[0].text  # type: ignore[union-attr]
-        try_context_collapse(original)
-        # Caller's message unchanged after the call
-        assert original[0].content[0].text == original_first_text  # type: ignore[union-attr]
+        await full_compact(
+            messages,
+            model="qwen-plus",
+            api_client=_StubLLMClient("unused"),
+            preserve_recent=1,
+        )
 
-    def test_mixed_short_and_long(self) -> None:
-        long = "x" * 5_000
-        messages = [_user_text("short one"), _user_text(long), _user_text("also short")]
-        new_messages, changed = try_context_collapse(messages)
-        assert changed is True
-        assert new_messages[0].content[0].text == "short one"  # type: ignore[union-attr]
-        assert "[collapsed" in new_messages[1].content[0].text  # type: ignore[union-attr]
-        assert new_messages[2].content[0].text == "also short"  # type: ignore[union-attr]
+        assert "ORPHAN_BODY" in repr(seen["messages"])
+
+    @pytest.mark.asyncio
+    async def test_summary_failure_returns_exact_original_after_private_cleanup(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def _fail(**_kwargs: object) -> str:
+            raise RequestFailure("summary unavailable")
+
+        monkeypatch.setattr("openharness.services.compact.summarize", _fail)
+        messages = [
+            ConversationMessage(
+                role="assistant",
+                content=[ToolUseBlock(id="old-read", name="Read", input={"path": "x.py"})],
+            ),
+            ConversationMessage(
+                role="user",
+                content=[
+                    ToolResultBlock(
+                        tool_use_id="old-read",
+                        content="EXACT_READ_BODY" * 500,
+                    )
+                ],
+            ),
+            _user_text("recent"),
+        ]
+
+        new_messages, changed = await full_compact(
+            messages,
+            model="qwen-plus",
+            api_client=_StubLLMClient("unused"),
+            preserve_recent=1,
+        )
+
+        assert changed is False
+        assert new_messages == messages
 
 
 # ---------------------------------------------------------------------------
@@ -480,40 +621,18 @@ class TestAutoCompactEscalation:
         assert client.call_count == 0
 
     @pytest.mark.asyncio
-    async def test_l2_alone_sufficient(self) -> None:
-        # Messages with long bodies that L2 can collapse — total
-        # falls under threshold after collapse, so L4 does not run.
-        # ``qwen-plus`` threshold @ 0.83 = 26_560. We need a value
-        # where original is > threshold but l2-collapsed is < threshold.
-        client = _StubLLMClient(response="<summary>x</summary>")
-        # 20 messages each with ~3000 chars → ~60k chars → ~15k tokens
-        # *4/3 = ~20k. Under threshold. Hmm.
-        # Let me make them bigger: each 6000 chars → 120k chars → 30k+ tokens
-        long = "x" * 6_000
-        messages = [_user_text(long) for _ in range(20)]
-        _new_messages, result = await auto_compact_if_needed(
-            messages, model="qwen-plus", api_client=client
-        )
-        # L2 collapses each long message (head 900 + tail 500 + marker)
-        # ≈ 1400 chars per message *20 = 28k chars → ~7k tokens
-        # 7k *4/3 ≈ 9k tokens → under 26k threshold
-        assert result.compact_kind == "context_collapse"
-        assert 2 in result.applied_levels
-        assert client.call_count == 0  # LLM never called
-
-    @pytest.mark.asyncio
-    @pytest.mark.asyncio
-    async def test_l4_when_l2_insufficient(self) -> None:
-        # L2 will not collapse these short messages, so L4 summarizes them.
+    async def test_above_threshold_always_runs_full_compact(self) -> None:
+        # Long user messages must not be globally folded as a cheap substitute
+        # for semantic compaction. Crossing the threshold always attempts L4.
         client = _StubLLMClient(response="<summary>compacted summary content</summary>")
-        long_enough = "x" * 1_000
-        messages = [_user_text(long_enough) for _ in range(200)]
+        messages = [_user_text("USER_CONSTRAINT=" + "x" * 6_000) for _ in range(20)]
         new_messages, result = await auto_compact_if_needed(
             messages,
             model="qwen-plus",
             api_client=client,
         )
         assert result.compact_kind == "full"
+        assert result.applied_levels == (0, 4)
         assert 4 in result.applied_levels
         assert client.call_count == 1  # L4 called LLM once
         # Boundary marker + summary + 12 preserved = 14

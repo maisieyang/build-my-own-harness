@@ -150,21 +150,21 @@ class MemorySettings(BaseModel):
 
 
 class CompactSettings(BaseModel):
-    """Tunables for the Phase 11 auto-compact pipeline (D29.3 + D29.8).
+    """Tunables for proactive semantic Conversation compaction.
 
     Env-var overrides use double-underscore: ``OPENHARNESS_COMPACT__THRESHOLD_RATIO=0.7``
     sets ``settings.compact.threshold_ratio``.
 
-    ``enabled=False`` disables L2-L4 entirely; Phase 4's L1 microcompact
-    + reactive PTL retry still run (L1 lives in the PostToolUse hook,
-    not this pipeline). The CLI ``--no-auto-compact`` flag flips this.
+    ``enabled=False`` disables proactive semantic compact. Per-result ingress
+    budgeting and reactive Prompt Too Long handling remain independent. The
+    CLI ``--no-auto-compact`` flag flips this.
     """
 
     enabled: bool = Field(
         default=True,
         description=(
-            "Enable the L2-L4 auto-compact pipeline. When false, the "
-            "engine skips proactive compaction; Phase 4's reactive "
+            "Enable proactive semantic auto-compact. When false, the "
+            "engine skips proactive compaction; reactive "
             "PTL retry remains as the last-resort safety net. "
             "Override: ``OPENHARNESS_COMPACT__ENABLED`` env / "
             "``--no-auto-compact`` CLI flag."
@@ -178,7 +178,7 @@ class CompactSettings(BaseModel):
             "Fraction of the model's context window that triggers "
             "auto-compact. Default 0.83 matches HKUDS upstream. "
             "Lower values compact more aggressively (saves PTL risk, "
-            "costs more L4 LLM calls). Override: "
+            "costs more summarization calls). Override: "
             "``OPENHARNESS_COMPACT__THRESHOLD_RATIO`` / "
             "``--compact-threshold`` CLI flag."
         ),
@@ -187,7 +187,7 @@ class CompactSettings(BaseModel):
         default=20_000,
         ge=1,
         description=(
-            "max_tokens for the L4 summarize LLM call. 20k matches "
+            "max_tokens for the semantic summarize LLM call. 20k matches "
             "HKUDS — the 9-slot summary fits comfortably."
         ),
     )
@@ -195,9 +195,9 @@ class CompactSettings(BaseModel):
         default=120.0,
         gt=0.0,
         description=(
-            "Timeout for the L4 summarize LLM call. Long conversations need "
+            "Timeout for the semantic summarize LLM call. Long conversations need "
             "a larger budget than short secondary passes. Above this, the "
-            "summarize() asyncio.wait_for raises TimeoutError and L4 "
+            "summarize() asyncio.wait_for raises TimeoutError and compact "
             "returns un-compacted (engine reactive PTL still catches)."
         ),
     )
@@ -794,14 +794,13 @@ class Settings(BaseSettings):
         ),
     )
 
-    # P11-T5 (decisions/26 D29.8): Phase 11 compact + extraction
-    # nested settings. Use the same double-underscore env convention
-    # as `memory`. Phase 4's `tool_result_cap` + `auto_truncate` are
-    # L1 microcompact knobs (independent of these L2-L4 knobs).
+    # Conversation compact settings use the same double-underscore env
+    # convention as `memory`. `tool_result_cap` + `auto_truncate` are ingress
+    # budget knobs and remain independent.
     compact: CompactSettings = Field(
         default_factory=CompactSettings,
         description=(
-            "Nested compact-pipeline tunables (D29.3 + D29.8). Env vars: "
+            "Nested Conversation compact tunables. Env vars: "
             "``OPENHARNESS_COMPACT__THRESHOLD_RATIO`` / "
             "``OPENHARNESS_COMPACT__ENABLED`` etc. See :class:`CompactSettings`."
         ),

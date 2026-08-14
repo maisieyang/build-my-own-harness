@@ -120,12 +120,20 @@ bulk that no longer earns its token cost.
 
 OpenHarness handles that lifecycle at several boundaries:
 
-- tool output is truncated head-and-tail, preserving both identifying context
-  and terminal summaries or errors;
-- prompt-too-long errors trigger bounded reactive recovery rather than losing
-  the turn;
-- explicit compaction combines a structured summary with an uncompacted recent
-  tail;
+- each Tool Result has an ingress budget; oversized output is truncated
+  head-and-tail, preserving both identifying context and terminal summaries or
+  errors;
+- when the Conversation crosses its threshold, an older successful `Read` or
+  `Grep` result may be omitted from the summarizer's private input only when
+  its marker is token-smaller. Preserved ToolUse arguments can query the
+  current source again, but cannot recreate exact historical output. User
+  messages, assistant conclusions, errors, other results, and the recent tail
+  are never rewritten by this cleanup;
+- semantic compaction always combines a structured summary of older history
+  with the original uncompacted recent tail. If summarization fails, the exact
+  original Conversation is retained;
+- prompt-too-long errors remain a bounded reactive fallback rather than the
+  primary context-management strategy;
 - project memory preserves durable cross-session facts separately from the raw
   transcript;
 - snapshots and session resume make recovery a persisted state transition
@@ -461,8 +469,13 @@ not limit the tool calls inside an Agent Loop.
 
 #### Maintain the conversation
 
-`/compact` compresses earlier conversation context while preserving the recent
-exchange. `/clear` clears the conversation and any active goal.
+`/compact` semantically summarizes earlier conversation context while preserving
+the original recent exchange. Before summarization, an old successful `Read` or
+`Grep` result may be replaced by an explicit marker only when that replacement
+actually saves tokens. Its ToolUse can query the current source again, not
+reconstruct exact historical output. User messages, assistant conclusions,
+errors, and recent messages are not rewritten. `/clear` clears the conversation
+and any active goal.
 
 #### Handle permission decisions
 

@@ -1,9 +1,8 @@
 """Services subsystem — stateful LLM-orchestration workflows.
 
-**Separated from :mod:`openharness.compaction`** (deterministic
-byte-level primitives: token counting, head/tail truncate,
-microcompact hook) by intent: ``compaction/`` shrinks bytes;
-``services/`` calls the LLM to "凝结认知" (condense cognition).
+**Separated from :mod:`openharness.compaction`** (per-result token counting and
+ingress truncation) by intent: ``compaction/`` budgets each new Tool Result;
+``services/`` semantically compacts accumulated Conversation history.
 
 Per ``decisions/26-phase-11-boundary.md`` D29.1: one shared
 :func:`summarize` primitive feeding downstream consumers — full
@@ -15,7 +14,7 @@ inline via Write + Edit tools per D36.10/D36.11.
 Public modules:
 
 - :mod:`.summarize` — shared LLM summarization primitive
-- :mod:`.compact` — deterministic collapse followed by LLM compaction
+- :mod:`.compact` — thresholding, summary-input preparation, and LLM compaction
 - :mod:`.snapshot` — full session snapshot writer + reader
 - :mod:`.focus_state` — Phase 13 secondary pass for task focus state
 """
@@ -30,7 +29,6 @@ from openharness.services.compact import (
     full_compact,
     get_context_window,
     threshold_tokens,
-    try_context_collapse,
 )
 from openharness.services.focus_state import (
     FOCUS_STATE_SYSTEM_PROMPT,
@@ -79,7 +77,6 @@ __all__ = [
     "load_snapshot",
     "summarize",
     "threshold_tokens",
-    "try_context_collapse",
     "update_permission_runtime_snapshot",
     "write_session_snapshot",
 ]

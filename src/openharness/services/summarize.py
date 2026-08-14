@@ -1,7 +1,7 @@
 """The :func:`summarize` primitive — P11-T1.
 
 Shared LLM-dispatch + retry + timeout machinery for the three Phase
-11 triggers (compact L4 / extract / `/compact` REPL). Per
+11 triggers (semantic compact / extract / `/compact` REPL). Per
 :doc:`decisions/26-phase-11-boundary` D29.2: this primitive owns
 **only** the LLM call. Callers construct their own ``system_prompt``
 and parse their own output (JSON for extract, ``<summary>`` tags for

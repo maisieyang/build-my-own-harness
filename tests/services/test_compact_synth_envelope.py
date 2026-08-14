@@ -22,8 +22,6 @@ Coverage:
   envelopes (synth path bypasses tool execution → no PostToolUse
   fires); but the hook's tokenizer also doesn't crash if it ever
   *did* encounter a synth_ id
-- L2 ``try_context_collapse`` — long synth tool_result body collapses
-  identically to a real tool_result body
 - L4 ``full_compact`` — older slice containing synth envelopes is
   passed to ``summarize()`` without filtering, summary splices into
   the canonical ``[boundary, summary, *recent]`` shape
@@ -50,7 +48,6 @@ from openharness.protocols.usage import UsageSnapshot
 from openharness.services.compact import (
     estimate_message_tokens,
     full_compact,
-    try_context_collapse,
 )
 from openharness.skills.model import Skill
 
@@ -170,40 +167,6 @@ class TestL0SynthTransparency:
         assert estimate_message_tokens(synth, model="qwen-plus") == estimate_message_tokens(
             real, model="qwen-plus"
         )
-
-
-# --------------------------------------------------------------------------- #
-# L2 — try_context_collapse                                                   #
-# --------------------------------------------------------------------------- #
-
-
-class TestL2SynthTransparency:
-    def test_long_synth_tool_result_body_collapses(self) -> None:
-        # L2 collapses > 2400-char ToolResultBlock content.
-        body = "Y" * 5_000
-        envelope = _synth_envelope(body)
-
-        new_messages, changed = try_context_collapse(envelope)
-
-        assert changed is True
-        # The synth tool_result is at index 1; its content should now
-        # carry the "[collapsed N chars]" marker.
-        collapsed_result = new_messages[1].content[0]
-        assert isinstance(collapsed_result, ToolResultBlock)
-        assert "[collapsed" in collapsed_result.content
-        # tool_use_id is preserved verbatim (so the message stream stays
-        # well-formed after collapse — same invariant as for real envelopes).
-        original_id = envelope[1].content[0].tool_use_id  # type: ignore[union-attr]
-        assert collapsed_result.tool_use_id == original_id
-
-    def test_short_synth_tool_result_passes_through_unchanged(self) -> None:
-        # Below threshold → no change.
-        envelope = _synth_envelope("short body")
-        new_messages, changed = try_context_collapse(envelope)
-
-        assert changed is False
-        # Returned messages structurally identical (Pydantic equality).
-        assert new_messages == envelope
 
 
 # --------------------------------------------------------------------------- #

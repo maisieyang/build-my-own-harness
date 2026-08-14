@@ -1,25 +1,21 @@
-"""Compact escalation pipeline.
+"""Conversation compaction.
 
-Per ``decisions/26-phase-11-boundary.md`` D29.3: 4-layer escalation
-that stacks on top of Phase 4's L1 microcompact + reactive PTL
-retry. Each layer fires **only if the prior layer didn't free
-enough tokens** to drop below the threshold.
+The runtime controls context growth in four distinct places:
 
-| Layer | Mechanism | LLM call? |
-|---|---|---|
-| L0 | Token estimation + threshold check | ❌ |
-| L1 | Microcompact (PostToolUse hook clears old tool_result) | ❌ (Phase 4) |
-| L2 | Context collapse (head/tail truncate long bodies) | ❌ |
-| L4 | Full compact (9-slot LLM summary) | ✅ |
+1. the PostToolUse hook budgets each new Tool Result at ingress;
+2. this module estimates the whole Conversation before each model request;
+3. once the threshold is crossed, older successful ``Read`` and ``Grep``
+   results may be replaced only when the private summarizer input gets smaller;
+   then the LLM summarizes older history and the original recent tail is
+   spliced back;
+4. the engine's Prompt Too Long retry remains the reactive fallback.
 
-The substrate is the :func:`openharness.services.summarize.summarize`
-primitive — only L4 calls it. L2 is a deterministic byte-level
-transform that "pre-pays" the cost of L4: if it frees enough space,
-the LLM call is skipped.
+User and assistant text is never deterministically folded. Cleanup is not a
+standalone compact outcome: if summarization fails, the caller gets the exact
+original Conversation back.
 
-The L4 prompt keeps the upstream 9-slot summary schema and adds an
-OpenHarness fidelity contract for structured evidence, provenance,
-opaque identifiers, error ordering, and current state.
+The summary prompt uses a 9-slot schema plus a fidelity contract for structured
+evidence, provenance, opaque identifiers, error ordering, and current state.
 """
 
 from __future__ import annotations
@@ -57,21 +53,21 @@ _TOKEN_PADDING = 4 / 3
 # :func:`estimate_message_tokens` ``image_token_estimate`` kwarg overrides.
 _IMAGE_TOKEN_ESTIMATE = 3_072
 
-# L2 context-collapse thresholds (HKUDS):
-# - Text bodies >= 2400 chars get head/tail truncated
-# - Head 900 + tail 500 chars + ``[collapsed N chars]`` marker
-_L2_LONG_TEXT_THRESHOLD = 2_400
-_L2_HEAD_CHARS = 900
-_L2_TAIL_CHARS = 500
-
 # Full compact splice: how many tail messages to preserve un-compacted.
 # Recent messages carry the most signal for the LLM's next move;
-# they survive both layers' splicing.
+# they survive the semantic splice byte-for-byte.
 _PRESERVE_RECENT = 12
 
 # Default context window when model unknown. 32k is a safe lower
 # bound — any modern Provider's flagship model exceeds this.
 _DEFAULT_CONTEXT_WINDOW = 32_000
+
+# These tools are read-only and can query the current source again from the
+# original ToolUse arguments. That does not make their exact historical output
+# recoverable after the source changes. Dynamic Web/MCP results, LoadSkill
+# provenance, Bash/Agent evidence, errors, and unknown tools are intentionally
+# excluded.
+_RERUNNABLE_TOOL_RESULTS = frozenset({"Read", "Grep"})
 
 # Known model context windows. Used by :func:`get_context_window`.
 # Includes prefix matching ("qwen-plus-latest" → uses "qwen-plus").
@@ -191,15 +187,14 @@ _SUMMARY_TAG_PATTERN = re.compile(r"<summary>(.*?)</summary>", re.DOTALL)
 class CompactResult:
     """Outcome of an :func:`auto_compact_if_needed` call.
 
-    ``compact_kind`` is the **highest level that actually fired**:
+    ``compact_kind`` is the transform that actually completed:
 
-    - ``"none"`` — L0 estimated under threshold; no transform applied
-    - ``"context_collapse"`` — L2 alone freed enough tokens
-    - ``"full"`` — L4 called the LLM for a 9-slot summary
+    - ``"none"`` — estimated under threshold or summarization failed
+    - ``"full"`` — the LLM produced a usable structured summary
 
-    ``applied_levels`` records EVERY level that ran (e.g., ``(0, 2, 4)``
-    means L0 estimated, L2 collapsed, then L4 summarized). Useful for
-    observability and debugging escalation behavior.
+    ``applied_levels`` remains a compact observability field: ``0`` is the
+    threshold estimate and ``4`` is semantic full compact. The retired global
+    block-collapse level is deliberately absent.
     """
 
     compact_kind: str
@@ -282,61 +277,67 @@ def estimate_message_tokens(
 
 
 # ---------------------------------------------------------------------------
-# L2 — Context collapse (deterministic byte-level)
+# Summary-input preparation
 # ---------------------------------------------------------------------------
 
 
-def try_context_collapse(
-    messages: list[ConversationMessage],
-) -> tuple[list[ConversationMessage], bool]:
-    """For each :class:`TextBlock` or :class:`ToolResultBlock` whose
-    body exceeds ``_L2_LONG_TEXT_THRESHOLD`` chars, replace with
-    head + ``[collapsed N chars]`` marker + tail.
+def _omit_old_rerunnable_tool_results(
+    older: list[ConversationMessage],
+    *,
+    model: str,
+) -> list[ConversationMessage]:
+    """Clear only old successful results whose marker is token-smaller.
 
-    Pure transformation — returns a new list, doesn't mutate caller's.
-
-    Returns ``(new_messages, any_changed)``. ``any_changed=False`` means
-    no body was long enough to collapse — L2 didn't help, escalate
-    to the structured LLM summary.
+    The returned messages are used solely as input to the summarizer. ToolUse
+    blocks and their arguments stay intact, so a later agent can query the
+    current source again. Exact historical output is not promised. Short
+    results stay verbatim when replacing them would fail to reclaim tokens.
+    Caller-owned messages are never mutated.
     """
-    any_changed = False
+    tool_names: dict[str, str] = {}
+    for message in older:
+        for block in message.content:
+            if isinstance(block, ToolUseBlock):
+                tool_names[block.id] = block.name
+
     new_messages: list[ConversationMessage] = []
-    for msg in messages:
+    for msg in older:
         new_content: list[TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock] = []
         for block in msg.content:
-            if isinstance(block, TextBlock) and len(block.text) > _L2_LONG_TEXT_THRESHOLD:
-                new_content.append(TextBlock(text=_collapse_string(block.text)))
-                any_changed = True
-            elif (
-                isinstance(block, ToolResultBlock) and len(block.content) > _L2_LONG_TEXT_THRESHOLD
+            tool_name = (
+                tool_names.get(block.tool_use_id) if isinstance(block, ToolResultBlock) else None
+            )
+            if (
+                isinstance(block, ToolResultBlock)
+                and not block.is_error
+                and tool_name in _RERUNNABLE_TOOL_RESULTS
             ):
-                new_content.append(
-                    ToolResultBlock(
-                        tool_use_id=block.tool_use_id,
-                        content=_collapse_string(block.content),
-                        is_error=block.is_error,
-                    )
+                assert tool_name is not None
+                original_tokens = count_tokens(block.content, model)
+                marker = (
+                    f"[older successful {tool_name} tool result omitted from summary input; "
+                    f"original output used {original_tokens} tokens; preserved ToolUse "
+                    "arguments can query the current source again but cannot guarantee the "
+                    "exact historical output]"
                 )
-                any_changed = True
+                if count_tokens(marker, model) < original_tokens:
+                    new_content.append(
+                        ToolResultBlock(
+                            tool_use_id=block.tool_use_id,
+                            content=marker,
+                            is_error=False,
+                        )
+                    )
+                else:
+                    new_content.append(block)
             else:
                 new_content.append(block)
         new_messages.append(ConversationMessage(role=msg.role, content=new_content))
-    return new_messages, any_changed
-
-
-def _collapse_string(text: str) -> str:
-    """Head + ``[collapsed N chars]`` marker + tail. Symmetric with
-    :func:`openharness.compaction.truncate.head_tail_truncate` but
-    char-based (not token-based) — L2 is a faster cheap pass; precise
-    token slicing isn't needed when we'll re-estimate after."""
-    omitted = len(text) - _L2_HEAD_CHARS - _L2_TAIL_CHARS
-    head = text[:_L2_HEAD_CHARS]
-    tail = text[-_L2_TAIL_CHARS:]
-    return f"{head}\n...[collapsed {omitted} chars]...\n{tail}"
+    return new_messages
 
 
 # ---------------------------------------------------------------------------
-# L4 — Full compact (LLM call via summarize primitive)
+# Full compact (LLM call via summarize primitive)
 # ---------------------------------------------------------------------------
 
 
@@ -350,8 +351,15 @@ async def full_compact(
     preserve_recent: int = _PRESERVE_RECENT,
     raise_on_failure: bool = False,
 ) -> tuple[list[ConversationMessage], bool]:
-    """L4: ``summarize()`` call with the 9-slot system prompt. Splice
+    """Call ``summarize()`` with the 9-slot system prompt. Splice
     via boundary marker + summary + preserved tail.
+
+    Only the older slice is prepared for summarization: successful ``Read``
+    and ``Grep`` result bodies may be omitted when the marker is token-smaller.
+    Their ToolUse arguments can query the current source again but cannot
+    recreate exact historical output. The recent slice is retained byte-for-
+    byte from the original input and is never sent through deterministic
+    cleanup.
 
     Returns ``(new_messages, did_apply)``. On any exception from
     :func:`summarize` (PTL exhausted retries, streaming all-fail,
@@ -367,8 +375,9 @@ async def full_compact(
 
     older = messages[:-preserve_recent]
     recent = messages[-preserve_recent:]
+    older_for_summary = _omit_old_rerunnable_tool_results(older, model=model)
     summarization_messages = [
-        *older,
+        *older_for_summary,
         ConversationMessage(
             role="user",
             content=[TextBlock(text=_L4_COMPACT_REQUEST)],
@@ -424,7 +433,7 @@ def _extract_summary(raw: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Orchestrator — L0 → L2 → L4 escalation
+# Orchestrator — threshold → full compact
 # ---------------------------------------------------------------------------
 
 
@@ -438,18 +447,21 @@ async def auto_compact_if_needed(
     full_compact_max_tokens: int = 20_000,
     full_compact_timeout_s: float = 120.0,
 ) -> tuple[list[ConversationMessage], CompactResult]:
-    """Run the L0-L4 escalation. Returns ``(possibly-compacted-messages,
+    """Estimate the Conversation and run semantic compact above threshold.
+
+    Returns ``(possibly-compacted-messages,
     CompactResult)``.
 
-    L1 (microcompact) is NOT in this pipeline — Phase 4's PostToolUse
-    hook handles it before each turn. This function picks up at L0
-    (estimate) and escalates through L2 / L4.
+    Per-result ingress budgeting is not in this function; the PostToolUse hook
+    applies it as results arrive. Above the Conversation threshold this
+    function always attempts full semantic compact. It never returns a global
+    deterministic block-collapse as the next model Working Set.
 
     ``enabled=False`` short-circuits everything (returns
     ``CompactResult.no_op``). Same for the under-threshold path —
     no work done when not needed.
 
-    On L4 failure (LLM exhausted retries), returns the messages
+    On summarization failure (LLM exhausted retries), returns the messages
     unchanged with ``compact_kind="none"``. The engine's reactive
     PTL retry remains as last-resort safety net.
     """
@@ -462,43 +474,26 @@ async def auto_compact_if_needed(
     if original_tokens < threshold:
         return messages, CompactResult.no_op(original_tokens)
 
-    levels_applied: list[int] = [0]  # L0 always runs
-
-    # --- L2 ---
-    messages_after_l2, l2_changed = try_context_collapse(messages)
-    if l2_changed:
-        levels_applied.append(2)
-        tokens_after_l2 = estimate_message_tokens(messages_after_l2, model=model)
-        if tokens_after_l2 < threshold:
-            return messages_after_l2, CompactResult(
-                compact_kind="context_collapse",
-                applied_levels=tuple(levels_applied),
-                original_tokens=original_tokens,
-                final_tokens=tokens_after_l2,
-            )
-        messages = messages_after_l2  # carry forward into L4
-
-    # --- L4 (LLM) ---
-    messages_after_l4, l4_changed = await full_compact(
+    levels_applied: list[int] = [0]
+    compacted_messages, did_compact = await full_compact(
         messages,
         model=model,
         api_client=api_client,
         max_tokens=full_compact_max_tokens,
         timeout_seconds=full_compact_timeout_s,
     )
-    if l4_changed:
+    if did_compact:
         levels_applied.append(4)
-        tokens_after_l4 = estimate_message_tokens(messages_after_l4, model=model)
-        return messages_after_l4, CompactResult(
+        final_tokens = estimate_message_tokens(compacted_messages, model=model)
+        return compacted_messages, CompactResult(
             compact_kind="full",
             applied_levels=tuple(levels_applied),
             original_tokens=original_tokens,
-            final_tokens=tokens_after_l4,
+            final_tokens=final_tokens,
         )
 
-    # All applicable layers tried, nothing freed enough — surrender
-    # gracefully. The engine's reactive PTL retry will catch the
-    # eventual provider error if any.
+    # Semantic compact did not produce a usable summary. Preserve the original
+    # Conversation; the engine's reactive PTL retry remains the final fallback.
     return messages, CompactResult(
         compact_kind="none",
         applied_levels=tuple(levels_applied),
