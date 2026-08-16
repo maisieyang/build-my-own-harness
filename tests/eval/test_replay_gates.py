@@ -18,7 +18,7 @@ Bar 出处(各 dataset_card ratified 值):
 - tool_choice     12/12(全稳定绿)
 - skill_trigger   ≥7/9 且 7 稳定绿必须全绿(v2 措辞,ratchet 后)
 - error_feedback  ≥9/11 且 9 稳定绿必须全绿
-- memory_compact  10/10(历史 qwen-max 3 条 + 当前 qwen3.7-max 7 条)
+- memory_compact  9/9(历史 qwen-max 3 条 + 当前 qwen3.7-max 6 条,MC10 待重新 ratify)
 - verify_judge    15/15(判官与金标一致 + 抗注入 + typed WebSearch 证据,B3 / D45.2)
 - memory_read     6/6(must-read 契约 + restraint,C4 / 面 #4)
 - permission_review 6/6(exact verdict + reviewer lifecycle,G1 / D52)
@@ -74,7 +74,6 @@ _MEMORY_COMPACT_CURRENT_CASES = {
     "MC7-current-state-supersedes-stale",
     "MC8-slash-skill-provenance",
     "MC9-latest-error-ordering",
-    "MC10-refetchable-result-cleanup",
 }
 
 pytestmark = pytest.mark.eval
@@ -171,10 +170,11 @@ class TestReplayGates:
                 )
         passing = _passing_ids(results)
         # B2 trustworthy baseline is model-cohorted: the three historical
-        # cases retain their qwen-max identity; seven newly ratified cases use
-        # the current qwen3.7-max reference policy.
-        assert len(passing) == len(results) == 10, (
-            f"memory_compact bar 10/10 broken: failing={sorted({r.sample.case_id for r in results} - passing)}"
+        # cases retain their qwen-max identity; six newly ratified cases use
+        # the current qwen3.7-max reference policy. MC10 is excluded until its
+        # new generic-cleanup fixture completes live → record → replay.
+        assert len(passing) == len(results) == 9, (
+            f"memory_compact bar 9/9 broken: failing={sorted({r.sample.case_id for r in results} - passing)}"
         )
 
     async def test_verify_judge_replay_holds_bar(self) -> None:

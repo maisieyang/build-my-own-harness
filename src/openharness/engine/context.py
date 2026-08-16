@@ -119,16 +119,19 @@ class QueryContext:
     enforced_boundary: EnforcedBoundary | None = None
     permission_runtime: PermissionRuntime | None = None
     # Proactive semantic Conversation compact knobs.
-    # Engine calls ``auto_compact_if_needed`` BEFORE each LLM request
-    # (in front of PreApiCall hooks) when ``compact_enabled=True``.
+    # Engine budgets the complete draft request and calls
+    # ``auto_compact_if_needed`` BEFORE each LLM request (in front of
+    # PreApiCall hooks) when ``compact_enabled=True``.
     # All defaults match the boundary doc D29.8 — pre-Phase-11 callers
     # using the no-kwarg constructor get the same auto-compact
-    # threshold (~26.5k tokens for qwen-plus) without explicit opt-in.
-    # Above the threshold, older refetchable Tool Results may be cleared only
-    # in the summarizer input; full semantic compact always runs and splices
-    # back the original recent tail. Reactive PTL remains the final safety net.
+    # threshold without explicit opt-in. Output tokens are reserved before
+    # applying this ratio; system instructions and Tool schemas are counted.
+    # Above the threshold, old completed Tool Results are cleared with
+    # independent message/tool recency protections. Semantic compact runs only
+    # if cleanup is insufficient and splices back the original recent tail.
     compact_enabled: bool = True
     compact_threshold_ratio: float = 0.83
+    compact_preserve_recent_messages: int = 12
     compact_full_max_tokens: int = 20_000
     compact_full_timeout_s: float = 120.0
     memory_store: Any = None  # FilesystemMemoryStore | None — Any avoids
@@ -191,6 +194,7 @@ class QueryContext:
         llm_focus_state_model: str | None = None,
         compact_enabled: bool = True,
         compact_threshold_ratio: float = 0.83,
+        compact_preserve_recent_messages: int = 12,
         compact_full_max_tokens: int = 20_000,
         compact_full_timeout_s: float = 120.0,
         max_turns: int | None = None,
@@ -288,6 +292,7 @@ class QueryContext:
             permission_runtime=restored_permission_runtime,
             compact_enabled=compact_enabled,
             compact_threshold_ratio=compact_threshold_ratio,
+            compact_preserve_recent_messages=compact_preserve_recent_messages,
             compact_full_max_tokens=compact_full_max_tokens,
             compact_full_timeout_s=compact_full_timeout_s,
             memory_store=memory_store,

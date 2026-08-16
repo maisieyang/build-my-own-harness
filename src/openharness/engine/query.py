@@ -39,7 +39,6 @@ from openharness.engine.messages import (
     append_assistant_message,
     append_tool_results,
     collect_turn_metadata,
-    drop_oldest_tool_pair,
     extract_tool_uses,
 )
 from openharness.errors import LoopError, ToolError
@@ -86,7 +85,13 @@ from openharness.protocols import (
     ToolResultBlock,
     ToolUseBlock,
 )
-from openharness.services.compact import auto_compact_if_needed
+from openharness.services.compact import (
+    auto_compact_if_needed,
+    compact_for_request_budget,
+    estimate_message_tokens,
+    estimate_request_input_tokens,
+    request_input_token_budget,
+)
 from openharness.tools.base import (
     BaseTool,
     ExecutionDomain,
@@ -107,13 +112,6 @@ if TYPE_CHECKING:
 
 
 logger = get_logger("engine")
-
-
-# P4-T3.3c (D14.5):reactive prompt-too-long truncation is bounded.
-# After this many drop-and-retry cycles within one turn, surface the
-# underlying ``PromptTooLongFailure`` to the caller — at that point the
-# prompt is structurally too large for any one-shot recovery.
-_REACTIVE_TRUNCATE_MAX = 3
 
 
 @dataclass(frozen=True)
@@ -494,21 +492,39 @@ async def run_query(
                     # Continue this loop iteration with the ordinary model
                     # request that consumes the newly attached Tool Results.
 
-                # Proactive semantic compact runs BEFORE PreApiCall hooks so
-                # hooks see the condensed Working Set. Older successful Read
-                # and Grep results may be cleared in the summarizer's private
-                # input; user/assistant text and the original recent tail are
-                # never deterministically rewritten. Reactive PTL retry below
-                # remains the last-resort safety net.
+                # Compile against the complete draft request, not Conversation
+                # alone. System/project instructions and Tool/MCP schemas also
+                # consume input capacity; max_tokens reserves the output side
+                # of the shared model context window.
                 if context.compact_enabled:
+                    draft_request = ApiMessageRequest(
+                        model=context.model,
+                        max_tokens=context.max_tokens,
+                        system=context.system_prompt or None,
+                        messages=messages,
+                        tools=context.tool_registry.to_api_schema() or None,
+                    )
+                    input_budget = request_input_token_budget(
+                        draft_request.model,
+                        max_output_tokens=draft_request.max_tokens,
+                        threshold_ratio=context.compact_threshold_ratio,
+                    )
+                    request_overhead_tokens = max(
+                        0,
+                        estimate_request_input_tokens(draft_request)
+                        - estimate_message_tokens(messages, model=draft_request.model),
+                    )
                     messages, compact_result = await auto_compact_if_needed(
                         messages,
                         model=context.model,
                         api_client=context.api_client,
                         enabled=True,
                         threshold_ratio=context.compact_threshold_ratio,
+                        preserve_recent_messages=context.compact_preserve_recent_messages,
                         full_compact_max_tokens=context.compact_full_max_tokens,
                         full_compact_timeout_s=context.compact_full_timeout_s,
+                        input_token_budget=input_budget,
+                        request_overhead_tokens=request_overhead_tokens,
                     )
                     if compact_result.compact_kind != "none":
                         logger.info(
@@ -547,13 +563,11 @@ async def run_query(
                     ):
                         request = pre_api_result.new_request
 
-                # P4-T3.3c:reactive truncation loop. On PromptTooLongFailure,
-                # drop the oldest tool_use/tool_result pair from ``messages``,
-                # rebuild ``request``, retry — bounded by ``_REACTIVE_TRUNCATE_MAX``.
-                # Other api errors (auth / 5xx / generic 400 / etc.) propagate
-                # immediately via the outer except.
+                # A provider PTL is deterministic evidence that the compiled
+                # request did not fit. Permit exactly one semantic recompile;
+                # never delete raw Conversation messages in a retry loop.
                 complete_event: ApiMessageCompleteEvent | None = None
-                truncate_attempts = 0
+                recompile_attempted = False
                 while True:
                     try:
                         complete_event = None
@@ -563,31 +577,61 @@ async def run_query(
                                 complete_event = event
                         break  # success — exit retry loop
                     except PromptTooLongFailure as ptl_exc:
-                        new_messages = drop_oldest_tool_pair(messages)
-                        # Two stop conditions:bounded retries OR nothing to drop.
-                        if truncate_attempts >= _REACTIVE_TRUNCATE_MAX or len(new_messages) == len(
-                            messages
-                        ):
+                        request_tokens = estimate_request_input_tokens(request)
+                        input_budget = request_input_token_budget(
+                            request.model,
+                            max_output_tokens=request.max_tokens,
+                            threshold_ratio=context.compact_threshold_ratio,
+                        )
+                        if recompile_attempted or not context.compact_enabled:
+                            logger.error(
+                                "prompt_too_long_unrecoverable",
+                                turn=_turn + 1,
+                                request_tokens=request_tokens,
+                                input_budget=input_budget,
+                                recompile_attempted=recompile_attempted,
+                                compact_enabled=context.compact_enabled,
+                            )
                             await execute_hook_chain(
                                 context.hook_registry,
                                 "OnError",
                                 OnErrorContext(exception=ptl_exc, where="api"),
                             )
                             raise
-                        truncate_attempts += 1
-                        # 10th log event in the observability inventory.
-                        # WARNING because compaction firing means we're at
-                        # a budget edge — useful default-level signal.
-                        logger.warning(
-                            "reactive_truncate",
-                            turn=_turn + 1,
-                            attempt=truncate_attempts,
-                            dropped_count=len(messages) - len(new_messages),
+
+                        recompile_attempted = True
+                        message_tokens = estimate_message_tokens(
+                            request.messages, model=request.model
                         )
+                        request_overhead_tokens = max(0, request_tokens - message_tokens)
+                        new_messages, did_recompile = await compact_for_request_budget(
+                            messages,
+                            model=request.model,
+                            api_client=context.api_client,
+                            input_token_budget=input_budget,
+                            request_overhead_tokens=request_overhead_tokens,
+                            preserve_recent_messages=context.compact_preserve_recent_messages,
+                            full_compact_max_tokens=context.compact_full_max_tokens,
+                            full_compact_timeout_s=context.compact_full_timeout_s,
+                        )
+                        if not did_recompile:
+                            logger.error(
+                                "prompt_too_long_unrecoverable",
+                                turn=_turn + 1,
+                                request_tokens=request_tokens,
+                                input_budget=input_budget,
+                                recompile_attempted=True,
+                                compact_enabled=True,
+                                reason="semantic_recompile_unavailable",
+                            )
+                            await execute_hook_chain(
+                                context.hook_registry,
+                                "OnError",
+                                OnErrorContext(exception=ptl_exc, where="api"),
+                            )
+                            raise
+
                         messages = new_messages
-                        # Rebuild request with the truncated messages list.
-                        # Other request fields (system / tools / max_tokens)
-                        # don't change between truncation retries.
                         request = ApiMessageRequest(
                             model=context.model,
                             max_tokens=context.max_tokens,
@@ -595,16 +639,8 @@ async def run_query(
                             messages=messages,
                             tools=context.tool_registry.to_api_schema() or None,
                         )
-                        # P11-T6 (D29.7): re-fire PreApiCall hooks flagged
-                        # ``re_run_on_reactive_rebuild=True``. Closes
-                        # Phase 4 retro §6 — memory-injection hooks (and
-                        # any other PreApiCall hook whose effect must
-                        # survive the rebuild) opt in via the flag and
-                        # see the freshly-truncated request. Hooks not
-                        # flagged are NOT re-run (default behaviour
-                        # preserved). PostToolUse / PreToolUse never
-                        # re-run here — the only event that gets a
-                        # second-chance after PTL is PreApiCall.
+                        # Hooks that opted into rebuild semantics re-apply
+                        # their dynamic input to the newly compiled request.
                         rerun_hooks = context.hook_registry.get_reactive_rerun("PreApiCall")
                         if rerun_hooks:
                             rerun_result = await execute_hook_chain(
@@ -625,6 +661,14 @@ async def run_query(
                                     and isinstance(rerun_result.new_request, ApiMessageRequest)
                                 ):
                                     request = rerun_result.new_request
+                        logger.warning(
+                            "prompt_too_long_recompile",
+                            turn=_turn + 1,
+                            attempt=1,
+                            original_request_tokens=request_tokens,
+                            rebuilt_request_tokens=estimate_request_input_tokens(request),
+                            input_budget=input_budget,
+                        )
                     except OpenHarnessApiError as exc:
                         await execute_hook_chain(
                             context.hook_registry,

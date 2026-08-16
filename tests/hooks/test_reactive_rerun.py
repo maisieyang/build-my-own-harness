@@ -1,13 +1,12 @@
-"""Tests for P11-T6 (D29.7) — PreApiCall reactive re-run.
+"""PreApiCall hook replay after one-shot PTL semantic recompilation.
 
 Closes Phase 4 retro §6: PreApiCall hooks flagged
 ``re_run_on_reactive_rebuild=True`` re-fire after the engine's PTL
-retry rebuilds the request, so injected content (memory etc.)
-survives the truncation.
+rebuilds the request, so opted-in dynamic context survives recompilation.
 
 Contract surfaces:
 
-1. Flagged hook fires exactly TWICE on a PTL-retry turn: once before
+1. Flagged hook fires exactly TWICE on a PTL-recompile turn: once before
    the original request, once after rebuild.
 2. Unflagged hook fires exactly ONCE (engine does NOT re-fire it).
 3. Multiple flagged hooks all re-run in registration order.
@@ -94,8 +93,23 @@ def _ctx(client: object, hook_registry: HookRegistry) -> QueryContext:
         cwd=Path("/tmp"),
         model="qwen-plus",
         max_tokens=64,
-        compact_enabled=False,
+        compact_enabled=True,
     )
+
+
+@pytest.fixture(autouse=True)
+def _semantic_recompiler(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep these tests focused on hook replay, not Summary model output."""
+
+    async def _compact(
+        messages: list[ConversationMessage], **_kwargs: object
+    ) -> tuple[list[ConversationMessage], bool]:
+        return [
+            ConversationMessage(role="user", content=[TextBlock(text="summary")]),
+            messages[-1],
+        ], True
+
+    monkeypatch.setattr("openharness.engine.query.compact_for_request_budget", _compact)
 
 
 class TestFlaggedHookRerunsOnPtlRebuild:
@@ -115,9 +129,8 @@ class TestFlaggedHookRerunsOnPtlRebuild:
         async for _ev in run_query(_messages_with_pair(), ctx):
             pass
 
-        # Original call: 3 messages. After PTL drop-oldest-pair rebuild:
-        # 1 message. So invocations should be [3, 1].
-        assert invocations == [3, 1]
+        # Original call: 3 messages. Semantic rebuild: Summary + recent tail.
+        assert invocations == [3, 2]
         assert stub.calls == 2
 
 
@@ -266,7 +279,7 @@ class TestExecuteHookChainSubset:
 
 
 class TestReactiveRerunHookSemantics:
-    """Verify the engine's reactive PTL rerun honors deny / modify
+    """Verify the engine's PTL semantic rebuild honors deny / modify
     semantics from the flagged subset."""
 
     @pytest.mark.asyncio

@@ -66,7 +66,7 @@ async def execute_hook_chain(
 
     ``hook_subset`` (P11-T6 D29.7): when provided, only the supplied
     hooks run instead of the full ``registry.get(event)`` chain. Used
-    by the engine's reactive PTL re-run path to fire only PreApiCall
+    by the engine's one-shot PTL recompile path to fire only PreApiCall
     hooks flagged with ``re_run_on_reactive_rebuild``. The subset is
     treated AS IF it were the full chain — OnError dispatch, deny /
     modify accumulation rules all apply identically.

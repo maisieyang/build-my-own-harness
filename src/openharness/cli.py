@@ -1055,6 +1055,7 @@ async def _run_ask(
             # Compact and project-memory wiring.
             compact_enabled=compact_enabled,
             compact_threshold_ratio=compact_threshold_ratio,
+            compact_preserve_recent_messages=settings.compact.preserve_recent_messages,
             compact_full_max_tokens=settings.compact.full_compact_max_tokens,
             compact_full_timeout_s=settings.compact.full_compact_timeout_s,
             memory_store=memory_store,
@@ -1114,6 +1115,7 @@ async def _run_ask(
                     llm_focus_state_model=context.llm_focus_state_model,
                     compact_enabled=compact_enabled,
                     compact_threshold_ratio=compact_threshold_ratio,
+                    compact_preserve_recent_messages=(settings.compact.preserve_recent_messages),
                     compact_full_max_tokens=settings.compact.full_compact_max_tokens,
                     compact_full_timeout_s=settings.compact.full_compact_timeout_s,
                     max_turns=context.max_turns,
@@ -2265,6 +2267,7 @@ async def _run_chat(
                 # take effect on the next turn.
                 compact_enabled=compact_enabled,
                 compact_threshold_ratio=compact_threshold_ratio,
+                compact_preserve_recent_messages=settings.compact.preserve_recent_messages,
                 compact_full_max_tokens=settings.compact.full_compact_max_tokens,
                 compact_full_timeout_s=settings.compact.full_compact_timeout_s,
                 memory_store=memory_store,
@@ -2725,8 +2728,8 @@ def _run_headless_command(
         hidden=True,
         help=(
             "Disable Layer 1 truncation hook registration. Raw tool outputs "
-            "flow through unchanged;Layer 2 reactive (prompt-too-long retry) "
-            "remains active."
+            "flow through unchanged. Whole-request compaction and one-shot "
+            "Prompt Too Long semantic recompilation remain active."
         ),
     ),
     no_skills: bool = typer.Option(
@@ -2866,9 +2869,9 @@ def _run_headless_command(
         min=0.0,
         max=1.0,
         help=(
-            "Auto-compact threshold as a fraction of the model's context "
-            "window. Above this ratio, auto-compact summarizes older history "
-            "and preserves the original recent tail. Overrides "
+            "Safety ratio for the full request input budget after output "
+            "tokens are reserved. The estimate includes system instructions, "
+            "Tool schemas, and Conversation. Overrides "
             "OPENHARNESS_COMPACT__THRESHOLD_RATIO (default 0.83)."
         ),
     ),
@@ -2877,9 +2880,8 @@ def _run_headless_command(
         "--no-auto-compact",
         hidden=True,
         help=(
-            "Disable proactive semantic auto-compact. The engine's "
-            "reactive prompt-too-long retry remains active as the last-"
-            "resort safety net. Useful for tests that need byte-stable "
+            "Disable semantic auto-compact and one-shot Prompt Too Long "
+            "request recompilation. Useful for tests that need byte-stable "
             "request shape or when summarization cost is unwanted."
         ),
     ),
@@ -3165,13 +3167,16 @@ def chat(
         hidden=True,
         min=0.0,
         max=1.0,
-        help="Auto-compact threshold (Phase 11). Overrides OPENHARNESS_COMPACT__THRESHOLD_RATIO.",
+        help=(
+            "Full-request input safety ratio after output reservation. "
+            "Overrides OPENHARNESS_COMPACT__THRESHOLD_RATIO."
+        ),
     ),
     no_auto_compact: bool = typer.Option(
         False,
         "--no-auto-compact",
         hidden=True,
-        help="Disable proactive auto-compact (Phase 11). Reactive PTL retry still active.",
+        help="Disable semantic auto-compact and Prompt Too Long request recompilation.",
     ),
     resume: bool = typer.Option(
         False,

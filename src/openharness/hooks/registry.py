@@ -45,7 +45,7 @@ class HookRegistry:
         # the executor will get an empty list for unseen events via get().
         self._hooks: dict[HookEvent, list[Hook]] = defaultdict(list)
         # P11-T6 (D29.7): parallel set of PreApiCall hooks flagged to
-        # re-run after a reactive PTL rebuild. ``id()``-keyed so closures
+        # re-run after a one-shot PTL semantic rebuild. ``id()``-keyed so closures
         # / bound methods that don't hash identically by value still
         # match. Membership is checked from :func:`get_reactive_rerun`.
         self._reactive_rerun_hook_ids: set[int] = set()
@@ -64,7 +64,7 @@ class HookRegistry:
 
         ``re_run_on_reactive_rebuild`` (P11-T6 D29.7): if True AND
         ``event == "PreApiCall"``, the hook is re-fired after the
-        engine's reactive PTL retry rebuilds the request — so
+        engine's PTL recovery semantically recompiles the request — so
         injected content (memory, dynamic system prompt segments)
         survives the rebuild. No-op for non-PreApiCall events; the
         engine's reactive loop only re-runs PreApiCall hooks.
@@ -87,7 +87,7 @@ class HookRegistry:
         rebuild re-run (P11-T6 D29.7).
 
         Always returns ``[]`` when ``event != "PreApiCall"`` — the
-        engine only invokes this for the PTL retry path. Preserves
+        engine only invokes this for the PTL recompile path. Preserves
         registration order from the underlying ``_hooks[event]`` list.
         """
         if event != "PreApiCall" or not self._reactive_rerun_hook_ids:

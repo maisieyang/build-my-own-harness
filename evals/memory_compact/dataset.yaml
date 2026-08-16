@@ -856,8 +856,8 @@ samples:
   - ERROR_ORDER=READ_OFFSET_OUT_OF_RANGE_THEN_PROBE_ERROR_EXPECTED_CONTEXT_FAILURE
   notes: 来自 DPG-010/011；摘要必须保留错误时间顺序，不能把较早 Read error 当作最后错误
 - case_id: MC10-refetchable-result-cleanup
-  capability: recoverable-tool-result-cleanup-fidelity
-  status: ratified
+  capability: generic-tool-result-cleanup-fidelity
+  status: candidate
   messages:
   - {role: user, content: [{type: text, text: "检查旧 Read 结果清理后的摘要连续性"}]}
   - role: assistant
@@ -882,7 +882,25 @@ samples:
         pricing-boundary-case-028 pricing-boundary-case-029 pricing-boundary-case-030
   - {role: assistant, content: [{type: text, text: "VERIFIED_RESULT=PRICING_TESTS_6_PASSED"}]}
   - {role: user, content: [{type: text, text: "USER_CONSTRAINT=DO_NOT_EDIT_PRODUCTION_CODE"}]}
-  - {role: assistant, content: [{type: text, text: "CURRENT_STATE=READY_FOR_COMPACT"}]}
+  - role: assistant
+    content:
+    - {type: text, text: "CURRENT_STATE=READY_FOR_COMPACT"}
+    - {type: tool_use, id: recent_bash_probe, name: Bash, input: {command: "uv run pytest -q"}}
+  - role: user
+    content:
+    - {type: tool_result, tool_use_id: recent_bash_probe, content: "6 passed", is_error: false}
+  - role: assistant
+    content:
+    - {type: tool_use, id: recent_mcp_probe, name: mcp__warehouse__query, input: {query: "pricing status"}}
+  - role: user
+    content:
+    - {type: tool_result, tool_use_id: recent_mcp_probe, content: "status=ready", is_error: false}
+  - role: assistant
+    content:
+    - {type: tool_use, id: recent_agent_probe, name: Agent, input: {task: "verify pricing facts"}}
+  - role: user
+    content:
+    - {type: tool_result, tool_use_id: recent_agent_probe, content: "verification complete", is_error: false}
   - {role: user, content: [{type: text, text: "填充消息 6"}]}
   - {role: assistant, content: [{type: text, text: "填充回复 7"}]}
   - {role: user, content: [{type: text, text: "填充消息 8"}]}
@@ -911,4 +929,4 @@ samples:
   - CURRENT_STATE=READY_FOR_COMPACT
   must_not_recall:
   - RAW_READ_BODY_SHOULD_BE_CLEARED
-  notes: 验证旧成功且清理后确实节省 token 的 Read 正文被省略后，后续已验证结论、用户约束和当前状态仍进入 Summary。
+  notes: 验证工具无关清理会清除第 4 新的旧 Read Result，同时保护最近 3 次 Bash/MCP/Agent 交互；后续已验证结论、用户约束和当前状态仍进入 Summary。

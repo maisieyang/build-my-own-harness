@@ -95,6 +95,7 @@ def _build_context(
     *,
     compact_enabled: bool = True,
     threshold_ratio: float = 0.83,
+    preserve_recent_messages: int = 12,
 ) -> QueryContext:
     return QueryContext(
         api_client=client,  # type: ignore[arg-type]
@@ -107,6 +108,7 @@ def _build_context(
         max_turns=3,
         compact_enabled=compact_enabled,
         compact_threshold_ratio=threshold_ratio,
+        compact_preserve_recent_messages=preserve_recent_messages,
     )
 
 
@@ -168,6 +170,46 @@ class TestCompactEngineIntegration:
         main_request = client.requests[-1]
         assert len(main_request.messages) < 200
         assert len(main_request.messages) == 14
+
+    @pytest.mark.asyncio
+    async def test_configured_recent_message_window_reaches_compactor(self) -> None:
+        client = _SummarizingStubClient()
+        context = _build_context(
+            client,
+            compact_enabled=True,
+            preserve_recent_messages=5,
+        )
+        messages = [_user_text("x" * 1_000) for _ in range(200)]
+
+        async for _event in run_query(messages, context):
+            pass
+
+        # Boundary + Summary + configured five-message original tail.
+        assert len(client.requests[-1].messages) == 7
+
+    @pytest.mark.asyncio
+    async def test_system_and_tool_schema_overhead_participate_in_budget(self) -> None:
+        client = _SummarizingStubClient()
+        context = QueryContext(
+            api_client=client,  # type: ignore[arg-type]
+            tool_registry=create_default_tool_registry(),
+            hook_registry=HookRegistry(),
+            system_prompt="SYSTEM=" + "x" * 30_000,
+            cwd=__import__("pathlib").Path("/tmp"),
+            model="qwen-turbo",
+            max_tokens=512,
+            max_turns=1,
+            compact_enabled=True,
+        )
+        messages = [_user_text(f"short-{index}") for index in range(13)]
+
+        async for _event in run_query(messages, context):
+            pass
+
+        # Conversation alone is tiny. The complete draft request exceeds the
+        # safe input budget because system + Tool schemas are also counted.
+        assert len(client.requests) == 2
+        assert client.requests[0].tools == []  # Summary call disables Tools
 
     @pytest.mark.asyncio
     async def test_engine_default_compact_enabled_matches_dataclass_default(self) -> None:

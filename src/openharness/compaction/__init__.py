@@ -1,26 +1,13 @@
-"""Compaction subsystem — P4 (context management).
+"""Deterministic Tool Result ingress budgeting.
 
-Two-layer defense per ``decisions/10-phase-4-boundary.md``:
-
-- **Layer 1** (proactive, per-tool-result):
-  :class:`TruncateToolResultHook` cuts oversized ``tool_result`` outputs
-  head+tail with a middle marker. PostToolUse hook (P4-T2, not yet).
-- **Layer 2** (reactive, per-prompt-too-long error):
-  ``engine/query.py`` catches :class:`PromptTooLongFailure`, drops the
-  oldest ``tool_use``/``tool_result`` pair from messages, retries up to
-  3 times per turn (P4-T3, not yet).
-
-Sub-units land incrementally:
-
-- 1a (this commit):``count_tokens`` — tiktoken with byte-ratio fallback
-- 2 (next):``head_tail_truncate`` + ``TruncateToolResultHook``
-- 3:``PromptTooLongFailure`` + engine reactive handling
-- 4:CLI / Settings + end-to-end smoke
-- 5:coverage + retro
+This package limits each new Tool Result with head/tail truncation and an
+explicit loss marker. Whole-request budgeting, old-result clearing, semantic
+Summary, and the one-shot Prompt Too Long recompilation live in
+``openharness.services.compact`` and ``openharness.engine.query``.
 
 Public API:
 
-    from openharness.compaction import count_tokens
+    from openharness.compaction import count_tokens, head_tail_truncate
 """
 
 from __future__ import annotations

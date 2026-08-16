@@ -22,7 +22,7 @@ from openharness.eval.memory_compact_scorers import (
     FactRecallScorer,
     NoiseExclusionScorer,
 )
-from openharness.protocols.content import TextBlock, ToolResultBlock
+from openharness.protocols.content import TextBlock, ToolResultBlock, ToolUseBlock
 from openharness.protocols.messages import ConversationMessage
 from openharness.protocols.stream_events import ApiMessageCompleteEvent, ApiTextDeltaEvent
 from openharness.protocols.usage import UsageSnapshot
@@ -169,18 +169,29 @@ class TestLoadDataset:
         for case_id in dogfood_cases:
             assert len(samples[case_id].must_recall) >= 3
             assert len(samples[case_id].messages) > 12
-        assert all(sample.status == "ratified" for sample in samples.values())
+        assert all(
+            sample.status == "ratified"
+            for case_id, sample in samples.items()
+            if case_id != "MC10-refetchable-result-cleanup"
+        )
 
     def test_refetchable_result_cleanup_case_is_well_formed(self) -> None:
         samples = {sample.case_id: sample for sample in load_memory_compact_dataset(DATASET)}
         sample = samples["MC10-refetchable-result-cleanup"]
 
-        assert sample.status == "ratified"
+        assert sample.status == "candidate"
         assert "RAW_READ_BODY_SHOULD_BE_CLEARED" in sample.must_not_recall
         assert sample.messages[-12:][0].content[0].text == "填充消息 16"  # type: ignore[union-attr]
         old_read_result = sample.messages[2].content[0]
         assert isinstance(old_read_result, ToolResultBlock)
         assert len(old_read_result.content) > 500
+        tool_names = [
+            block.name
+            for message in sample.messages
+            for block in message.content
+            if isinstance(block, ToolUseBlock)
+        ]
+        assert tool_names == ["Read", "Bash", "mcp__warehouse__query", "Agent"]
 
 
 class TestRunEval:

@@ -57,6 +57,11 @@ class TestQueryContext:
     ) -> None:
         assert context.compact_full_timeout_s == 120.0
 
+    def test_compact_preserves_twelve_recent_messages_by_default(
+        self, context: QueryContext
+    ) -> None:
+        assert context.compact_preserve_recent_messages == 12
+
     def test_max_turns_override_accepted(self) -> None:
         ctx = QueryContext(
             api_client=_stub_client(),

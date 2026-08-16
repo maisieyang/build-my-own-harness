@@ -3,7 +3,7 @@
 4 surfaces:
 
 1. token estimation + threshold computation
-2. summary preparation clears only old, recoverable tool results
+2. summary preparation clears old tool results with independent recency boundaries
 3. full_compact (summarize call + 9-slot prompt + parse)
 4. ``auto_compact_if_needed`` orchestration
 """
@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from openharness.api.errors import RequestFailure
-from openharness.protocols import ConversationMessage, TextBlock
+from openharness.protocols import ApiMessageRequest, ConversationMessage, TextBlock, ToolSpec
 from openharness.protocols.content import (
     ImageBlock,
     ImageSource,
@@ -33,16 +33,18 @@ from openharness.services.compact import (
     CompactResult,
     FullCompactError,
     auto_compact_if_needed,
+    compact_for_request_budget,
     estimate_message_tokens,
+    estimate_request_input_tokens,
     full_compact,
     get_context_window,
+    request_input_token_budget,
     threshold_tokens,
 )
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from openharness.protocols.requests import ApiMessageRequest
     from openharness.protocols.stream_events import ApiStreamEvent
 
 
@@ -148,6 +150,90 @@ class TestL0Estimation:
         result = estimate_message_tokens(messages, model="qwen-plus")
         assert result > 0
 
+    def test_request_estimate_includes_system_and_tool_catalog(self) -> None:
+        messages = [_user_text("hello")]
+        conversation_only = estimate_message_tokens(messages, model="qwen-plus")
+        request = ApiMessageRequest(
+            model="qwen-plus",
+            max_tokens=2_000,
+            system="PROJECT_INSTRUCTION=" + "s" * 2_000,
+            messages=messages,
+            tools=[
+                ToolSpec(
+                    name="WarehouseQuery",
+                    description="TOOL_DESCRIPTION=" + "d" * 2_000,
+                    input_schema={"type": "object", "properties": {"sql": {"type": "string"}}},
+                )
+            ],
+        )
+
+        assert estimate_request_input_tokens(request) > conversation_only
+
+    def test_request_budget_reserves_output_and_safety_margin(self) -> None:
+        # qwen-plus has a 32k window. Reserve 2k output, then use 80% of
+        # the remaining input capacity: (32_000 - 2_000) * .8 = 24_000.
+        assert (
+            request_input_token_budget("qwen-plus", max_output_tokens=2_000, threshold_ratio=0.8)
+            == 24_000
+        )
+
+    @pytest.mark.asyncio
+    async def test_forced_recompile_chooses_largest_protocol_valid_tail_that_fits(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        messages = [
+            _user_text("old request"),
+            ConversationMessage(
+                role="assistant",
+                content=[ToolUseBlock(id="t1", name="Read", input={"path": "a.py"})],
+            ),
+            ConversationMessage(
+                role="user",
+                content=[ToolResultBlock(tool_use_id="t1", content="old result")],
+            ),
+            _user_text("follow-up"),
+            ConversationMessage(
+                role="assistant",
+                content=[ToolUseBlock(id="t2", name="Grep", input={"pattern": "x"})],
+            ),
+            ConversationMessage(
+                role="user",
+                content=[ToolResultBlock(tool_use_id="t2", content="recent result")],
+            ),
+            _user_text("final request"),
+        ]
+        seen: dict[str, int] = {}
+
+        async def _capture_full(
+            current: list[ConversationMessage], **kwargs: object
+        ) -> tuple[list[ConversationMessage], bool]:
+            preserve = int(kwargs["preserve_recent"])
+            seen["preserve_recent"] = preserve
+            return [_user_text("boundary"), _user_text("summary"), *current[-preserve:]], True
+
+        monkeypatch.setattr("openharness.services.compact.full_compact", _capture_full)
+        # The fake estimator makes 4 messages fit but 5 exceed the request
+        # budget. A 2-message tool pair is protocol-valid; a suffix beginning
+        # with its ToolResult is not.
+        monkeypatch.setattr(
+            "openharness.services.compact.estimate_message_tokens",
+            lambda current, **_kwargs: len(current) * 10,
+        )
+
+        compacted, applied = await compact_for_request_budget(
+            messages,
+            model="qwen-plus",
+            api_client=_StubLLMClient("unused"),
+            input_token_budget=55,
+            request_overhead_tokens=10,
+            preserve_recent_messages=12,
+            full_compact_max_tokens=4,
+        )
+
+        assert applied is True
+        assert seen["preserve_recent"] == 4
+        assert compacted[-4:] == messages[-4:]
+
 
 # ---------------------------------------------------------------------------
 # 2. Summary preparation
@@ -156,7 +242,7 @@ class TestL0Estimation:
 
 class TestSummaryPreparation:
     @pytest.mark.asyncio
-    async def test_only_old_successful_read_and_grep_results_are_cleared(
+    async def test_tool_cleanup_is_generic_and_keeps_three_latest_interactions(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         seen: dict[str, object] = {}
@@ -168,12 +254,12 @@ class TestSummaryPreparation:
         monkeypatch.setattr("openharness.services.compact.summarize", _capture)
         older: list[ConversationMessage] = []
         cases = [
-            ("read", "Read", False, "LONG_READ_PAYLOAD" + "r" * 2_000),
-            ("grep", "Grep", False, "LONG_GREP_PAYLOAD" + "g" * 2_000),
-            ("short-read", "Read", False, "SHORT_READ_BODY"),
+            ("read", "Read", False, "READ_BODY"),
             ("bash", "Bash", False, "BASH_BODY"),
-            ("read-error", "Read", True, "READ_ERROR_BODY"),
+            ("mcp", "mcp__warehouse__query", True, "MCP_ERROR_BODY"),
+            ("agent", "Agent", False, "AGENT_BODY"),
             ("skill", "LoadSkill", False, "SKILL_BODY"),
+            ("web", "WebFetch", False, "WEB_BODY"),
         ]
         for tool_use_id, name, is_error, body in cases:
             older.extend(
@@ -194,31 +280,127 @@ class TestSummaryPreparation:
                     ),
                 ]
             )
-        recent = [_user_text(f"recent-{i}") for i in range(4)]
+        recent = [_user_text(f"recent-{i}") for i in range(12)]
 
         new_messages, changed = await full_compact(
             [*older, *recent],
             model="qwen-plus",
             api_client=_StubLLMClient("unused"),
-            preserve_recent=4,
+            preserve_recent=12,
         )
 
         assert changed is True
         summary_messages = seen["messages"]
         assert isinstance(summary_messages, list)
         summary_input = repr(summary_messages[:-1])
-        assert "LONG_READ_PAYLOAD" not in summary_input
-        assert "LONG_GREP_PAYLOAD" not in summary_input
+        assert "READ_BODY" not in summary_input
+        assert "BASH_BODY" not in summary_input
+        assert "MCP_ERROR_BODY" not in summary_input
         assert "input={'value': 'Read'}" in summary_input
-        assert "input={'value': 'Grep'}" in summary_input
-        assert "older successful Read tool result omitted" in summary_input
-        assert "older successful Grep tool result omitted" in summary_input
-        assert "cannot guarantee the exact historical output" in summary_input
-        assert "SHORT_READ_BODY" in summary_input
-        assert "BASH_BODY" in summary_input
-        assert "READ_ERROR_BODY" in summary_input
+        assert "input={'value': 'Bash'}" in summary_input
+        assert "input={'value': 'mcp__warehouse__query'}" in summary_input
+        assert summary_input.count("[cleared]") == 3
+        # The latest three completed interactions are protected independently
+        # of the 12-message Summary tail.
+        assert "AGENT_BODY" in summary_input
         assert "SKILL_BODY" in summary_input
-        assert new_messages[-4:] == recent
+        assert "WEB_BODY" in summary_input
+        assert new_messages[-12:] == recent
+
+    @pytest.mark.asyncio
+    async def test_recent_message_tail_and_recent_tools_are_parallel_protections(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: dict[str, object] = {}
+
+        async def _capture(**kwargs: object) -> str:
+            seen["messages"] = kwargs["messages"]
+            return "<summary>compact</summary>"
+
+        monkeypatch.setattr("openharness.services.compact.summarize", _capture)
+        interactions: list[ConversationMessage] = []
+        for index in range(5):
+            tool_use_id = f"tool-{index}"
+            interactions.extend(
+                [
+                    ConversationMessage(
+                        role="assistant",
+                        content=[
+                            ToolUseBlock(
+                                id=tool_use_id,
+                                name=f"Tool{index}",
+                                input={"index": index},
+                            )
+                        ],
+                    ),
+                    ConversationMessage(
+                        role="user",
+                        content=[
+                            ToolResultBlock(
+                                tool_use_id=tool_use_id,
+                                content=f"RESULT_{index}",
+                            )
+                        ],
+                    ),
+                ]
+            )
+
+        # The last four interactions occupy the eight-message recent tail.
+        # Tool1 is not in the latest-three tool set, but must remain intact
+        # because message recency is an independent protection.
+        new_messages, changed = await full_compact(
+            interactions,
+            model="qwen-plus",
+            api_client=_StubLLMClient("unused"),
+            preserve_recent=8,
+        )
+
+        assert changed is True
+        assert new_messages[-8:] == interactions[-8:]
+        summary_input = repr(seen["messages"])
+        assert "RESULT_0" not in summary_input
+        assert "[cleared]" in summary_input
+
+    @pytest.mark.asyncio
+    async def test_parallel_tool_batch_is_cleaned_per_tool_use_id(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: dict[str, object] = {}
+
+        async def _capture(**kwargs: object) -> str:
+            seen["messages"] = kwargs["messages"]
+            return "<summary>compact</summary>"
+
+        monkeypatch.setattr("openharness.services.compact.summarize", _capture)
+        batched_tools = ConversationMessage(
+            role="assistant",
+            content=[
+                ToolUseBlock(id=f"batch-{index}", name=f"Tool{index}", input={"i": index})
+                for index in range(4)
+            ],
+        )
+        batched_results = ConversationMessage(
+            role="user",
+            content=[
+                ToolResultBlock(tool_use_id=f"batch-{index}", content=f"BATCH_RESULT_{index}")
+                for index in range(4)
+            ],
+        )
+        recent = [_user_text(f"recent-{index}") for index in range(12)]
+
+        await full_compact(
+            [batched_tools, batched_results, *recent],
+            model="qwen-plus",
+            api_client=_StubLLMClient("unused"),
+            preserve_recent=12,
+        )
+
+        summary_input = repr(seen["messages"])
+        assert "BATCH_RESULT_0" not in summary_input
+        assert "BATCH_RESULT_1" in summary_input
+        assert "BATCH_RESULT_2" in summary_input
+        assert "BATCH_RESULT_3" in summary_input
+        assert "input={'i': 0}" in summary_input
 
     @pytest.mark.asyncio
     async def test_user_and_assistant_text_are_never_cleared(
@@ -354,7 +536,7 @@ class TestSummaryPreparation:
 
 class TestL4FullCompact:
     @pytest.mark.asyncio
-    async def test_prompt_preserves_structured_context_evidence(
+    async def test_prompt_defines_minimal_handoff_contract(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         seen: dict[str, object] = {}
@@ -376,13 +558,25 @@ class TestL4FullCompact:
 
         assert changed is True
         prompt = str(seen["system_prompt"])
-        assert "Tool/Skill provenance" in prompt
-        assert "opaque identifiers" in prompt
+        for section in (
+            "Current Objective",
+            "Current State",
+            "Verified Evidence",
+            "Decisions and Constraints",
+            "Active Artifacts",
+            "Remaining Work",
+        ):
+            assert section in prompt
+        assert "acceptance criteria" in prompt
+        assert "Do not invent" in prompt
+        assert "facts, user instructions, and model inferences" in prompt
+        assert "provenance" in prompt
         assert "verbatim" in prompt
-        assert "chronological order" in prompt
-        assert "latest error" in prompt
-        assert "most recent evidence" in prompt
+        assert "Later explicit evidence supersedes stale state" in prompt
         assert "filler" in prompt
+        assert "All User Messages" not in prompt
+        assert "Optional Next Step" not in prompt
+        assert "<analysis>" not in prompt
         summary_messages = seen["messages"]
         assert isinstance(summary_messages, list)
         final_message = summary_messages[-1]
@@ -390,9 +584,10 @@ class TestL4FullCompact:
         assert final_message.role == "user"
         final_text = final_message.content[0]
         assert isinstance(final_text, TextBlock)
-        assert "summarize the preceding conversation now" in final_text.text.lower()
-        assert "every uppercase key=value marker line" in final_text.text.lower()
-        assert "synthetic tool-use envelope" in final_text.text.lower()
+        assert "create the handoff state now" in final_text.text.lower()
+        assert "do not continue or imitate" in final_text.text.lower()
+        assert "uppercase key=value" not in final_text.text.lower()
+        assert "synthetic tool-use envelope" not in final_text.text.lower()
 
     @pytest.mark.asyncio
     async def test_default_timeout_allows_long_context_summarization(
@@ -575,6 +770,16 @@ class TestAutoCompactEscalation:
         assert "session_memory_path" not in parameters
 
     @pytest.mark.asyncio
+    async def test_recent_message_window_must_be_positive(self) -> None:
+        with pytest.raises(ValueError, match="at least 1"):
+            await auto_compact_if_needed(
+                [_user_text("hello")],
+                model="qwen-plus",
+                api_client=_StubLLMClient("unused"),
+                preserve_recent_messages=0,
+            )
+
+    @pytest.mark.asyncio
     async def test_default_l4_timeout_is_forwarded(self, monkeypatch: pytest.MonkeyPatch) -> None:
         seen: dict[str, float] = {}
 
@@ -609,6 +814,30 @@ class TestAutoCompactEscalation:
         assert new_messages == messages
 
     @pytest.mark.asyncio
+    async def test_request_overhead_can_trigger_compact_when_messages_alone_fit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        messages = [_user_text(f"message-{index}") for index in range(13)]
+        client = _StubLLMClient(response="<summary>x</summary>")
+        monkeypatch.setattr(
+            "openharness.services.compact.estimate_message_tokens",
+            lambda current, **_kwargs: len(current) * 10,
+        )
+
+        _new_messages, result = await auto_compact_if_needed(
+            messages,
+            model="qwen-plus",
+            api_client=client,
+            input_token_budget=150,
+            request_overhead_tokens=30,
+        )
+
+        # Conversation=130 would fit. Full Draft Request=160 does not.
+        assert result.original_tokens == 160
+        assert result.compact_kind == "full"
+        assert client.call_count == 1
+
+    @pytest.mark.asyncio
     async def test_disabled_skips_everything(self) -> None:
         # Even with lots of tokens, disabled=False short-circuits
         long = "x" * 100_000
@@ -619,6 +848,63 @@ class TestAutoCompactEscalation:
         )
         assert result.compact_kind == "none"
         assert client.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_tool_cleanup_below_threshold_skips_summary(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = _StubLLMClient(response="<summary>must not run</summary>")
+        messages: list[ConversationMessage] = []
+        for index in range(4):
+            tool_use_id = f"tool-{index}"
+            messages.extend(
+                [
+                    ConversationMessage(
+                        role="assistant",
+                        content=[
+                            ToolUseBlock(
+                                id=tool_use_id,
+                                name=f"mcp__server__tool_{index}",
+                                input={"index": index},
+                            )
+                        ],
+                    ),
+                    ConversationMessage(
+                        role="user",
+                        content=[
+                            ToolResultBlock(
+                                tool_use_id=tool_use_id,
+                                content=f"RAW_RESULT_{index}",
+                            )
+                        ],
+                    ),
+                ]
+            )
+        messages.append(_user_text("recent"))
+
+        def _estimate(current: list[ConversationMessage], **_kwargs: object) -> int:
+            return 100 if "RAW_RESULT_0" in repr(current) else 40
+
+        monkeypatch.setattr("openharness.services.compact.estimate_message_tokens", _estimate)
+        monkeypatch.setattr(
+            "openharness.services.compact.threshold_tokens",
+            lambda *_args, **_kwargs: 50,
+        )
+
+        new_messages, result = await auto_compact_if_needed(
+            messages,
+            model="qwen-plus",
+            api_client=client,
+            preserve_recent_messages=1,
+        )
+
+        assert client.call_count == 0
+        assert result.compact_kind == "tool_results"
+        assert result.applied_levels == (0, 2)
+        assert result.original_tokens == 100
+        assert result.final_tokens == 40
+        assert "RAW_RESULT_0" not in repr(new_messages)
+        assert repr(new_messages).count("[cleared]") == 1
 
     @pytest.mark.asyncio
     async def test_above_threshold_always_runs_full_compact(self) -> None:

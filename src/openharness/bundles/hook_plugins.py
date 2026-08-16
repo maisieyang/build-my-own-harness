@@ -79,7 +79,7 @@ class HookSpec:
     a HookSpec can't be tampered with post-discovery.
 
     P11-T6 (D29.7) adds ``re_run_on_reactive_rebuild`` for PreApiCall
-    hooks whose effect must survive the engine's PTL retry rebuild
+    hooks whose effect must survive the engine's PTL semantic rebuild
     (e.g. memory-injection hooks — without the re-run, the rebuilt
     request loses the injected content). Default False keeps existing
     hooks behaviour-identical.

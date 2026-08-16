@@ -123,6 +123,20 @@ class TestAskCompactExtractFlags:
         assert result.exit_code == 0, result.stderr
         assert captured[0].compact_threshold_ratio == 0.5  # type: ignore[attr-defined]
 
+    def test_recent_message_window_env_reaches_query_context(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_min_env(monkeypatch)
+        monkeypatch.setenv("OPENHARNESS_COMPACT__PRESERVE_RECENT_MESSAGES", "24")
+        monkeypatch.setattr(cli_module, "_build_client", lambda _s: _StubClient())
+        captured, fake = _capture_query_context()
+        monkeypatch.setattr(cli_module, "run_query", fake)
+
+        result = CliRunner().invoke(cli_module.headless_app, ["run", "hi"])
+
+        assert result.exit_code == 0, result.stderr
+        assert captured[0].compact_preserve_recent_messages == 24  # type: ignore[attr-defined]
+
     def test_threshold_invalid_above_one_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_min_env(monkeypatch)
         runner = CliRunner()

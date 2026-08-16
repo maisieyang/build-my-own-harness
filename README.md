@@ -123,17 +123,29 @@ OpenHarness handles that lifecycle at several boundaries:
 - each Tool Result has an ingress budget; oversized output is truncated
   head-and-tail, preserving both identifying context and terminal summaries or
   errors;
-- when the Conversation crosses its threshold, an older successful `Read` or
-  `Grep` result may be omitted from the summarizer's private input only when
-  its marker is token-smaller. Preserved ToolUse arguments can query the
-  current source again, but cannot recreate exact historical output. User
-  messages, assistant conclusions, errors, other results, and the recent tail
-  are never rewritten by this cleanup;
-- semantic compaction always combines a structured summary of older history
-  with the original uncompacted recent tail. If summarization fails, the exact
-  original Conversation is retained;
-- prompt-too-long errors remain a bounded reactive fallback rather than the
-  primary context-management strategy;
+- before every model call, OpenHarness budgets the full draft request: system
+  and project instructions, Tool/MCP schemas, Conversation, output reserve,
+  and a safety margin. When that input budget is crossed, it computes two
+  independent recency windows over the original history: the newest 12
+  messages by default, and the newest three completed Tool interactions paired
+  by `tool_use_id`. Their union is protected. For every other completed Tool
+  interaction—built-in, plugin, Web, Agent, or MCP—the ToolUse name and input
+  remain visible while the ToolResult body becomes an explicit `[cleared]`
+  marker;
+- the recent-message window is configurable with
+  `OPENHARNESS_COMPACT__PRESERVE_RECENT_MESSAGES` (default `12`). After Tool
+  cleanup, OpenHarness estimates the full draft request again. If it is below
+  the threshold, no Summary call is made. Otherwise semantic compaction
+  combines a structured Summary of cleaned older history with the original,
+  byte-for-byte recent-message tail;
+- if semantic summarization fails after Tool cleanup, the cleaned Conversation
+  remains usable; when no cleanup applied, the original Conversation remains
+  unchanged;
+- a provider prompt-too-long response permits exactly one semantic request
+  recompilation. The retry chooses the largest protocol-valid recent suffix
+  that fits the budget, summarizes everything older, and re-applies opted-in
+  dynamic hooks. A second rejection fails explicitly with budget diagnostics;
+  no loop blindly deletes Conversation messages;
 - project memory preserves durable cross-session facts separately from the raw
   transcript;
 - snapshots and session resume make recovery a persisted state transition
@@ -470,12 +482,12 @@ not limit the tool calls inside an Agent Loop.
 #### Maintain the conversation
 
 `/compact` semantically summarizes earlier conversation context while preserving
-the original recent exchange. Before summarization, an old successful `Read` or
-`Grep` result may be replaced by an explicit marker only when that replacement
-actually saves tokens. Its ToolUse can query the current source again, not
-reconstruct exact historical output. User messages, assistant conclusions,
-errors, and recent messages are not rewritten. `/clear` clears the conversation
-and any active goal.
+the original recent exchange. Before summarization, old completed ToolResult
+bodies outside the protected message and Tool-interaction windows become
+explicit `[cleared]` markers; their ToolUse names and inputs remain visible.
+This policy is tool-agnostic, so it also covers plugin and MCP tools. User and
+assistant text is not deterministically rewritten. `/clear` clears the
+conversation and any active goal.
 
 #### Handle permission decisions
 

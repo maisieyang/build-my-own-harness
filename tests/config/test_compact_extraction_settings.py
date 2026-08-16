@@ -31,6 +31,7 @@ class TestCompactSettingsDefaults:
         s = CompactSettings()
         assert s.enabled is True
         assert s.threshold_ratio == 0.83
+        assert s.preserve_recent_messages == 12
         assert s.full_compact_max_tokens == 20_000
         assert s.full_compact_timeout_s == 120.0
 
@@ -70,10 +71,16 @@ class TestCompactNestedEnvOverride:
         monkeypatch.setenv("OPENHARNESS_COMPACT__THRESHOLD_RATIO", "0.7")
         monkeypatch.setenv("OPENHARNESS_COMPACT__FULL_COMPACT_MAX_TOKENS", "10000")
         monkeypatch.setenv("OPENHARNESS_COMPACT__FULL_COMPACT_TIMEOUT_S", "15.0")
+        monkeypatch.setenv("OPENHARNESS_COMPACT__PRESERVE_RECENT_MESSAGES", "24")
         settings = Settings()
         assert settings.compact.threshold_ratio == 0.7
+        assert settings.compact.preserve_recent_messages == 24
         assert settings.compact.full_compact_max_tokens == 10_000
         assert settings.compact.full_compact_timeout_s == 15.0
+
+    def test_preserve_recent_messages_must_be_positive(self) -> None:
+        with pytest.raises(Exception, match="greater than or equal to 1"):
+            CompactSettings(preserve_recent_messages=0)
 
 
 class TestProgrammaticConstruction:

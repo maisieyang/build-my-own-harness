@@ -117,13 +117,21 @@ OpenHarness 在多个边界管理这条生命周期：
 
 - 每个 Tool Result 在进入 Conversation 时都有独立预算；超长输出采用 head-and-tail
   截断，同时保住身份上下文和结尾的汇总或错误；
-- Conversation 超过阈值后，较早且成功的 `Read`、`Grep` 结果只有在替换 marker
-  确实更省 token 时，才会从 summarizer 的私有输入中省略。保留下来的 ToolUse 参数
-  可以重新查询当前来源，但不能重建精确的历史输出。用户消息、Assistant 结论、错误、
-  其他结果和 recent tail 都不会被这一步改写；
-- 语义 Compact 始终把较早历史的结构化 Summary 与原始、未经压缩的 recent tail
-  拼接；如果摘要失败，则保留完整的原始 Conversation；
-- prompt-too-long 仍是有上限的反应式兜底，而不是主要的上下文管理策略；
+- 每次模型调用前，OpenHarness 会预算完整的请求草稿：system 与 project instructions、
+  Tool/MCP schemas、Conversation、输出预留和安全余量。超过输入预算后，系统会在
+  原始历史上并行计算两条 recent 边界：
+  默认最后 12 条 Message，以及按 `tool_use_id` 配对的最近 3 次已完成 Tool 交互；
+  两个保护集合取并集；
+- 对保护集合之外的所有已完成 Tool 交互——包括内建、Plugin、Web、Agent 与 MCP——
+  保留 ToolUse 名称和输入参数，把 ToolResult 正文替换为明确的 `[cleared]` marker；
+- Message recent 可通过 `OPENHARNESS_COMPACT__PRESERVE_RECENT_MESSAGES` 调整，默认
+  为 `12`。清理后会重新估算完整请求；已经低于阈值就不调用 Summary，否则
+  才把清理后的 older 交给语义 Summary，并拼回原始、逐字不变的 recent messages；
+- Tool 清理已经发生而 Summary 失败时，继续使用清理后的 Conversation；没有发生清理
+  时，原始 Conversation 保持不变；
+- Provider 返回 prompt-too-long 后，只允许一次语义重编译：在预算内选择不拆散
+  ToolUse/ToolResult 的最大 recent 后缀，把更早历史交给 Summary，并重新应用明确选择
+  rebuild 的动态 Hook。第二次仍被拒绝就带预算诊断显式失败，不循环盲删 Conversation；
 - project memory 把跨 session 的持久事实从原始 transcript 中分离；
 - snapshots 与 session resume 把恢复做成持久化状态转换，而不是 prompt 约定。
 
@@ -393,10 +401,9 @@ OPENHARNESS_GOAL_MAX_AUTO_TURNS=100
 #### 维护会话
 
 `/compact` 对较早的 conversation context 做语义摘要，同时保留原始的最近交流。
-摘要前，较早且成功的 `Read`、`Grep` 结果只有在 marker 确实更省 token 时才会被替换。
-保留的 ToolUse 可以重新查询当前来源，但不能重建精确的历史输出。用户消息、Assistant
-结论、错误和 recent messages 不会被这一步改写。`/clear` 清空 conversation 与所有
-active Goal。
+摘要前，保护窗口之外的旧 ToolResult 正文会变为明确的 `[cleared]` marker，ToolUse
+名称和输入参数仍然保留；这项规则不区分内建工具、Plugin 或 MCP。用户和 Assistant
+文本不会被确定性改写。`/clear` 清空 conversation 与所有 active Goal。
 
 #### 处理权限决策
 

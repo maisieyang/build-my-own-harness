@@ -13,14 +13,17 @@
 **不为之设计**:
 - 摘要**写得好不好**(措辞质量,那要软 judge;本 eval 只测信息保真)
 - 跨 model 强弱比较(D35.8 前置未满足)
-- Tool Result 入口限流，以及摘要前只清理 old successful Read/Grep results 的触发与
-  保真边界(这些是确定性代码,归 TDD)
+- Tool Result 入口限流，以及工具无关的旧 Result 清理、Message/Tool 双 recent 边界与
+  阈值重估(这些是确定性代码,归 TDD)
 
-当前生产链路为：Tool Result 入口预算 → Conversation 阈值 → summarizer 私有输入可选
-省略较早且成功的 `Read`/`Grep` 结果（marker 必须确实更省 token）→ 9-slot Summary +
-原始 recent tail → Prompt Too Long reactive fallback。保留的 ToolUse 只能重新查询当前
-来源，不能重建精确历史输出。清理不是独立 Compact 终态；Summary 失败必须返回原始
-Conversation。
+当前生产链路为：Tool Result 入口预算 → 完整请求预算（instructions、Tool schemas、
+Conversation、输出预留与安全余量）→ 在完整 Conversation 上并行
+计算 recent messages（默认 12，可配置）与最近 3 次已完成 Tool 交互 → 保护集合外的
+ToolResult 正文变为 `[cleared]`、ToolUse 名称和参数保留 → 重估 → 仍超阈值才执行 9-slot
+Summary + 原始 recent tail。Provider 返回 Prompt Too Long 时只允许一次预算驱动的语义
+重编译：选择协议完整且可放入预算的最大 recent 后缀并总结更早历史；第二次仍失败就显式
+抛错，不盲删消息。Tool 清理可以成为独立 Compact 终态；Summary 看不到已清理的精确历史
+输出。完整请求预算和 PTL 控制流是确定性行为，归 TDD；本 Eval 继续只验证 Summary 软契约。
 
 **2. Input spec**:每 case = 一段 ~28 条消息的合成对话(> preserve_recent=12,
 才会触发 full_compact),关键事实埋在**中段**(会被压掉的 older 区)。当前 N=10：
@@ -30,12 +33,13 @@ Conversation。
   preserved tail，移入真正被摘要的 older 区后由 `qwen3.7-max` 重新 live/record；
 - dogfood ratified 3 cases：MC7～MC9，分别验证最新状态覆盖旧状态、Slash Skill
   provenance、错误时间顺序，reference model 为 `qwen3.7-max`。
-- 架构收敛 ratified 1 case：MC10 验证旧成功 `Read` Result 被清理后，后续已验证结论、
-  用户约束与当前状态仍进入 Summary，reference model 为 `qwen3.7-max`。
+- 架构收敛 candidate 1 case：MC10 验证在最近 3 次 Bash/MCP/Agent 交互受到保护时，
+  更早的 `Read` Result 被工具无关地清理，后续已验证结论、用户约束与当前状态仍进入
+  Summary；reference model 将读取当前 `.env`。
 
-当前 10 条均为 `status: ratified`。确定性 dataset 测试要求每个 `must_recall` 都真实出现
-在 `messages[:-12]`，防止 preserved tail 假阳性复发。未来新增 case 仍应先标记为
-`candidate`，完成 live → record → replay 后再晋级。
+当前 9 条为 `status: ratified`，MC10 因生产上下文组装行为变化已退回 `candidate`。确定性
+dataset 测试要求每个 `must_recall` 都真实出现在 `messages[:-12]`，防止 preserved tail
+假阳性复发。candidate 完成 live → record → replay 后才能再晋级。
 
 **3. Judgment spec**:全确定性 keyword,零 LLM-judge。**种植事实回收
 (D45.1 核心手法)**:摘要没有唯一正确答案(措辞无穷),但"关键事实在不在"
@@ -52,8 +56,8 @@ fallback。2026-07-23 的历史 cassette 身份仍是 `qwen-max`；其中 MC1、
 
 ## Pass bar
 
-- **可信 ratified baseline**：10/10；历史 `qwen-max` cohort 3/3，当前
-  `qwen3.7-max` cohort 7/7。
+- **可信 ratified baseline**：9/9；历史 `qwen-max` cohort 3/3，当前
+  `qwen3.7-max` cohort 6/6。
 - **promotion bar**：candidate 必须在 `.env` 当前模型上定向 live 通过，再逐条 record
   并 replay；不能先写 cassette 再反向降低 scorer 或断言。
 
@@ -88,15 +92,17 @@ provenance。MC8 曾在首次 record 时暴露一次不稳定遗漏，prompt 再
 通过；失败 cassette 已被同 case/model 的通过记录覆盖。最终 6 条新 cohort replay 6/6。
 
 2026-08-14 移除全局长 Block collapse，改为仅在 Summarizer 私有 older 输入中省略
-successful `Read`/`Grep` Result，且 marker 必须确实更省 token。MC10 按当前 `.env`
-的 `qwen3.7-max` 重新完成 live → record → replay 1/1，验证省略后仍保留后续结论、
-用户约束与当前状态，并排除已省略的 Raw Read body。
+successful `Read`/`Grep` Result；当时的 MC10 完成了 live → record → replay 1/1。
+2026-08-16 生产链路进一步改为工具无关的旧 Result 清理，并把 recent messages 与最近
+3 次 Tool 交互定义为并行保护边界；清理后重新估算，足够小时跳过 Summary。因此旧 MC10
+cassette 不再证明当前行为，case 已改写并退回 candidate，等待手动重新 ratify。
 
 ## Cassettes & results
 
 - `cassettes/qwen-max/infer/` — MC1～MC6 历史记录；当前 replay gate 只采信
   MC1、MC3、MC6
-- `cassettes/qwen3.7-max/infer/` — MC2、MC4、MC5、MC7、MC8、MC9、MC10 当前可信记录
+- `cassettes/qwen3.7-max/infer/` — MC2、MC4、MC5、MC7、MC8、MC9 当前可信记录；
+  MC10 文件属于旧契约，候选晋级前不进入稳定 gate
 - `results/qwen-max-run{1..4}.txt` — 历史 N=4 画像原始输出
 - 稳定基线 replay gate：
   `uv run pytest tests/eval/test_replay_gates.py -k memory_compact -q`
@@ -114,4 +120,4 @@ uv run oh dev eval memory_compact --mode live --case MC10-refetchable-result-cle
 
 新增或修改 case 时，先用 `live` 运行；全部符合预期后改为 `record`，最后用 `replay`
 确认 cassette 与 scorer 契约。2026-08-12 上述六条已完成完整链路并晋级 ratified。
-2026-08-14 的 MC10 也已完成同一链路并晋级 ratified。
+MC10 当前必须重新完成这条链路后才能从 candidate 晋级。

@@ -1,18 +1,20 @@
 """Conversation compaction.
 
-The runtime controls context growth in four distinct places:
+The runtime controls context growth in five distinct places:
 
 1. the PostToolUse hook budgets each new Tool Result at ingress;
-2. this module estimates the whole Conversation before each model request;
-3. once the threshold is crossed, older successful ``Read`` and ``Grep``
-   results may be replaced only when the private summarizer input gets smaller;
-   then the LLM summarizes older history and the original recent tail is
-   spliced back;
-4. the engine's Prompt Too Long retry remains the reactive fallback.
+2. this module estimates the full draft request — system prompt, Tool schemas,
+   Conversation, output reserve, and a safety margin;
+3. once the threshold is crossed, old completed Tool Results are cleared by a
+   tool-agnostic policy while preserving two independent recency windows: the
+   recent message tail and the latest three completed Tool interactions;
+4. if deterministic Tool Result cleanup is insufficient, the LLM summarizes
+   older history and the original recent message tail is spliced back;
+5. a provider Prompt Too Long response permits one semantic request
+   recompilation; it never triggers blind Conversation-message deletion.
 
-User and assistant text is never deterministically folded. Cleanup is not a
-standalone compact outcome: if summarization fails, the caller gets the exact
-original Conversation back.
+User and assistant text is never deterministically folded. Tool cleanup is a
+standalone compact outcome, so a successful cleanup can avoid a Summary call.
 
 The summary prompt uses a 9-slot schema plus a fidelity contract for structured
 evidence, provenance, opaque identifiers, error ordering, and current state.
@@ -39,6 +41,7 @@ from openharness.services.summarize import summarize
 
 if TYPE_CHECKING:
     from openharness.api.client import SupportsStreamingMessages
+    from openharness.protocols.requests import ApiMessageRequest
 
 
 # ---------------------------------------------------------------------------
@@ -56,18 +59,19 @@ _IMAGE_TOKEN_ESTIMATE = 3_072
 # Full compact splice: how many tail messages to preserve un-compacted.
 # Recent messages carry the most signal for the LLM's next move;
 # they survive the semantic splice byte-for-byte.
-_PRESERVE_RECENT = 12
+_PRESERVE_RECENT_MESSAGES = 12
+
+# Tool-result cleanup has a second, independent recency window. It protects
+# the newest completed ToolUse/ToolResult interactions even when later plain
+# conversation messages have pushed those interactions outside the message
+# tail. Anthropic Context Editing and LangChain both default to three.
+_PRESERVE_RECENT_TOOL_INTERACTIONS = 3
+
+_CLEARED_TOOL_RESULT = "[cleared]"
 
 # Default context window when model unknown. 32k is a safe lower
 # bound — any modern Provider's flagship model exceeds this.
 _DEFAULT_CONTEXT_WINDOW = 32_000
-
-# These tools are read-only and can query the current source again from the
-# original ToolUse arguments. That does not make their exact historical output
-# recoverable after the source changes. Dynamic Web/MCP results, LoadSkill
-# provenance, Bash/Agent evidence, errors, and unknown tools are intentionally
-# excluded.
-_RERUNNABLE_TOOL_RESULTS = frozenset({"Read", "Grep"})
 
 # Known model context windows. Used by :func:`get_context_window`.
 # Includes prefix matching ("qwen-plus-latest" → uses "qwen-plus").
@@ -189,12 +193,14 @@ class CompactResult:
 
     ``compact_kind`` is the transform that actually completed:
 
-    - ``"none"`` — estimated under threshold or summarization failed
+    - ``"none"`` — estimated under threshold and no transform ran
+    - ``"tool_results"`` — old Tool Result bodies were cleared
     - ``"full"`` — the LLM produced a usable structured summary
 
     ``applied_levels`` remains a compact observability field: ``0`` is the
-    threshold estimate and ``4`` is semantic full compact. The retired global
-    block-collapse level is deliberately absent.
+    threshold estimate, ``2`` is deterministic Tool Result cleanup, and ``4``
+    is semantic full compact. The retired global block-collapse level is
+    deliberately absent.
     """
 
     compact_kind: str
@@ -242,6 +248,25 @@ def threshold_tokens(model: str, *, threshold_ratio: float) -> int:
     return int(get_context_window(model) * threshold_ratio)
 
 
+def request_input_token_budget(
+    model: str,
+    *,
+    max_output_tokens: int,
+    threshold_ratio: float,
+) -> int:
+    """Return the safe input budget for one complete provider request.
+
+    The model context window is shared by input and generated output. Reserve
+    ``max_output_tokens`` first, then apply the configured safety ratio to the
+    remaining input capacity. A minimum of one token keeps diagnostics and
+    edge-case tests total even when a caller configures an impossible output
+    limit for a small/unknown context window.
+    """
+    context_window = get_context_window(model)
+    available_input = max(1, context_window - max_output_tokens)
+    return max(1, int(available_input * threshold_ratio))
+
+
 def estimate_message_tokens(
     messages: list[ConversationMessage],
     *,
@@ -276,64 +301,160 @@ def estimate_message_tokens(
     return int(total * _TOKEN_PADDING)
 
 
-# ---------------------------------------------------------------------------
-# Summary-input preparation
-# ---------------------------------------------------------------------------
+def estimate_request_input_tokens(request: ApiMessageRequest) -> int:
+    """Estimate the entire input side of an :class:`ApiMessageRequest`.
 
-
-def _omit_old_rerunnable_tool_results(
-    older: list[ConversationMessage],
-    *,
-    model: str,
-) -> list[ConversationMessage]:
-    """Clear only old successful results whose marker is token-smaller.
-
-    The returned messages are used solely as input to the summarizer. ToolUse
-    blocks and their arguments stay intact, so a later agent can query the
-    current source again. Exact historical output is not promised. Short
-    results stay verbatim when replacing them would fail to reclaim tokens.
-    Caller-owned messages are never mutated.
+    Conversation-only accounting misses exactly the surfaces that grow as a
+    Harness gains capabilities: system/project instructions and Tool/MCP JSON
+    schemas. Message blocks use their existing image-aware estimator. The
+    remaining request envelope is serialized separately so images are not
+    accidentally charged by base64 byte length.
     """
-    tool_names: dict[str, str] = {}
-    for message in older:
+    envelope = {
+        "model": request.model,
+        "system": request.system,
+        "tools": (
+            [tool.model_dump(mode="json") for tool in request.tools]
+            if request.tools is not None
+            else None
+        ),
+        "stream": request.stream,
+    }
+    envelope_tokens = count_tokens(
+        json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        request.model,
+    )
+    return estimate_message_tokens(request.messages, model=request.model) + int(
+        envelope_tokens * _TOKEN_PADDING
+    )
+
+
+def _tail_has_complete_tool_protocol(messages: list[ConversationMessage]) -> bool:
+    """Return whether a suffix contains no split ToolUse/ToolResult pair."""
+    pending: set[str] = set()
+    for message in messages:
         for block in message.content:
             if isinstance(block, ToolUseBlock):
-                tool_names[block.id] = block.name
+                pending.add(block.id)
+            elif isinstance(block, ToolResultBlock):
+                if block.tool_use_id not in pending:
+                    return False
+                pending.remove(block.tool_use_id)
+    return not pending
+
+
+def _largest_recent_tail_that_fits(
+    messages: list[ConversationMessage],
+    *,
+    model: str,
+    input_token_budget: int,
+    request_overhead_tokens: int,
+    summary_token_reserve: int,
+    max_preserve_recent_messages: int,
+) -> int:
+    """Choose the largest protocol-valid exact suffix inside the budget."""
+    maximum = min(max_preserve_recent_messages, len(messages) - 1)
+    for count in range(maximum, 0, -1):
+        recent = messages[-count:]
+        if not _tail_has_complete_tool_protocol(recent):
+            continue
+        projected_tokens = (
+            request_overhead_tokens
+            + summary_token_reserve
+            + estimate_message_tokens(recent, model=model)
+        )
+        if projected_tokens <= input_token_budget:
+            return count
+
+    # Preserve at least one complete suffix when possible. The provider stays
+    # authoritative if even this conservative projection remains too large.
+    for count in range(1, maximum + 1):
+        if _tail_has_complete_tool_protocol(messages[-count:]):
+            return count
+    return 1
+
+
+# ---------------------------------------------------------------------------
+# Tool-result cleanup
+# ---------------------------------------------------------------------------
+
+
+def _clear_old_tool_results(
+    messages: list[ConversationMessage],
+    *,
+    preserve_recent_messages: int,
+    preserve_recent_tool_interactions: int = _PRESERVE_RECENT_TOOL_INTERACTIONS,
+) -> tuple[list[ConversationMessage], int]:
+    """Replace old completed Tool Result bodies with ``[cleared]``.
+
+    Two protection windows are computed independently over the original
+    Conversation, then unioned:
+
+    * every block in the last ``preserve_recent_messages`` messages;
+    * both sides of the last ``preserve_recent_tool_interactions`` completed
+      ToolUse/ToolResult interactions, paired by ``tool_use_id``.
+
+    Cleanup is tool-agnostic and therefore applies to built-ins, plugins, MCP,
+    Web, Agent, and future tools without an allowlist. ToolUse names and inputs
+    remain intact. Orphan results and pending/unmatched ToolUse blocks are not
+    changed. Caller-owned messages are never mutated.
+    """
+    recent_start = max(0, len(messages) - preserve_recent_messages)
+
+    tool_use_message_indexes: dict[str, int] = {}
+    completed_ids: list[str] = []
+    completed_seen: set[str] = set()
+    for message_index, message in enumerate(messages):
+        for block in message.content:
+            if isinstance(block, ToolUseBlock):
+                tool_use_message_indexes.setdefault(block.id, message_index)
+            elif (
+                isinstance(block, ToolResultBlock)
+                and block.tool_use_id in tool_use_message_indexes
+                and block.tool_use_id not in completed_seen
+            ):
+                completed_ids.append(block.tool_use_id)
+                completed_seen.add(block.tool_use_id)
+
+    if preserve_recent_tool_interactions <= 0:
+        recent_tool_ids: set[str] = set()
+    else:
+        recent_tool_ids = set(completed_ids[-preserve_recent_tool_interactions:])
 
     new_messages: list[ConversationMessage] = []
-    for msg in older:
+    cleared_count = 0
+    for message_index, msg in enumerate(messages):
         new_content: list[TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock] = []
         for block in msg.content:
-            tool_name = (
-                tool_names.get(block.tool_use_id) if isinstance(block, ToolResultBlock) else None
+            if not isinstance(block, ToolResultBlock):
+                new_content.append(block)
+                continue
+
+            tool_use_message_index = tool_use_message_indexes.get(block.tool_use_id)
+            should_clear = (
+                tool_use_message_index is not None
+                and tool_use_message_index < recent_start
+                and message_index < recent_start
+                and block.tool_use_id not in recent_tool_ids
+                and block.content != _CLEARED_TOOL_RESULT
             )
-            if (
-                isinstance(block, ToolResultBlock)
-                and not block.is_error
-                and tool_name in _RERUNNABLE_TOOL_RESULTS
-            ):
-                assert tool_name is not None
-                original_tokens = count_tokens(block.content, model)
-                marker = (
-                    f"[older successful {tool_name} tool result omitted from summary input; "
-                    f"original output used {original_tokens} tokens; preserved ToolUse "
-                    "arguments can query the current source again but cannot guarantee the "
-                    "exact historical output]"
-                )
-                if count_tokens(marker, model) < original_tokens:
-                    new_content.append(
-                        ToolResultBlock(
-                            tool_use_id=block.tool_use_id,
-                            content=marker,
-                            is_error=False,
-                        )
+            if should_clear:
+                new_content.append(
+                    ToolResultBlock(
+                        tool_use_id=block.tool_use_id,
+                        content=_CLEARED_TOOL_RESULT,
+                        is_error=block.is_error,
                     )
-                else:
-                    new_content.append(block)
+                )
+                cleared_count += 1
             else:
                 new_content.append(block)
-        new_messages.append(ConversationMessage(role=msg.role, content=new_content))
-    return new_messages
+        if new_content == msg.content:
+            new_messages.append(msg)
+        else:
+            new_messages.append(ConversationMessage(role=msg.role, content=new_content))
+
+    return new_messages, cleared_count
 
 
 # ---------------------------------------------------------------------------
@@ -348,34 +469,36 @@ async def full_compact(
     api_client: SupportsStreamingMessages,
     max_tokens: int = 20_000,
     timeout_seconds: float = 120.0,
-    preserve_recent: int = _PRESERVE_RECENT,
+    preserve_recent: int = _PRESERVE_RECENT_MESSAGES,
     raise_on_failure: bool = False,
 ) -> tuple[list[ConversationMessage], bool]:
     """Call ``summarize()`` with the 9-slot system prompt. Splice
     via boundary marker + summary + preserved tail.
 
-    Only the older slice is prepared for summarization: successful ``Read``
-    and ``Grep`` result bodies may be omitted when the marker is token-smaller.
-    Their ToolUse arguments can query the current source again but cannot
-    recreate exact historical output. The recent slice is retained byte-for-
-    byte from the original input and is never sent through deterministic
-    cleanup.
+    Before summarization, old completed Tool Result bodies are cleared using
+    independent message-recency and tool-recency protections. The recent
+    message slice is retained byte-for-byte from the original input.
 
     Returns ``(new_messages, did_apply)``. On any exception from
-    :func:`summarize` (PTL exhausted retries, streaming all-fail,
+    :func:`summarize` (PTL, streaming all-fail,
     timeout, malformed output) the function returns
     ``(messages, False)`` — caller (auto_compact orchestrator) treats
-    this as "L4 didn't help, fall back to un-compacted prompt + let
-    the engine's reactive PTL retry handle it". Explicit user actions
+    this as "L4 didn't help" and keeps the input unchanged. Explicit user actions
     pass ``raise_on_failure=True`` to receive a safe, typed diagnostic
     while leaving the original history unchanged.
     """
+    if preserve_recent < 1:
+        msg = "preserve_recent must be at least 1"
+        raise ValueError(msg)
     if len(messages) <= preserve_recent:
         return messages, False
 
-    older = messages[:-preserve_recent]
+    prepared_messages, _cleared_count = _clear_old_tool_results(
+        messages,
+        preserve_recent_messages=preserve_recent,
+    )
+    older_for_summary = prepared_messages[:-preserve_recent]
     recent = messages[-preserve_recent:]
-    older_for_summary = _omit_old_rerunnable_tool_results(older, model=model)
     summarization_messages = [
         *older_for_summary,
         ConversationMessage(
@@ -395,8 +518,8 @@ async def full_compact(
             tools_disabled=True,
         )
     except Exception as exc:
-        # summarize() exhausted retries OR malformed input — return un-
-        # compacted so engine's reactive PTL retry layer still catches.
+        # The caller decides whether this was a best-effort proactive compact
+        # or an explicit operation that needs a typed diagnostic.
         if raise_on_failure:
             raise _full_compact_error(exc, timeout_seconds=timeout_seconds) from exc
         return messages, False
@@ -416,6 +539,50 @@ async def full_compact(
         content=[TextBlock(text=f"Summary of prior conversation:\n\n{summary_text}")],
     )
     return [boundary, summary, *recent], True
+
+
+async def compact_for_request_budget(
+    messages: list[ConversationMessage],
+    *,
+    model: str,
+    api_client: SupportsStreamingMessages,
+    input_token_budget: int,
+    request_overhead_tokens: int,
+    preserve_recent_messages: int = _PRESERVE_RECENT_MESSAGES,
+    full_compact_max_tokens: int = 20_000,
+    full_compact_timeout_s: float = 120.0,
+) -> tuple[list[ConversationMessage], bool]:
+    """Semantically recompile a rejected draft request exactly once.
+
+    Unlike normal threshold compaction, this path has provider evidence that
+    the full request did not fit. It therefore selects the largest exact,
+    protocol-valid recent suffix that can fit alongside the non-Conversation
+    request overhead and the configured maximum Summary output. Everything
+    older is passed to :func:`full_compact`; no raw Conversation message is
+    silently deleted.
+    """
+    if preserve_recent_messages < 1:
+        msg = "preserve_recent_messages must be at least 1"
+        raise ValueError(msg)
+    if len(messages) <= 1:
+        return messages, False
+
+    preserve_recent = _largest_recent_tail_that_fits(
+        messages,
+        model=model,
+        input_token_budget=input_token_budget,
+        request_overhead_tokens=request_overhead_tokens,
+        summary_token_reserve=full_compact_max_tokens,
+        max_preserve_recent_messages=preserve_recent_messages,
+    )
+    return await full_compact(
+        messages,
+        model=model,
+        api_client=api_client,
+        max_tokens=full_compact_max_tokens,
+        timeout_seconds=full_compact_timeout_s,
+        preserve_recent=preserve_recent,
+    )
 
 
 def _extract_summary(raw: str) -> str:
@@ -446,45 +613,82 @@ async def auto_compact_if_needed(
     threshold_ratio: float = 0.83,
     full_compact_max_tokens: int = 20_000,
     full_compact_timeout_s: float = 120.0,
+    preserve_recent_messages: int = _PRESERVE_RECENT_MESSAGES,
+    input_token_budget: int | None = None,
+    request_overhead_tokens: int = 0,
 ) -> tuple[list[ConversationMessage], CompactResult]:
-    """Estimate the Conversation and run semantic compact above threshold.
+    """Clean old Tool Results, then summarize only if still above threshold.
 
     Returns ``(possibly-compacted-messages,
     CompactResult)``.
 
     Per-result ingress budgeting is not in this function; the PostToolUse hook
-    applies it as results arrive. Above the Conversation threshold this
-    function always attempts full semantic compact. It never returns a global
-    deterministic block-collapse as the next model Working Set.
+    applies it as results arrive. Above the configured full-request budget this
+    function first clears eligible old Tool Result bodies. Message and Tool
+    recency are independent protections. If cleanup moves the Conversation
+    below threshold, no Summary call is made.
 
     ``enabled=False`` short-circuits everything (returns
     ``CompactResult.no_op``). Same for the under-threshold path —
     no work done when not needed.
 
-    On summarization failure (LLM exhausted retries), returns the messages
-    unchanged with ``compact_kind="none"``. The engine's reactive
-    PTL retry remains as last-resort safety net.
+    On summarization failure after successful cleanup, the cleaned Conversation
+    remains the next Working Set. With no eligible cleanup, the original
+    Conversation remains unchanged. A provider PTL can later trigger one
+    semantic request recompilation at the engine boundary.
     """
-    original_tokens = estimate_message_tokens(messages, model=model)
+    if preserve_recent_messages < 1:
+        msg = "preserve_recent_messages must be at least 1"
+        raise ValueError(msg)
+
+    if request_overhead_tokens < 0:
+        msg = "request_overhead_tokens must not be negative"
+        raise ValueError(msg)
+
+    original_tokens = request_overhead_tokens + estimate_message_tokens(messages, model=model)
 
     if not enabled:
         return messages, CompactResult.no_op(original_tokens)
 
-    threshold = threshold_tokens(model, threshold_ratio=threshold_ratio)
+    threshold = (
+        input_token_budget
+        if input_token_budget is not None
+        else threshold_tokens(model, threshold_ratio=threshold_ratio)
+    )
     if original_tokens < threshold:
         return messages, CompactResult.no_op(original_tokens)
 
     levels_applied: list[int] = [0]
-    compacted_messages, did_compact = await full_compact(
+    cleaned_messages, cleared_count = _clear_old_tool_results(
         messages,
+        preserve_recent_messages=preserve_recent_messages,
+    )
+    cleaned_tokens = request_overhead_tokens + estimate_message_tokens(
+        cleaned_messages, model=model
+    )
+    if cleared_count:
+        levels_applied.append(2)
+        if cleaned_tokens < threshold:
+            return cleaned_messages, CompactResult(
+                compact_kind="tool_results",
+                applied_levels=tuple(levels_applied),
+                original_tokens=original_tokens,
+                final_tokens=cleaned_tokens,
+            )
+
+    compacted_messages, did_compact = await full_compact(
+        cleaned_messages,
         model=model,
         api_client=api_client,
         max_tokens=full_compact_max_tokens,
         timeout_seconds=full_compact_timeout_s,
+        preserve_recent=preserve_recent_messages,
     )
     if did_compact:
         levels_applied.append(4)
-        final_tokens = estimate_message_tokens(compacted_messages, model=model)
+        final_tokens = request_overhead_tokens + estimate_message_tokens(
+            compacted_messages, model=model
+        )
         return compacted_messages, CompactResult(
             compact_kind="full",
             applied_levels=tuple(levels_applied),
@@ -492,11 +696,11 @@ async def auto_compact_if_needed(
             final_tokens=final_tokens,
         )
 
-    # Semantic compact did not produce a usable summary. Preserve the original
-    # Conversation; the engine's reactive PTL retry remains the final fallback.
-    return messages, CompactResult(
-        compact_kind="none",
+    # Semantic compact did not produce a usable summary. A completed
+    # deterministic cleanup remains useful; otherwise preserve the original.
+    return cleaned_messages, CompactResult(
+        compact_kind="tool_results" if cleared_count else "none",
         applied_levels=tuple(levels_applied),
         original_tokens=original_tokens,
-        final_tokens=original_tokens,
+        final_tokens=cleaned_tokens,
     )

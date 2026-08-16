@@ -155,17 +155,17 @@ class CompactSettings(BaseModel):
     Env-var overrides use double-underscore: ``OPENHARNESS_COMPACT__THRESHOLD_RATIO=0.7``
     sets ``settings.compact.threshold_ratio``.
 
-    ``enabled=False`` disables proactive semantic compact. Per-result ingress
-    budgeting and reactive Prompt Too Long handling remain independent. The
-    CLI ``--no-auto-compact`` flag flips this.
+    ``enabled=False`` disables semantic request recompilation, including the
+    one-shot Prompt Too Long recovery. Per-result ingress budgeting remains
+    independent. The CLI ``--no-auto-compact`` flag flips this.
     """
 
     enabled: bool = Field(
         default=True,
         description=(
             "Enable proactive semantic auto-compact. When false, the "
-            "engine skips proactive compaction; reactive "
-            "PTL retry remains as the last-resort safety net. "
+            "engine skips proactive compaction and does not semantically "
+            "recompile a provider-rejected Prompt Too Long request. "
             "Override: ``OPENHARNESS_COMPACT__ENABLED`` env / "
             "``--no-auto-compact`` CLI flag."
         ),
@@ -175,12 +175,24 @@ class CompactSettings(BaseModel):
         ge=0.0,
         le=1.0,
         description=(
-            "Fraction of the model's context window that triggers "
-            "auto-compact. Default 0.83 matches HKUDS upstream. "
+            "Safety fraction applied after reserving max output tokens from "
+            "the model context window. The resulting full-input budget "
+            "includes system instructions, Tool schemas, and Conversation. "
             "Lower values compact more aggressively (saves PTL risk, "
             "costs more summarization calls). Override: "
             "``OPENHARNESS_COMPACT__THRESHOLD_RATIO`` / "
             "``--compact-threshold`` CLI flag."
+        ),
+    )
+    preserve_recent_messages: int = Field(
+        default=12,
+        ge=1,
+        description=(
+            "Number of newest Conversation messages preserved byte-for-byte "
+            "during auto-compact. This message window is independent from "
+            "the three most recent completed Tool interactions protected by "
+            "Tool Result cleanup. Override: "
+            "``OPENHARNESS_COMPACT__PRESERVE_RECENT_MESSAGES``."
         ),
     )
     full_compact_max_tokens: int = Field(
@@ -198,7 +210,8 @@ class CompactSettings(BaseModel):
             "Timeout for the semantic summarize LLM call. Long conversations need "
             "a larger budget than short secondary passes. Above this, the "
             "summarize() asyncio.wait_for raises TimeoutError and compact "
-            "returns un-compacted (engine reactive PTL still catches)."
+            "returns un-compacted. A later provider PTL permits one semantic "
+            "request recompilation, then fails explicitly if it still does not fit."
         ),
     )
 
@@ -575,8 +588,8 @@ class Settings(BaseSettings):
             "When true (default), the CLI auto-registers "
             "``TruncateToolResultHook`` so oversized tool outputs are "
             "compacted before the LLM sees them. When false, raw outputs "
-            "flow through — Layer 2 reactive (prompt-too-long retry in "
-            "the engine) still guards against blow-up. Overridden by the "
+            "flow through. Whole-request compaction and one-shot Prompt Too "
+            "Long semantic recompilation still guard the request boundary. Overridden by the "
             "``--no-auto-truncate`` CLI flag."
         ),
     )

@@ -7,9 +7,8 @@ Four layers of behavior to pin:
 2. **Streaming retry** — transient :class:`OpenHarnessApiError`
    retries up to 2 times; auth failures never retry; 3rd consecutive
    failure propagates.
-3. **PTL retry** — :class:`PromptTooLongFailure` drops oldest 1/5
-   of messages and retries; up to 3 retries; empty-messages stops
-   retry chain.
+3. **PTL boundary** — :class:`PromptTooLongFailure` propagates without
+   deleting arbitrary history or retrying the same Summary primitive.
 4. **Outer concerns** — :func:`asyncio.wait_for` timeout enforced;
    ``tools_disabled=True`` sends ``tools=[]``.
 """
@@ -258,78 +257,41 @@ class TestStreamingRetry:
 
 
 # ---------------------------------------------------------------------------
-# 3. PTL retry — bubbles past streaming retry to the outer layer
+# 3. PTL boundary — caller owns request recompilation
 # ---------------------------------------------------------------------------
 
 
-class TestPtlRetry:
+class TestPtlBoundary:
     @pytest.mark.asyncio
-    async def test_ptl_drops_oldest_fifth_then_succeeds(self) -> None:
-        client = _SequencedStubClient(outcomes=[PromptTooLongFailure("too long"), "shrunk and OK"])
-        # 10 messages → 1/5 = 2 dropped → 8 remaining on retry
-        messages = [_build_user_message(f"msg-{i}") for i in range(10)]
-        result = await summarize(
-            messages=messages,
-            system_prompt="p",
-            model="qwen-plus",
-            api_client=client,
-        )
-        assert result == "shrunk and OK"
-        # First attempt had 10 messages; second had 8 (oldest 2 dropped)
-        assert len(client.requests[0].messages) == 10
-        assert len(client.requests[1].messages) == 8
-        # Oldest dropped → second request starts with msg-2
-        assert client.requests[1].messages[0].content[0].text == "msg-2"  # type: ignore[union-attr]
-
-    @pytest.mark.asyncio
-    async def test_four_ptls_propagates(self) -> None:
-        # 1 initial + 3 retries = 4 attempts; 4th PTL propagates.
+    async def test_ptl_propagates_without_deleting_history_or_retrying(self) -> None:
         client = _SequencedStubClient(
-            outcomes=[
-                PromptTooLongFailure("a"),
-                PromptTooLongFailure("b"),
-                PromptTooLongFailure("c"),
-                PromptTooLongFailure("d"),
-            ]
+            outcomes=[PromptTooLongFailure("too long"), "must not be consumed"]
         )
-        messages = [_build_user_message(f"msg-{i}") for i in range(20)]
-        with pytest.raises(PromptTooLongFailure, match="d"):
+        messages = [_build_user_message(f"msg-{i}") for i in range(10)]
+        with pytest.raises(PromptTooLongFailure, match="too long"):
             await summarize(
                 messages=messages,
                 system_prompt="p",
                 model="qwen-plus",
                 api_client=client,
             )
-        assert client.call_count == 4
+
+        assert client.call_count == 1
+        assert len(client.requests[0].messages) == 10
 
     @pytest.mark.asyncio
-    async def test_ptl_with_single_message_propagates_after_drop(self) -> None:
-        # 1 message → drop 1 → empty → propagate (not stuck retrying
-        # against empty messages forever).
-        client = _SequencedStubClient(outcomes=[PromptTooLongFailure("single too big")])
-        with pytest.raises(PromptTooLongFailure, match="single too big"):
+    async def test_ptl_does_not_mutate_caller_messages(self) -> None:
+        client = _SequencedStubClient(outcomes=[PromptTooLongFailure("once")])
+        messages = [_build_user_message(f"msg-{i}") for i in range(10)]
+        original = list(messages)
+        with pytest.raises(PromptTooLongFailure):
             await summarize(
-                messages=[_build_user_message("the only one")],
+                messages=messages,
                 system_prompt="p",
                 model="qwen-plus",
                 api_client=client,
             )
-        # Only attempted once — empty input is unrecoverable.
-        assert client.call_count == 1
-
-    @pytest.mark.asyncio
-    async def test_caller_messages_not_mutated(self) -> None:
-        # PTL retry takes a copy; caller's list is unchanged after.
-        client = _SequencedStubClient(outcomes=[PromptTooLongFailure("once"), "ok"])
-        messages = [_build_user_message(f"msg-{i}") for i in range(10)]
-        original_length = len(messages)
-        await summarize(
-            messages=messages,
-            system_prompt="p",
-            model="qwen-plus",
-            api_client=client,
-        )
-        assert len(messages) == original_length
+        assert messages == original
 
 
 # ---------------------------------------------------------------------------

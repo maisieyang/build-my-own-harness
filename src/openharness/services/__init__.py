@@ -14,7 +14,7 @@ inline via Write + Edit tools per D36.10/D36.11.
 Public modules:
 
 - :mod:`.summarize` — shared LLM summarization primitive
-- :mod:`.compact` — thresholding, summary-input preparation, and LLM compaction
+- :mod:`.compact` — thresholding, Tool Result cleanup, and LLM compaction
 - :mod:`.snapshot` — full session snapshot writer + reader
 - :mod:`.focus_state` — Phase 13 secondary pass for task focus state
 """
@@ -25,9 +25,12 @@ from openharness.services.compact import (
     CompactResult,
     FullCompactError,
     auto_compact_if_needed,
+    compact_for_request_budget,
     estimate_message_tokens,
+    estimate_request_input_tokens,
     full_compact,
     get_context_window,
+    request_input_token_budget,
     threshold_tokens,
 )
 from openharness.services.focus_state import (
@@ -69,12 +72,15 @@ __all__ = [
     "append_messages_to_snapshot",
     "auto_compact_if_needed",
     "clear_conversation_snapshot",
+    "compact_for_request_budget",
     "estimate_message_tokens",
+    "estimate_request_input_tokens",
     "full_compact",
     "get_context_window",
     "get_snapshot_dir",
     "infer_focus_state",
     "load_snapshot",
+    "request_input_token_budget",
     "summarize",
     "threshold_tokens",
     "update_permission_runtime_snapshot",
