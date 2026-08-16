@@ -189,11 +189,7 @@ class TestL4SynthTransparency:
                 ConversationMessage(role="assistant", content=[TextBlock(text=f"a {i}")])
             )
 
-        client = _SummarizingStubClient(
-            response=(
-                "<analysis>noting key facts</analysis><summary>9-slot summary content</summary>"
-            )
-        )
+        client = _SummarizingStubClient(response=("<summary>six-section handoff content</summary>"))
         new_messages, applied = await full_compact(history, model="qwen-plus", api_client=client)
 
         assert applied is True
@@ -204,7 +200,7 @@ class TestL4SynthTransparency:
         assert isinstance(boundary_block, TextBlock)
         assert isinstance(summary_block, TextBlock)
         assert "summarized below" in boundary_block.text
-        assert "9-slot summary content" in summary_block.text
+        assert "six-section handoff content" in summary_block.text
         # summarize() was called exactly once — synth envelopes weren't
         # filtered or skipped at the L4 producer level.
         assert client.call_count == 1

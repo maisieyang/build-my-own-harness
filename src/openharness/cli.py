@@ -1305,8 +1305,8 @@ OpenHarness — multi-turn REPL commands:
   /exit, /quit       leave the REPL
   /clear             reset conversation history (keeps tools + mode)
   /compact           force full LLM-based compaction of the conversation
-                     (Phase 11 D29.6) — replaces history with a 9-slot
-                     summary regardless of token threshold
+                     (Phase 11 D29.6) — replaces history with a six-section
+                     handoff regardless of token threshold
   /plan [prompt]     enter plan mode (D47) — edits/commands are clamped
                      to read-only exploration; an approval menu appears
                      after each completed reply; parked permissions pause
@@ -2021,7 +2021,7 @@ async def _run_chat(
             # P11-T5 (D29.6): force full LLM-based compaction. Same
             # primitive as auto-compact L4, but invoked unconditionally
             # on the current history. Replaces ``history`` with a single
-            # user-role message carrying the 9-slot summary so the next
+            # user-role message carrying the six-section handoff so the next
             # turn picks it up as compressed context. No-op on empty
             # history. Errors surface inline; history is unchanged on
             # failure.

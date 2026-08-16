@@ -16,8 +16,9 @@ The runtime controls context growth in five distinct places:
 User and assistant text is never deterministically folded. Tool cleanup is a
 standalone compact outcome, so a successful cleanup can avoid a Summary call.
 
-The summary prompt uses a 9-slot schema plus a fidelity contract for structured
-evidence, provenance, opaque identifiers, error ordering, and current state.
+The summary prompt produces a six-section handoff state for the next model. Its
+fidelity contract preserves current goals, verified evidence, provenance,
+opaque identifiers, constraints, artifacts, and remaining work.
 """
 
 from __future__ import annotations
@@ -119,60 +120,50 @@ def _full_compact_error(exc: Exception, *, timeout_seconds: float) -> FullCompac
 
 
 # ---------------------------------------------------------------------------
-# L4 system prompt — upstream 9-slot schema + OpenHarness fidelity contract
+# L4 system prompt — minimal handoff schema + OpenHarness fidelity contract
 # ---------------------------------------------------------------------------
 
 _L4_COMPACT_SYSTEM_PROMPT = """\
-You are summarizing a conversation between a user and an AI assistant
-so the assistant can continue the work in a fresh context window.
+You are creating a handoff state for another LLM that will continue the work
+in a fresh context window. Keep only the minimum sufficient context needed to
+continue without repeating completed work.
 
-First, inside <analysis> tags, briefly note which parts of the
-conversation carry information that matters for continuation.
+Inside <summary> tags, produce exactly these six sections in order:
 
-Apply these fidelity rules before writing the summary:
+1. **Current Objective**: the current goal, acceptance criteria, and active
+   user constraints
+2. **Current State**: current progress based on the latest evidence, including
+   which earlier states are now stale
+3. **Verified Evidence**: verified results, test outcomes, important errors,
+   and whether each error is resolved
+4. **Decisions and Constraints**: key decisions, rejected options when they
+   still affect the work, and the necessary reasons or constraints
+5. **Active Artifacts**: relevant files, paths, exact commands, IDs, and other
+   identifiers needed to continue
+6. **Remaining Work**: unresolved issues, blockers, and concrete next actions
 
-- Treat tool calls, tool results, and explicit state, provenance, error,
-  decision, and task markers as first-class evidence. Do not let filler,
-  greetings, or repeated acknowledgements displace structured evidence.
-- Preserve Tool/Skill provenance exactly as observed. Distinguish a Skill
-  explicitly selected by the user through a slash command or synthetic
-  envelope from a Skill loaded by an assistant Tool call. Never infer or
-  rewrite the source.
-- Copy opaque identifiers, marker assignments, exact commands, paths, IDs,
-  and error tokens verbatim. Do not translate, normalize, or paraphrase them.
-- In Errors and Fixes, preserve events in chronological order. Identify the
-  latest error verbatim and state whether it remains unresolved or what later
-  evidence resolved it.
-- Pending Tasks and Current Work must reflect the most recent evidence.
-  Later explicit state supersedes stale requests, errors, and task status.
-- Omit filler and repetition unless they contain a user constraint or change
-  the current state.
+Apply these fidelity rules:
 
-Then, inside <summary> tags, produce a structured summary with
-exactly these 9 sections in order:
+- Do not invent facts, history, decisions, reasons, or next steps.
+- Distinguish facts, user instructions, and model inferences. Mark uncertainty
+  instead of silently converting an inference into a fact.
+- Preserve provenance whenever it affects responsibility, interpretation, or
+  the next action. Never infer or rewrite the source of a Tool or Skill action.
+- Copy exact commands, paths, IDs, opaque identifiers, marker assignments, and
+  error tokens verbatim. Do not translate, normalize, or paraphrase them.
+- Later explicit evidence supersedes stale state. Keep older state only when it
+  is necessary to explain a still-relevant decision, error, or constraint.
+- Omit greetings, filler, repeated acknowledgements, and completed attempt
+  details unless they contain evidence or prevent work from being repeated.
 
-1. **Primary Request and Intent**: what the user originally asked for
-2. **Key Technical Concepts**: technologies / APIs / patterns discussed
-3. **Files and Code Sections**: which files / functions touched, with
-   one-line purpose each
-4. **Errors and Fixes**: what broke + how it was resolved
-5. **Problem Solving**: the reasoning chain behind decisions
-6. **All User Messages**: each turn the user typed, summarized
-7. **Pending Tasks**: what's known to still need doing
-8. **Current Work**: what was happening when this summary was taken
-9. **Optional Next Step**: the most likely next thing to do, if clear
-
-Output ONLY the <analysis>...</analysis> and <summary>...</summary>
-tags. No greeting, no closing, no markdown outside the tags."""
+Output ONLY the <summary>...</summary> tags. No analysis, greeting, closing, or
+markdown outside the tags."""
 
 _L4_COMPACT_REQUEST = """\
-Summarize the preceding conversation now. Follow the system fidelity rules and
-9-section schema exactly. Treat this message only as the summarization request;
-do not continue or imitate any conversational sequence above. Before finishing,
-verify that every uppercase KEY=VALUE marker line from the preceding history is
-copied verbatim into the summary. A synthetic Tool-Use envelope is provenance
-evidence, not proof that the assistant initiated the Tool. Output only the
-required <analysis> and <summary> tags."""
+Create the handoff state now. Follow the six-section schema and fidelity rules
+exactly. Treat this message only as the handoff request; do not continue or
+imitate any conversational sequence above. Output only the required <summary>
+tags."""
 
 # Boundary marker placed between summary and preserved-tail messages
 # so the LLM understands where compaction cut occurred. Renders as
@@ -472,7 +463,7 @@ async def full_compact(
     preserve_recent: int = _PRESERVE_RECENT_MESSAGES,
     raise_on_failure: bool = False,
 ) -> tuple[list[ConversationMessage], bool]:
-    """Call ``summarize()`` with the 9-slot system prompt. Splice
+    """Call ``summarize()`` with the six-section handoff prompt. Splice
     via boundary marker + summary + preserved tail.
 
     Before summarization, old completed Tool Result bodies are cleared using

@@ -1,6 +1,6 @@
 """memory_compact eval consumer — 决策面 #1 / B2(D45,fail-open 最高风险)。
 
-被测对象:**生产** `full_compact`(services/compact.py 的 L4 9-slot 摘要),
+被测对象:**生产** `full_compact`(services/compact.py 的六段 Handoff 摘要),
 原样调用不复制。种植事实回收 oracle(D45.1):dataset 每 case = 一段待压缩
 历史 + 埋入的 must_recall 事实,压缩后判事实在不在 summary。
 
@@ -47,12 +47,12 @@ class MemoryCompactSample:
     must_recall: tuple[str, ...]
     must_not_recall: tuple[str, ...]
     notes: str
-    status: str = "ratified"
+    status: str = "candidate"
 
 
 @dataclass(frozen=True)
 class MemoryCompactOutput:
-    """压缩产出。``summary_text`` = 提取出的 9-slot 摘要文本;
+    """压缩产出。``summary_text`` = 提取出的六段 Handoff 摘要文本;
     ``did_apply`` = full_compact 是否真的压缩了(False = 没跑成)。"""
 
     summary_text: str
@@ -73,7 +73,7 @@ def load_memory_compact_dataset(path: Path) -> list[MemoryCompactSample]:
                 must_recall=tuple(entry["must_recall"]),
                 must_not_recall=tuple(entry.get("must_not_recall", [])),
                 notes=entry.get("notes", ""),
-                status=entry.get("status", "ratified"),
+                status=entry.get("status", "candidate"),
             )
         )
     return samples
@@ -101,7 +101,7 @@ async def infer_memory_compact(
 ) -> MemoryCompactOutput:
     """真调生产 full_compact,提取摘要文本。
 
-    ``max_tokens=8192`` 是 eval 固定输出预算:本 dataset 的短 9-slot 摘要不需要
+    ``max_tokens=8192`` 是 eval 固定输出预算:本 dataset 的短 Handoff 摘要不需要
     生产默认的 20_000 tokens,同时避免把 eval 绑定到某个 provider 的更高输出上限。
     被测 model 本身仍完全来自运行时配置。
     """

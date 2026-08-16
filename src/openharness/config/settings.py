@@ -199,8 +199,8 @@ class CompactSettings(BaseModel):
         default=20_000,
         ge=1,
         description=(
-            "max_tokens for the semantic summarize LLM call. 20k matches "
-            "HKUDS — the 9-slot summary fits comfortably."
+            "max_tokens for the semantic summarize LLM call. 20k leaves "
+            "ample room for the six-section handoff summary."
         ),
     )
     full_compact_timeout_s: float = Field(

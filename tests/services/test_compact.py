@@ -4,7 +4,7 @@
 
 1. token estimation + threshold computation
 2. summary preparation clears old tool results with independent recency boundaries
-3. full_compact (summarize call + 9-slot prompt + parse)
+3. full_compact (summarize call + six-section handoff prompt + parse)
 4. ``auto_compact_if_needed`` orchestration
 """
 
@@ -584,10 +584,11 @@ class TestL4FullCompact:
         assert final_message.role == "user"
         final_text = final_message.content[0]
         assert isinstance(final_text, TextBlock)
-        assert "create the handoff state now" in final_text.text.lower()
-        assert "do not continue or imitate" in final_text.text.lower()
-        assert "uppercase key=value" not in final_text.text.lower()
-        assert "synthetic tool-use envelope" not in final_text.text.lower()
+        request_text = " ".join(final_text.text.lower().split())
+        assert "create the handoff state now" in request_text
+        assert "do not continue or imitate" in request_text
+        assert "uppercase key=value" not in request_text
+        assert "synthetic tool-use envelope" not in request_text
 
     @pytest.mark.asyncio
     async def test_default_timeout_allows_long_context_summarization(
@@ -626,7 +627,7 @@ class TestL4FullCompact:
     async def test_summary_extracted_and_spliced(self) -> None:
         response = (
             "<analysis>thinking about what to summarize</analysis>"
-            "<summary>1. Primary Request: Test compact\n2. Key Concepts: pytest</summary>"
+            "<summary>1. Current Objective: Test compact\n2. Current State: ready</summary>"
         )
         client = _StubLLMClient(response=response)
         messages = [_user_text(f"msg-{i}") for i in range(20)]
@@ -638,7 +639,7 @@ class TestL4FullCompact:
         assert "summarized below" in new_messages[0].content[0].text  # type: ignore[union-attr]
         # Summary contents present, analysis discarded
         summary_msg = new_messages[1].content[0].text  # type: ignore[union-attr]
-        assert "Primary Request" in summary_msg
+        assert "Current Objective" in summary_msg
         assert "thinking about" not in summary_msg
 
     @pytest.mark.asyncio

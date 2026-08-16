@@ -5,6 +5,7 @@
 samples:
 - case_id: MC1-config-facts
   capability: fact-recall
+  status: candidate
   messages:
   - role: user
     content:
@@ -125,7 +126,7 @@ samples:
   notes: 三个配置事实埋在中段(会被压掉的 older 区), 摘要必须保留
 - case_id: MC2-decision-facts
   capability: fact-recall
-  status: ratified
+  status: candidate
   messages:
   - role: user
     content:
@@ -246,6 +247,7 @@ samples:
   notes: 三个架构决策事实
 - case_id: MC3-error-fix-facts
   capability: fact-recall
+  status: candidate
   messages:
   - role: user
     content:
@@ -366,7 +368,7 @@ samples:
   notes: 错误+修复的事实链(对应 Errors and Fixes 槽)
 - case_id: MC4-user-request-facts
   capability: fact-recall
-  status: ratified
+  status: candidate
   messages:
   - role: user
     content:
@@ -484,10 +486,10 @@ samples:
   - CSV
   - UTF-8
   - BOM
-  notes: 用户原始需求的关键约束(对应 Primary Request 槽)
+  notes: 用户当前目标的关键约束(对应 Current Objective 槽)
 - case_id: MC5-pending-tasks-facts
   capability: fact-recall
-  status: ratified
+  status: candidate
   messages:
   - role: user
     content:
@@ -608,6 +610,7 @@ samples:
   notes: 待办事实(对应 Pending Tasks 槽) —— 最容易在摘要里被丢
 - case_id: MC6-noise-exclusion
   capability: noise-exclusion
+  status: candidate
   messages:
   - role: user
     content:
@@ -731,7 +734,7 @@ samples:
   notes: 既测事实保留, 又测噪声不该进摘要 —— 双向探针
 - case_id: MC7-current-state-supersedes-stale
   capability: current-state-fidelity
-  status: ratified
+  status: candidate
   messages:
   - {role: user, content: [{type: text, text: "开始 context lifecycle dogfood"}]}
   - {role: assistant, content: [{type: text, text: "收到，开始收集证据"}]}
@@ -768,7 +771,7 @@ samples:
   notes: 来自 DPG-010；摘要必须以最新状态为准，不能停留在早期“等待输入”状态
 - case_id: MC8-slash-skill-provenance
   capability: skill-provenance-fidelity
-  status: ratified
+  status: candidate
   messages:
   - {role: user, content: [{type: text, text: "检查 Slash Skill 如何进入 conversation"}]}
   - {role: assistant, content: [{type: text, text: "先观察实际结构"}]}
@@ -812,7 +815,7 @@ samples:
   notes: 来自 DPG-009/010；摘要必须保留 Slash Skill 的结构化来源，不能臆测为用户粘贴正文
 - case_id: MC9-latest-error-ordering
   capability: error-order-fidelity
-  status: ratified
+  status: candidate
   messages:
   - {role: user, content: [{type: text, text: "开始记录 context probe 错误链"}]}
   - role: assistant

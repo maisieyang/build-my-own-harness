@@ -1,6 +1,6 @@
 """memory_compact eval (B2, D45) — 面 #1 fail-open 最高风险面。
 
-被测对象:生产 full_compact(9-slot L4 摘要)。oracle = 种植事实回收
+被测对象:生产 full_compact(六段 Handoff 摘要)。oracle = 种植事实回收
 (D45.1):待压缩历史里埋 N 个关键事实,压缩后判它们在不在 summary。
 不测生成质量(软),测信息保真(硬 keyword)——把开放问题重述成封闭
 存在性检查。
@@ -151,7 +151,7 @@ class TestLoadDataset:
             for fact in sample.must_recall:
                 assert fact in older_text, f"{sample.case_id}: {fact} leaked into preserved tail"
 
-    def test_includes_context_lifecycle_dogfood_regressions(self) -> None:
+    def test_prompt_change_returns_all_cases_to_candidate(self) -> None:
         samples = {sample.case_id: sample for sample in load_memory_compact_dataset(DATASET)}
         dogfood_cases = {
             "MC7-current-state-supersedes-stale",
@@ -163,17 +163,13 @@ class TestLoadDataset:
             "MC4-user-request-facts",
             "MC5-pending-tasks-facts",
         }
-        newly_ratified = dogfood_cases | repaired_cases
+        covered_cases = dogfood_cases | repaired_cases
 
-        assert newly_ratified <= samples.keys()
+        assert covered_cases <= samples.keys()
         for case_id in dogfood_cases:
             assert len(samples[case_id].must_recall) >= 3
             assert len(samples[case_id].messages) > 12
-        assert all(
-            sample.status == "ratified"
-            for case_id, sample in samples.items()
-            if case_id != "MC10-refetchable-result-cleanup"
-        )
+        assert all(sample.status == "candidate" for sample in samples.values())
 
     def test_refetchable_result_cleanup_case_is_well_formed(self) -> None:
         samples = {sample.case_id: sample for sample in load_memory_compact_dataset(DATASET)}

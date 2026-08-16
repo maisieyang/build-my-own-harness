@@ -5,7 +5,7 @@
 ## Declarations(四声明头)
 
 **1. Capability claim**:测**生产** `full_compact`(services/compact.py 的
-9-slot 语义摘要,`_L4_COMPACT_SYSTEM_PROMPT`)在决策面 **#1 / B2**(compact
+六段 Handoff 语义摘要,`_L4_COMPACT_SYSTEM_PROMPT`)在决策面 **#1 / B2**(compact
 摘要;D41 §一)上的**信息保真**质量:一段长对话被压缩后,埋入的关键事实
 有没有存活、噪声有没有被丢。**fail-open 最高风险面**——摘要坏了会静默成为
 模型对全部前史的记忆,没人会发现。
@@ -19,27 +19,22 @@
 当前生产链路为：Tool Result 入口预算 → 完整请求预算（instructions、Tool schemas、
 Conversation、输出预留与安全余量）→ 在完整 Conversation 上并行
 计算 recent messages（默认 12，可配置）与最近 3 次已完成 Tool 交互 → 保护集合外的
-ToolResult 正文变为 `[cleared]`、ToolUse 名称和参数保留 → 重估 → 仍超阈值才执行 9-slot
+ToolResult 正文变为 `[cleared]`、ToolUse 名称和参数保留 → 重估 → 仍超阈值才执行六段 Handoff
 Summary + 原始 recent tail。Provider 返回 Prompt Too Long 时只允许一次预算驱动的语义
 重编译：选择协议完整且可放入预算的最大 recent 后缀并总结更早历史；第二次仍失败就显式
 抛错，不盲删消息。Tool 清理可以成为独立 Compact 终态；Summary 看不到已清理的精确历史
 输出。完整请求预算和 PTL 控制流是确定性行为，归 TDD；本 Eval 继续只验证 Summary 软契约。
 
 **2. Input spec**:每 case = 一段 ~28 条消息的合成对话(> preserve_recent=12,
-才会触发 full_compact),关键事实埋在**中段**(会被压掉的 older 区)。当前 N=10：
+才会触发 full_compact),关键事实埋在**中段**(会被压掉的 older 区)。当前 N=10，覆盖
+配置事实、架构决策、错误修复、用户约束、待办、噪声排除、最新状态、Skill provenance、
+错误顺序和旧 ToolResult 清理后的连续性。
 
-- 历史 ratified 3 cases：MC1、MC3、MC6，reference model 为 `qwen-max`；
-- 修复后重新 ratified 3 cases：MC2、MC4、MC5。它们原本各有一个 must-recall 事实落在
-  preserved tail，移入真正被摘要的 older 区后由 `qwen3.7-max` 重新 live/record；
-- dogfood ratified 3 cases：MC7～MC9，分别验证最新状态覆盖旧状态、Slash Skill
-  provenance、错误时间顺序，reference model 为 `qwen3.7-max`。
-- 架构收敛 candidate 1 case：MC10 验证在最近 3 次 Bash/MCP/Agent 交互受到保护时，
-  更早的 `Read` Result 被工具无关地清理，后续已验证结论、用户约束与当前状态仍进入
-  Summary；reference model 将读取当前 `.env`。
-
-当前 9 条为 `status: ratified`，MC10 因生产上下文组装行为变化已退回 `candidate`。确定性
-dataset 测试要求每个 `must_recall` 都真实出现在 `messages[:-12]`，防止 preserved tail
-假阳性复发。candidate 完成 live → record → replay 后才能再晋级。
+2026-08-16 基础 Prompt 从九段 Conversation Summary 改为六段 Handoff State。由于全部 case
+都会经过这份生产 Prompt，先前 cassette 不再证明当前模型行为，N=10 全部退回
+`status: candidate`。确定性 dataset 测试继续要求每个 `must_recall` 都真实出现在
+`messages[:-12]`，防止 preserved tail 假阳性。全部完成 live → record → replay 后才能
+重新晋级。
 
 **3. Judgment spec**:全确定性 keyword,零 LLM-judge。**种植事实回收
 (D45.1 核心手法)**:摘要没有唯一正确答案(措辞无穷),但"关键事实在不在"
@@ -50,15 +45,13 @@ dataset 测试要求每个 `must_recall` 都真实出现在 `messages[:-12]`，�
 
 **4. Reference policy**:所有新 live/record 都使用项目 `.env` 当前配置的
 `OPENHARNESS_MODEL`；CLI 的 `--model` 只作为本次显式覆盖。脚本不提供历史模型的隐式
-fallback。2026-07-23 的历史 cassette 身份仍是 `qwen-max`；其中 MC1、MC3、MC6
-继续作为可信 replay baseline。MC2、MC4、MC5 与 MC7～MC9 的当前可信 cassette 均为
-2026-08-12 使用 `qwen3.7-max` 录制。稳定 gate 按 model cohort 回放，不篡改历史模型身份。
+fallback。已有 `qwen-max` 与 `qwen3.7-max` cassette 只保留为历史证据；六段 Handoff
+Prompt 必须在当前 `.env` 模型上重新完成整组 ratification，不能混用旧 cohort 证明新行为。
 
 ## Pass bar
 
-- **可信 ratified baseline**：9/9；历史 `qwen-max` cohort 3/3，当前
-  `qwen3.7-max` cohort 6/6。
-- **promotion bar**：candidate 必须在 `.env` 当前模型上定向 live 通过，再逐条 record
+- **可信 ratified baseline**：暂时为空；N=10 全部等待六段 Handoff Prompt 重新验证。
+- **promotion bar**：10/10 candidate 必须在 `.env` 当前模型上 live 全维通过，再 record
   并 replay；不能先写 cassette 再反向降低 scorer 或断言。
 
 ## 建设中挖出的真 bug
@@ -85,7 +78,7 @@ live/record/replay 并晋级 ratified。
 2026-08-12 的 candidate ratification 又发现两个生产缺陷。第一，原 L4 prompt 没有明确
 要求保留 Tool/Skill provenance、opaque marker、错误时间顺序和最新状态，MC8/MC9 live
 会静默丢事实。第二，`full_compact` 直接以历史最后一条 assistant message 结束请求；
-MC9 因而把“填充回复 15”续写成“填充消息 16”，而不是执行摘要。修复为：保留 9-slot
+MC9 因而把“填充回复 15”续写成“填充消息 16”，而不是执行摘要。修复为：保留结构化
 schema，同时加入 fidelity contract；并在待摘要历史末尾追加专用 user summarization
 request，明确禁止续写对话序列、要求逐字核对 `KEY=VALUE` marker 与 synthetic envelope
 provenance。MC8 曾在首次 record 时暴露一次不稳定遗漏，prompt 再收紧后重新 live/record
@@ -97,27 +90,23 @@ successful `Read`/`Grep` Result；当时的 MC10 完成了 live → record → r
 3 次 Tool 交互定义为并行保护边界；清理后重新估算，足够小时跳过 Summary。因此旧 MC10
 cassette 不再证明当前行为，case 已改写并退回 candidate，等待手动重新 ratify。
 
+同日基础 Prompt 收敛为 Current Objective、Current State、Verified Evidence、Decisions and
+Constraints、Active Artifacts、Remaining Work 六段 Handoff，并移除 `<analysis>`、All User
+Messages、Optional Next Step、uppercase marker 和 synthetic envelope 等基础 Prompt 特例。
+该变化影响全部 Summary case，因此原 9 条 ratified case 也一并退回 candidate。
+
 ## Cassettes & results
 
-- `cassettes/qwen-max/infer/` — MC1～MC6 历史记录；当前 replay gate 只采信
-  MC1、MC3、MC6
-- `cassettes/qwen3.7-max/infer/` — MC2、MC4、MC5、MC7、MC8、MC9 当前可信记录；
-  MC10 文件属于旧契约，候选晋级前不进入稳定 gate
+- `cassettes/qwen-max/infer/` — 旧九段 Prompt 的历史记录，不进入当前稳定 gate
+- `cassettes/qwen3.7-max/infer/` — 旧九段 Prompt/旧 MC10 契约的历史记录，等待覆盖录制
 - `results/qwen-max-run{1..4}.txt` — 历史 N=4 画像原始输出
-- 稳定基线 replay gate：
-  `uv run pytest tests/eval/test_replay_gates.py -k memory_compact -q`
-- 手动定向运行（会读取 `.env` 的 `OPENHARNESS_MODEL`）：
+- 手动整组运行（会读取 `.env` 的 `OPENHARNESS_MODEL`）：
 
 ```bash
-uv run oh dev eval memory_compact --mode live --case MC7-current-state-supersedes-stale
-uv run oh dev eval memory_compact --mode live --case MC8-slash-skill-provenance
-uv run oh dev eval memory_compact --mode live --case MC9-latest-error-ordering
-uv run oh dev eval memory_compact --mode live --case MC2-decision-facts
-uv run oh dev eval memory_compact --mode live --case MC4-user-request-facts
-uv run oh dev eval memory_compact --mode live --case MC5-pending-tasks-facts
-uv run oh dev eval memory_compact --mode live --case MC10-refetchable-result-cleanup
+uv run oh dev eval memory_compact --mode live
+uv run oh dev eval memory_compact --mode record
+uv run oh dev eval memory_compact --mode replay
 ```
 
-新增或修改 case 时，先用 `live` 运行；全部符合预期后改为 `record`，最后用 `replay`
-确认 cassette 与 scorer 契约。2026-08-12 上述六条已完成完整链路并晋级 ratified。
-MC10 当前必须重新完成这条链路后才能从 candidate 晋级。
+必须先确认整组 live 10/10，再执行 record；任何 live FAIL 都应停止，不覆盖历史 cassette。
+record 与 replay 同样达到 10/10 后，才能把 N=10 晋级 ratified 并恢复稳定 replay gate。
