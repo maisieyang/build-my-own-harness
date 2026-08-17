@@ -56,6 +56,7 @@ from openharness.memory.paths import ensure_project_memory_dir, get_project_memo
 from openharness.memory.store import (
     EmptyMemoryStore,
     FilesystemMemoryStore,
+    MemoryMutationResult,
     MemoryStore,
 )
 
@@ -71,6 +72,7 @@ __all__ = [
     "EmptyMemoryStore",
     "FilesystemMemoryStore",
     "Memory",
+    "MemoryMutationResult",
     "MemoryParseError",
     "MemoryScope",
     "MemoryStore",

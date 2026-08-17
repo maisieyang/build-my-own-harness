@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -66,6 +67,7 @@ class MemoryDecisionOutput:
     memory_dir: Path
     turn_count: int = 1
     persisted_names: tuple[str, ...] = ()
+    persisted_record_hashes: tuple[tuple[str, str], ...] = ()
 
 
 def _resolve_sample_dir(case_id: str) -> Path:
@@ -86,6 +88,15 @@ def _memory_registry(store: FilesystemMemoryStore) -> ToolRegistry:
     registry = ToolRegistry()
     register_memory_tools(registry, store)
     return registry
+
+
+def _persisted_record_hashes(memory_dir: Path) -> tuple[tuple[str, str], ...]:
+    """Fingerprint durable records; the generated index is rebuildable state."""
+    return tuple(
+        (path.name, sha256(path.read_bytes()).hexdigest())
+        for path in sorted(memory_dir.glob("*.md"))
+        if path.name != "MEMORY.md"
+    )
 
 
 async def _execute_tool_call(
@@ -186,6 +197,7 @@ async def infer_memory_decision(
         memory_dir=memory_dir,
         turn_count=turn_count,
         persisted_names=tuple(sorted(store.discover())),
+        persisted_record_hashes=_persisted_record_hashes(memory_dir),
     )
 
 
@@ -203,6 +215,7 @@ def _serialize_output_for_cassette(output: MemoryDecisionOutput) -> dict[str, An
         "text": output.text,
         "turn_count": output.turn_count,
         "persisted_names": list(output.persisted_names),
+        "persisted_record_hashes": [list(item) for item in output.persisted_record_hashes],
     }
 
 
@@ -221,6 +234,27 @@ def _deserialize_output(case_id: str, payload: dict[str, Any]) -> MemoryDecision
         memory_dir=_resolve_sample_dir(case_id),
         turn_count=payload.get("turn_count", 1),
         persisted_names=tuple(payload.get("persisted_names", ())),
+        persisted_record_hashes=tuple(
+            (str(item[0]), str(item[1])) for item in payload.get("persisted_record_hashes", ())
+        ),
+    )
+
+
+async def _replay_persisted_state(
+    sample: MemoryDecisionSample,
+    output: MemoryDecisionOutput,
+) -> MemoryDecisionOutput:
+    """Execute recorded typed operations against a fresh deterministic fixture."""
+    memory_dir = _setup_fixture(sample)
+    store = FilesystemMemoryStore(project_dir=memory_dir)
+    registry = _memory_registry(store)
+    for tool_use in output.tool_uses:
+        await _execute_tool_call(tool_use, registry, memory_dir)
+    return replace(
+        output,
+        memory_dir=memory_dir,
+        persisted_names=tuple(sorted(store.discover())),
+        persisted_record_hashes=_persisted_record_hashes(memory_dir),
     )
 
 
@@ -244,8 +278,8 @@ async def cassetted_infer_memory_decision(
                 f"kind=memory_decision_infer model={model}. "
                 "Run with --mode record first."
             )
-        _setup_fixture(sample)
-        return _deserialize_output(sample.case_id, record["response"])
+        output = _deserialize_output(sample.case_id, record["response"])
+        return await _replay_persisted_state(sample, output)
 
     output = await infer_memory_decision(sample=sample, api_client=api_client, model=model)
     cassette_store.save(

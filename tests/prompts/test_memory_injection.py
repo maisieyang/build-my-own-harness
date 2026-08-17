@@ -80,6 +80,41 @@ class TestMemoryRulesSection:
         assert "Write tool" not in rules
         assert "Edit MEMORY.md" not in rules
 
+    def test_read_only_capability_view_omits_mutation_tools(self) -> None:
+        rules = format_memory_rules_section(
+            Path("/tmp/m"),
+            available_tool_names={"MemoryList", "MemoryShow"},
+        )
+
+        assert "MemoryList" in rules
+        assert "MemoryShow" in rules
+        assert "MemoryUpsert" not in rules
+        assert "MemoryDelete" not in rules
+        assert "read-only memory access" in rules
+
+    @pytest.mark.parametrize(
+        ("available", "present", "absent", "boundary"),
+        [
+            ({"MemoryUpsert"}, "MemoryUpsert", "MemoryDelete", "cannot delete"),
+            ({"MemoryDelete"}, "MemoryDelete", "MemoryUpsert", "cannot create or replace"),
+        ],
+    )
+    def test_partial_mutation_capability_view_is_exact(
+        self,
+        available: set[str],
+        present: str,
+        absent: str,
+        boundary: str,
+    ) -> None:
+        rules = format_memory_rules_section(
+            Path("/tmp/m"),
+            available_tool_names=available,
+        )
+
+        assert present in rules
+        assert absent not in rules
+        assert boundary in rules
+
     def test_root_session_owns_memory_mutation(self) -> None:
         rules = format_memory_rules_section(Path("/tmp/m"))
         assert "root session" in rules

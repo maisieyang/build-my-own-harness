@@ -58,7 +58,7 @@ Four independent dimensions are scored:
 |---|---|---|
 | `memory_decision_judgment` | `JudgmentScorer` | The model upserts a durable fact and skips an ephemeral one. |
 | `memory_decision_payload` | `PayloadValidScorer` | The upsert contains non-empty `name`, `description`, `type`, and `body`, with a valid type. |
-| `memory_decision_persistence` | `PersistenceIntegrityScorer` | The chosen record exists after real execution and all seeded records remain. |
+| `memory_decision_persistence` | `PersistenceIntegrityScorer` | The chosen record exists after real execution and every seeded record retains its exact content fingerprint. |
 | `memory_decision_type_judge` | `MemoryTypeLLMJudgeScorer` | The selected category is defensible under the capability rubric. |
 
 A case passes only when every applicable dimension is `1.0`. `NA` is allowed
@@ -84,6 +84,9 @@ uv run oh dev eval memory_decision --mode live --case M3-warm-correction
 
 Do not record a failing live run. After all live cases pass, record the new
 reference cassettes, then replay them to validate the deterministic gate.
+Replay executes the recorded typed Memory calls against a fresh seeded fixture
+before scoring, so persistence checks observe current store behavior and exact
+seed-content fingerprints without making a model request.
 
 ## Deliberate boundaries
 

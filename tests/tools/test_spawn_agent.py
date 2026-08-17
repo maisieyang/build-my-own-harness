@@ -28,6 +28,7 @@ from openharness.engine.context import QueryContext
 from openharness.execution import BoundaryVerification, EnforcedBoundary, ExecutionEffect
 from openharness.memory import FilesystemMemoryStore
 from openharness.permissions import PermissionRuntime, workspace_runtime_profile
+from openharness.prompts import EnvironmentInfo, build_system_prompt
 from openharness.protocols import ApiMessageCompleteEvent
 from openharness.tools import (
     SpawnAgent,
@@ -291,7 +292,22 @@ class TestSpawnAgentHappyPath:
         parent_ctx = _make_parent_context(events_per_turn=[], tmp_path=tmp_path)
         registry = ToolRegistry()
         register_memory_tools(registry, FilesystemMemoryStore(project_dir=tmp_path / "memory"))
-        parent_ctx = dataclasses.replace(parent_ctx, tool_registry=registry)
+        parent_prompt = build_system_prompt(
+            registry.to_api_schema(),
+            EnvironmentInfo(
+                os_name="Darwin",
+                os_version="test",
+                shell="/bin/zsh",
+                cwd=tmp_path,
+                python_version="3.11",
+            ),
+            memory_dir=tmp_path / "memory",
+        )
+        parent_ctx = dataclasses.replace(
+            parent_ctx,
+            tool_registry=registry,
+            system_prompt=parent_prompt,
+        )
         captured: list[QueryContext] = []
 
         async def _capture_context(
@@ -314,6 +330,10 @@ class TestSpawnAgentHappyPath:
             "MemoryList",
             "MemoryShow",
         ]
+        assert "MemoryUpsert" not in captured[0].system_prompt
+        assert "MemoryDelete" not in captured[0].system_prompt
+        assert "read-only memory access" in captured[0].system_prompt
+        assert "\n\n## Environment" in captured[0].system_prompt
 
     async def test_sub_agent_inherits_permission_policy_but_not_mutable_runtime(
         self,

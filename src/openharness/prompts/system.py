@@ -210,7 +210,13 @@ def build_system_prompt(
         # (rules + index). When memory_dir is set, memory_manifest is
         # ignored for the Memory slot — the new path supersedes Phase
         # 10's split rendering.
-        sections.append(_format_combined_memory_section(memory_dir, memory_index_content))
+        sections.append(
+            _format_combined_memory_section(
+                memory_dir,
+                memory_index_content,
+                available_tool_names={tool.name for tool in tools},
+            )
+        )
     elif memory_manifest is not None:
         # Legacy Phase 10/11 path — byte-identical to v0.3.x callers.
         memory_index = format_memory_index_section(memory_manifest)
@@ -285,7 +291,12 @@ def _format_web_disabled_section() -> str:
     )
 
 
-def _format_combined_memory_section(memory_dir: Path, memory_index_content: str | None) -> str:
+def _format_combined_memory_section(
+    memory_dir: Path,
+    memory_index_content: str | None,
+    *,
+    available_tool_names: set[str],
+) -> str:
     """Render the typed ``## Memory`` section: rules plus discovery index.
 
     The rules section (from :func:`prompts.memory.format_memory_rules_section`)
@@ -297,13 +308,64 @@ def _format_combined_memory_section(memory_dir: Path, memory_index_content: str 
     mechanism exists but is currently empty (vs. silently omitting,
     which would leave the LLM unsure whether memory is configured).
     """
-    rules = format_memory_rules_section(memory_dir)
+    rules = format_memory_rules_section(
+        memory_dir,
+        available_tool_names=available_tool_names,
+    )
     body = (memory_index_content or "").strip()
     if body:
         index_block = f"### Memory Index\n\n```md\n{body}\n```"
     else:
         index_block = f"### Memory Index\n\n{_EMPTY_INDEX_PLACEHOLDER}"
     return f"{rules}\n\n{index_block}"
+
+
+def reshape_system_prompt_for_tools(system_prompt: str, tools: list[ToolSpec]) -> str:
+    """Align inherited prompt capability sections with a shaped tool registry.
+
+    Subagents inherit the parent's already-assembled prompt, so their filtered
+    registry must also replace the model-visible Tools section. Typed Memory
+    rules are re-rendered when present; the generated index remains unchanged.
+    Unknown/custom prompt sections are preserved verbatim.
+    """
+    reshaped = _replace_h2_section(system_prompt, "Tools", _format_tools_section(tools))
+    memory_section = _get_h2_section(reshaped, "Memory")
+    if memory_section is None or "managed through typed Memory tools" not in memory_section:
+        return reshaped
+    index_marker = "\n\n### Memory Index"
+    index_start = memory_section.find(index_marker)
+    index = memory_section[index_start:] if index_start >= 0 else ""
+    rules = format_memory_rules_section(
+        Path("."),
+        available_tool_names={tool.name for tool in tools},
+    )
+    return _replace_h2_section(reshaped, "Memory", f"{rules}{index}")
+
+
+def _get_h2_section(markdown: str, heading: str) -> str | None:
+    bounds = _h2_section_bounds(markdown, heading)
+    if bounds is None:
+        return None
+    start, end = bounds
+    return markdown[start:end]
+
+
+def _replace_h2_section(markdown: str, heading: str, replacement: str) -> str:
+    bounds = _h2_section_bounds(markdown, heading)
+    if bounds is None:
+        return markdown
+    start, end = bounds
+    return f"{markdown[:start]}{replacement}{markdown[end:]}"
+
+
+def _h2_section_bounds(markdown: str, heading: str) -> tuple[int, int] | None:
+    marker = f"## {heading}\n"
+    start = markdown.find(marker)
+    if start < 0:
+        return None
+    next_section = markdown.find("\n\n## ", start + len(marker))
+    end = len(markdown) if next_section < 0 else next_section
+    return start, end
 
 
 def _format_tools_section(tools: list[ToolSpec]) -> str:

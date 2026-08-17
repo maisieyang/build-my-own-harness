@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from hashlib import sha256
 from pathlib import Path
 
 from openharness.eval.memory_decision import (
@@ -77,6 +78,7 @@ class TestTypedEvalScorers:
             text="",
             memory_dir=Path("/tmp/unused"),
             persisted_names=("existing", "release-freeze"),
+            persisted_record_hashes=(("existing.md", sha256(b"").hexdigest()),),
         )
         sample = _sample()
 
@@ -100,6 +102,31 @@ class TestTypedEvalScorers:
 
         assert judgment.value == 1.0
         assert payload.value == "NA"
+
+    async def test_persistence_fails_when_seed_name_survives_but_content_changes(self) -> None:
+        output = MemoryDecisionOutput(
+            tool_uses=(
+                ToolUseBlock(
+                    id="memory-overwrite",
+                    name="MemoryUpsert",
+                    input={
+                        "name": "existing",
+                        "description": "Overwritten seed",
+                        "type": "project",
+                        "body": "Different content.",
+                    },
+                ),
+            ),
+            text="",
+            memory_dir=Path("/tmp/unused"),
+            persisted_names=("existing",),
+            persisted_record_hashes=(("existing.md", "different-hash"),),
+        )
+
+        score = await PersistenceIntegrityScorer().score(_sample(), output)
+
+        assert score.value == 0.0
+        assert "changed seeds=['existing.md']" in score.reason
 
 
 def test_dataset_no_longer_seeds_generated_index() -> None:

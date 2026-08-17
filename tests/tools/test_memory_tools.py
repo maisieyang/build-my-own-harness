@@ -6,12 +6,19 @@ index maintenance, and the root-session write boundary.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
-from openharness.memory import FilesystemMemoryStore
+from openharness.memory import (
+    FilesystemMemoryStore,
+    Memory,
+    MemoryScope,
+    MemoryType,
+    compute_memory_signature,
+)
 from openharness.tools import ExecutionDomain
 from openharness.tools.base import ToolExecutionContext, ToolRegistry
 from openharness.tools.memory import (
@@ -126,6 +133,57 @@ class TestMemoryTools:
             "review-style.md"
         ]
 
+    async def test_upsert_preserves_existing_lifecycle_and_relevance_metadata(
+        self, tmp_path: Any
+    ) -> None:
+        memory_dir = tmp_path / "memory"
+        store = FilesystemMemoryStore(project_dir=memory_dir)
+        created_at = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        body = "Old guidance."
+        store.upsert_memory(
+            Memory(
+                id="stable-id",
+                name="review-style",
+                description="Old description",
+                type=MemoryType.FEEDBACK,
+                scope=MemoryScope.PRIVATE,
+                created_at=created_at,
+                updated_at=created_at,
+                body=f"{body}\n",
+                signature=compute_memory_signature(body, MemoryType.FEEDBACK, MemoryScope.PRIVATE),
+                source_path=memory_dir / "review-style.md",
+                ttl_days=30,
+                disabled=True,
+                supersedes=("legacy-review-style",),
+                importance=0.9,
+                tags=("review", "style"),
+                use_count=4,
+                last_used_at=created_at,
+            )
+        )
+
+        await MemoryUpsertTool(store).execute(
+            MemoryUpsertInput(
+                name="review-style",
+                description="Current description",
+                type="feedback",
+                body="Current guidance.",
+            ),
+            _root_context(tmp_path),
+        )
+
+        updated = store.get("review-style")
+        assert updated is not None
+        assert updated.id == "stable-id"
+        assert updated.created_at == created_at
+        assert updated.ttl_days == 30
+        assert updated.disabled is True
+        assert updated.supersedes == ("legacy-review-style",)
+        assert updated.importance == 0.9
+        assert updated.tags == ("review", "style")
+        assert updated.use_count == 4
+        assert updated.last_used_at == created_at
+
     async def test_delete_removes_memory_and_refreshes_index(self, tmp_path: Any) -> None:
         memory_dir = tmp_path / "memory"
         store = FilesystemMemoryStore(project_dir=memory_dir)
@@ -145,6 +203,60 @@ class TestMemoryTools:
         assert result.is_error is False
         assert not (memory_dir / "obsolete.md").exists()
         assert "obsolete" not in (memory_dir / "MEMORY.md").read_text(encoding="utf-8")
+
+    async def test_upsert_reports_index_refresh_failure_without_hiding_saved_record(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        memory_dir = tmp_path / "memory"
+        store = FilesystemMemoryStore(project_dir=memory_dir)
+
+        def _fail_index_refresh() -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(store, "_refresh_generated_index", _fail_index_refresh)
+
+        result = await MemoryUpsertTool(store).execute(
+            MemoryUpsertInput(
+                name="saved-with-warning",
+                description="Record survives index failure",
+                type="project",
+                body="The durable record was written.",
+            ),
+            _root_context(tmp_path),
+        )
+
+        assert result.is_error is False
+        assert "saved memory" in result.output
+        assert "index refresh failed" in result.output
+        assert (memory_dir / "saved-with-warning.md").is_file()
+
+    async def test_delete_reports_index_refresh_failure_without_hiding_deletion(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        memory_dir = tmp_path / "memory"
+        store = FilesystemMemoryStore(project_dir=memory_dir)
+        root = _root_context(tmp_path)
+        await MemoryUpsertTool(store).execute(
+            MemoryUpsertInput(
+                name="obsolete",
+                description="An obsolete record",
+                type="project",
+                body="Remove this record.",
+            ),
+            root,
+        )
+
+        def _fail_index_refresh() -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(store, "_refresh_generated_index", _fail_index_refresh)
+
+        result = await MemoryDeleteTool(store).execute(MemoryDeleteInput(name="obsolete"), root)
+
+        assert result.is_error is False
+        assert "deleted memory" in result.output
+        assert "index refresh failed" in result.output
+        assert not (memory_dir / "obsolete.md").exists()
 
     async def test_unknown_show_and_delete_are_recoverable_errors(self, tmp_path: Any) -> None:
         store = FilesystemMemoryStore(project_dir=tmp_path / "memory")

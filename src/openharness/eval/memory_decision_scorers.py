@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from typing import TYPE_CHECKING
 
 from openharness.eval.cassette import (
@@ -113,13 +114,29 @@ class PersistenceIntegrityScorer:
         persisted = set(output.persisted_names)
         missing_seeds = sorted(seed_names - persisted)
         missing_writes = sorted(chosen_names - persisted)
-        if missing_seeds or missing_writes:
+        expected_seed_hashes = {
+            filename: sha256(content.encode("utf-8")).hexdigest()
+            for filename, content in sample.pre_populated_files.items()
+            if filename.endswith(".md") and filename != "MEMORY.md"
+        }
+        actual_record_hashes = dict(output.persisted_record_hashes)
+        missing_seed_fingerprints = sorted(
+            filename for filename in expected_seed_hashes if filename not in actual_record_hashes
+        )
+        changed_seeds = sorted(
+            filename
+            for filename, expected_hash in expected_seed_hashes.items()
+            if filename in actual_record_hashes and actual_record_hashes[filename] != expected_hash
+        )
+        if missing_seeds or missing_writes or missing_seed_fingerprints or changed_seeds:
             return Score(
                 dim=self.dim,
                 value=0.0,
                 reason=(
                     f"persistence mismatch: missing seeds={missing_seeds}, "
-                    f"missing upserts={missing_writes}"
+                    f"missing upserts={missing_writes}, "
+                    f"missing seed fingerprints={missing_seed_fingerprints}, "
+                    f"changed seeds={changed_seeds}"
                 ),
                 case_id=sample.case_id,
             )

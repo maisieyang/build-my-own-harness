@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
     from pathlib import Path
 
 _MEMORY_RULES_TEMPLATE = """\
@@ -96,7 +97,11 @@ what you observe now, trust observation — and update or remove the stale \
 memory rather than acting on it."""
 
 
-def format_memory_rules_section(memory_dir: Path) -> str:
+def format_memory_rules_section(
+    memory_dir: Path,
+    *,
+    available_tool_names: Collection[str] | None = None,
+) -> str:
     """Render the typed memory rules section.
 
     The returned string is a single ``## Memory`` Markdown section
@@ -107,4 +112,86 @@ def format_memory_rules_section(memory_dir: Path) -> str:
     the private control-plane path is deliberately not exposed to the model.
     """
     del memory_dir
-    return _MEMORY_RULES_TEMPLATE
+    if available_tool_names is None:
+        return _MEMORY_RULES_TEMPLATE
+
+    available = set(available_tool_names)
+    can_upsert = "MemoryUpsert" in available
+    can_delete = "MemoryDelete" in available
+    rendered = _MEMORY_RULES_TEMPLATE
+    if not can_upsert and not can_delete:
+        rendered = rendered.replace(
+            "If the user explicitly asks you to remember something, save it immediately as "
+            "whichever type fits best. If they ask you to forget something, find and remove "
+            "the relevant entry.",
+            "This context has read-only memory access. It may inspect durable project "
+            "knowledge, but it cannot create, replace, or delete memory records. The root "
+            "session owns memory mutation.",
+        )
+        rendered = rendered.replace(
+            "If recalled memory conflicts with what you observe now, trust observation — "
+            "and update or remove the stale memory rather than acting on it.",
+            "If recalled memory conflicts with what you observe now, trust observation and "
+            "report the stale record to the root session rather than acting on it.",
+        )
+    elif can_upsert and not can_delete:
+        rendered = rendered.replace(
+            "If the user explicitly asks you to remember something, save it immediately as "
+            "whichever type fits best. If they ask you to forget something, find and remove "
+            "the relevant entry.",
+            "If the user explicitly asks you to remember something, save it immediately as "
+            "whichever type fits best. This context cannot delete memory records; report a "
+            "forget request to the root session.",
+        )
+        rendered = rendered.replace(
+            "and update or remove the stale memory rather than acting on it.",
+            "and update the stale memory rather than acting on it.",
+        )
+    elif can_delete and not can_upsert:
+        rendered = rendered.replace(
+            "If the user explicitly asks you to remember something, save it immediately as "
+            "whichever type fits best. If they ask you to forget something, find and remove "
+            "the relevant entry.",
+            "This context cannot create or replace memory records. If the user asks you to "
+            "forget something, find and remove the relevant entry.",
+        )
+        rendered = rendered.replace(
+            "and update or remove the stale memory rather than acting on it.",
+            "and remove the stale memory rather than acting on it.",
+        )
+
+    tool_lines: list[str] = []
+    if "MemoryList" in available:
+        tool_lines.append(
+            "- Use `MemoryList` to inspect the complete catalog when the injected index is\n"
+            "  insufficient."
+        )
+    if "MemoryShow" in available:
+        tool_lines.append("- Use `MemoryShow` to load the full body of a relevant memory.")
+    if "MemoryUpsert" in available:
+        tool_lines.append(
+            "- Use `MemoryUpsert` to create a new memory or replace an existing memory with\n"
+            "  the same stable name. The root session owns memory mutation."
+        )
+    if "MemoryDelete" in available:
+        tool_lines.append(
+            "- Use `MemoryDelete` when the user asks you to forget something or when a\n"
+            "  stored fact is demonstrably stale. The root session owns deletion."
+        )
+    if not tool_lines:
+        tool_lines.append(
+            "- No typed Memory tools are available in this context. The injected index is\n"
+            "  informational only."
+        )
+
+    tools_start = rendered.index("### Memory tools")
+    tools_end = rendered.index("\n\nThe `Memory Index`", tools_start)
+    rendered = (
+        rendered[:tools_start]
+        + "### Memory tools\n\n"
+        + "\n".join(tool_lines)
+        + rendered[tools_end:]
+    )
+    if "MemoryList" not in available:
+        rendered = rendered.replace("; use `MemoryList` for the full\ncatalog", "")
+    return rendered

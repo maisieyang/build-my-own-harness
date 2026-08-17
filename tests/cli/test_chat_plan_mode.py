@@ -141,6 +141,9 @@ class TestEnterPlanMode:
             "MemoryList",
             "MemoryShow",
         ]
+        assert "MemoryUpsert" not in ctx.system_prompt
+        assert "MemoryDelete" not in ctx.system_prompt
+        assert "read-only memory access" in ctx.system_prompt
         assert ctx.dispatch_tool_registry is not None
         assert {tool.name for tool in ctx.dispatch_tool_registry.list_tools()} >= {
             "Write",

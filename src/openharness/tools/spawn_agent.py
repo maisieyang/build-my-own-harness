@@ -34,6 +34,7 @@ from pydantic import BaseModel, Field
 
 from openharness.engine.errors import LoopLimitExceeded
 from openharness.engine.query import run_query
+from openharness.prompts.system import reshape_system_prompt_for_tools
 from openharness.protocols import (
     ApiMessageCompleteEvent,
     ConversationMessage,
@@ -148,9 +149,11 @@ class SpawnAgent(BaseTool[SpawnAgentInput]):
         # reviewer/execution postures. Persistence and mutable permission
         # lifecycle are explicitly isolated: this Agent is an ephemeral tool
         # invocation, not an independently resumable user session. Only the
-        # Agent depth always changes. System prompt and max_turns change only
-        # for an explicitly configured specialized variant; the default Agent
-        # inherits the parent's optional circuit breaker (including None).
+        # Agent depth always changes. The default prompt preserves parent
+        # sections while recompiling model-visible capability sections against
+        # the child registry; an explicit specialized prompt still replaces it.
+        # max_turns inherits the parent's optional circuit breaker (including
+        # None) unless the specialized variant overrides it.
         child_permission_runtime = (
             parent.permission_runtime.fork_for_subagent()
             if parent.permission_runtime is not None
@@ -163,11 +166,17 @@ class SpawnAgent(BaseTool[SpawnAgentInput]):
             if self._tool_filter is not None and tool.name not in self._tool_filter:
                 continue
             child_registry.register(tool)
+        child_system_prompt = (
+            self._sub_system_prompt
+            if self._sub_system_prompt is not None
+            else reshape_system_prompt_for_tools(
+                parent.system_prompt,
+                child_registry.to_api_schema(),
+            )
+        )
         sub_context = dataclasses.replace(
             parent,
-            system_prompt=self._sub_system_prompt
-            if self._sub_system_prompt is not None
-            else parent.system_prompt,
+            system_prompt=child_system_prompt,
             max_turns=parent.max_turns
             if self._max_turns_override is None
             else self._max_turns_override,

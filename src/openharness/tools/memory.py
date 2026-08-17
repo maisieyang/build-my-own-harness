@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -110,26 +111,42 @@ class MemoryUpsertTool(_MemoryTool, BaseTool[MemoryUpsertInput]):
             return _root_only_error()
         now = datetime.now(timezone.utc)
         existing = self._store.get(args.name)
-        memory = Memory(
-            id=existing.id if existing is not None else uuid4().hex[:16],
-            name=args.name,
-            description=" ".join(args.description.split()),
-            type=args.type,
-            scope=MemoryScope.PRIVATE,
-            created_at=existing.created_at if existing is not None else now,
-            updated_at=now,
-            body=args.body.rstrip() + "\n",
-            signature=compute_memory_signature(args.body, args.type, MemoryScope.PRIVATE),
-            source_path=(
-                existing.source_path
-                if existing is not None
-                else self._store.project_dir / f"{args.name}.md"
-            ),
-        )
-        path = self._store.upsert_memory(memory)
+        description = " ".join(args.description.split())
+        body = args.body.rstrip() + "\n"
+        if existing is not None:
+            memory = dataclasses.replace(
+                existing,
+                description=description,
+                type=args.type,
+                updated_at=now,
+                body=body,
+                signature=compute_memory_signature(args.body, args.type, existing.scope),
+            )
+        else:
+            memory = Memory(
+                id=uuid4().hex[:16],
+                name=args.name,
+                description=description,
+                type=args.type,
+                scope=MemoryScope.PRIVATE,
+                created_at=now,
+                updated_at=now,
+                body=body,
+                signature=compute_memory_signature(args.body, args.type, MemoryScope.PRIVATE),
+                source_path=self._store.project_dir / f"{args.name}.md",
+            )
+        outcome = self._store.upsert_memory(memory)
+        assert outcome.path is not None
+        output = f"saved memory {args.name!r}"
+        if outcome.index_warning is not None:
+            output = f"{output}; warning: {outcome.index_warning}"
         return ToolResult(
-            output=f"saved memory {args.name!r}",
-            metadata={"name": args.name, "path": str(path)},
+            output=output,
+            metadata={
+                "name": args.name,
+                "path": str(outcome.path),
+                "index_warning": outcome.index_warning,
+            },
         )
 
 
@@ -143,13 +160,20 @@ class MemoryDeleteTool(_MemoryTool, BaseTool[MemoryDeleteInput]):
     async def execute(self, args: MemoryDeleteInput, context: ToolExecutionContext) -> ToolResult:
         if _is_subagent(context):
             return _root_only_error()
-        if not self._store.delete_memory(args.name):
+        outcome = self._store.delete_memory(args.name)
+        if not outcome.changed:
             available = ", ".join(sorted(self._store.discover())) or "(none)"
             return ToolResult(
                 is_error=True,
                 output=f"no memory named {args.name!r}; available memories: {available}",
             )
-        return ToolResult(output=f"deleted memory {args.name!r}")
+        output = f"deleted memory {args.name!r}"
+        if outcome.index_warning is not None:
+            output = f"{output}; warning: {outcome.index_warning}"
+        return ToolResult(
+            output=output,
+            metadata={"name": args.name, "index_warning": outcome.index_warning},
+        )
 
 
 def register_memory_tools(registry: ToolRegistry, store: FilesystemMemoryStore) -> None:

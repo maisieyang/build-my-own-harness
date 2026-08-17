@@ -27,6 +27,7 @@ from __future__ import annotations
 import contextlib
 import os
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -34,6 +35,18 @@ import yaml
 
 from openharness.markdown_store import EmptyMarkdownStore, FilesystemMarkdownStore
 from openharness.memory.model import Memory, MemoryScope, parse_memory
+from openharness.observability.logging import get_logger
+
+_logger = get_logger("memory")
+
+
+@dataclass(frozen=True)
+class MemoryMutationResult:
+    """Durable-record outcome plus any generated-index degradation."""
+
+    changed: bool
+    path: Path | None = None
+    index_warning: str | None = None
 
 
 def _parse_memory_document(path: Path) -> Memory | None:
@@ -131,12 +144,13 @@ class FilesystemMemoryStore(FilesystemMarkdownStore[Memory]):
         """Harness-owned directory backing this project memory store."""
         return self._memory_project_dir
 
-    def upsert_memory(self, memory: Memory) -> Path:
+    def upsert_memory(self, memory: Memory) -> MemoryMutationResult:
         """Create or replace one named memory and refresh the generated index.
 
         Unlike the legacy signature-dedup writer, the model-facing operation is
         a true upsert by stable ``name``.  A changed body therefore replaces the
-        same record instead of creating a suffixed duplicate.
+        same record instead of creating a suffixed duplicate. The durable record
+        is authoritative; an index refresh failure is returned as a warning.
         """
         target_dir = self._target_dir_for_scope(memory.scope)
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -144,23 +158,27 @@ class FilesystemMemoryStore(FilesystemMarkdownStore[Memory]):
         target_path = existing or target_dir / f"{memory.name}.md"
         _atomic_write(target_path, _render_memory_markdown(memory))
         self._cache = None
-        self._refresh_generated_index()
-        return target_path
+        warning = self._refresh_generated_index_after_mutation()
+        return MemoryMutationResult(changed=True, path=target_path, index_warning=warning)
 
-    def delete_memory(self, name: str) -> bool:
-        """Delete a named memory and refresh the generated index."""
+    def delete_memory(self, name: str) -> MemoryMutationResult:
+        """Delete a named memory and return index refresh degradation separately."""
         self._cache = None
         memory = self.discover().get(name)
         if memory is None:
-            return False
+            return MemoryMutationResult(changed=False)
         try:
             memory.source_path.resolve().relative_to(self._memory_project_dir.resolve())
         except ValueError:
             raise ValueError("memory source escaped the project memory directory") from None
         memory.source_path.unlink()
         self._cache = None
-        self._refresh_generated_index()
-        return True
+        warning = self._refresh_generated_index_after_mutation()
+        return MemoryMutationResult(
+            changed=True,
+            path=memory.source_path,
+            index_warning=warning,
+        )
 
     def render_index(self, *, max_entries: int | None = None) -> str:
         """Render the authoritative one-line catalog injected into prompts."""
@@ -186,6 +204,20 @@ class FilesystemMemoryStore(FilesystemMarkdownStore[Memory]):
     def _refresh_generated_index(self) -> None:
         self._memory_project_dir.mkdir(parents=True, exist_ok=True)
         _atomic_write(self._memory_project_dir / "MEMORY.md", self.render_index())
+
+    def _refresh_generated_index_after_mutation(self) -> str | None:
+        """Refresh the rebuildable index without misreporting the durable effect."""
+        try:
+            self._refresh_generated_index()
+        except OSError as exc:
+            warning = f"generated memory index refresh failed: {exc}"
+            _logger.warning(
+                "memory_index_refresh_failed",
+                project_dir=str(self._memory_project_dir),
+                error=str(exc),
+            )
+            return warning
+        return None
 
     def add_or_update(self, memory: Memory) -> Path:
         """Write ``memory`` to disk via signature dedup — P11-T4.4a.
