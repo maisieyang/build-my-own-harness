@@ -206,6 +206,10 @@ class BaseTool(ABC, Generic[InputT]):
     # ``rm``, so we err conservative.
     is_read_only: bool = False
 
+    # Control-plane mutations that belong to the user-owned root session.
+    # Sub-agents receive a filtered registry and never see these schemas.
+    root_session_only: bool = False
+
     # P5-T5 (D15.6 / boundary 11): provenance of the ``is_read_only`` value
     # — observability shows where the trust decision came from.
     #   "local"           — built-in tools (Read / Write / Bash / ...)

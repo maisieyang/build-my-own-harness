@@ -804,6 +804,29 @@ class PermissionRuntime:
             raise ValueError("local permission request requires a verified local boundary")
         return boundary
 
+    def fork_for_subagent(self) -> PermissionRuntime:
+        """Create an independent child lifecycle under the same policy.
+
+        The immutable authorization profile, verified boundary, reviewer, and
+        denial facts are inherited.  Conversation-bound state and one-shot
+        grants are not: a child must never overwrite or consume the parent's
+        parked request, continuation, or approval.
+        """
+        child = PermissionRuntime(
+            profile=self.profile,
+            boundary=self.boundary,
+            reviewer=self.reviewer,
+            denial_limit=self.denial_limit,
+        )
+        child._denials = dict(self._denials)
+        denied_request_ids = {record.request.request_id for record in child._denials.values()}
+        child._request_id_aliases = {
+            alias: target
+            for alias, target in self._request_id_aliases.items()
+            if target in denied_request_ids
+        }
+        return child
+
     async def resolve_boundary_result(
         self,
         result: ExecutionResult,

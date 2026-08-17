@@ -39,7 +39,7 @@ from openharness.protocols import (
     ConversationMessage,
     TextBlock,
 )
-from openharness.tools.base import BaseTool, ExecutionDomain, ToolResult
+from openharness.tools.base import BaseTool, ExecutionDomain, ToolRegistry, ToolResult
 
 if TYPE_CHECKING:
     from openharness.tools.base import ToolExecutionContext
@@ -56,10 +56,9 @@ class SpawnAgentInput(BaseModel):
     )
     prompt: str = Field(
         description=(
-            "The full task description sent to the sub-agent as its "
-            "initial user message. The sub-agent has access to the same "
-            "tool catalog as the parent (Phase 6: full inheritance, no "
-            "filtering)."
+            "The full task description sent to the sub-agent as its initial "
+            "user message. It inherits the parent's task tools, excluding "
+            "root-session-only control operations."
         ),
     )
 
@@ -77,8 +76,9 @@ class SpawnAgent(BaseTool[SpawnAgentInput]):
         "and returns its final text response as the tool result. Use when a "
         "sub-task warrants isolated context — e.g., focused research that "
         "would clutter your main conversation, or a multi-step investigation "
-        "you want compartmentalized. The sub-agent inherits the same tool "
-        "catalog as you, including this `Agent` tool (bounded recursion: see "
+        "you want compartmentalized. The sub-agent inherits task tools but not "
+        "root-session-only control operations; it retains this `Agent` tool "
+        "(bounded recursion: see "
         "OPENHARNESS_MAX_AGENT_DEPTH)."
     )
     input_model = SpawnAgentInput
@@ -92,7 +92,7 @@ class SpawnAgent(BaseTool[SpawnAgentInput]):
         description: str | None = None,
         system_prompt: str | None = None,
         max_turns: int | None = None,
-        tool_filter: set[str] | None = None,  # noqa: ARG002 — D16.3 forward-compat
+        tool_filter: set[str] | None = None,
     ) -> None:
         """Construct a configurable :class:`SpawnAgent` variant.
 
@@ -102,9 +102,8 @@ class SpawnAgent(BaseTool[SpawnAgentInput]):
         — e.g., a ``ResearchAgent`` with a focused system prompt and
         a tighter turn budget.
 
-        ``tool_filter`` is accepted per D16.3 forward-compat but
-        IGNORED in Phase 6. Filtering defers to Phase 7+ when a real
-        use case surfaces.
+        ``tool_filter`` optionally restricts the inherited catalog by exact
+        name. Root-session-only control tools are always removed.
         """
         # Class attributes are overridable on the instance per-variant.
         if name != "Agent":
@@ -113,6 +112,7 @@ class SpawnAgent(BaseTool[SpawnAgentInput]):
             self.description = description
         self._sub_system_prompt = system_prompt
         self._max_turns_override = max_turns
+        self._tool_filter = frozenset(tool_filter) if tool_filter is not None else None
 
     async def execute(
         self,
@@ -143,12 +143,26 @@ class SpawnAgent(BaseTool[SpawnAgentInput]):
 
         # 3. Build sub-context. ``dataclasses.replace`` inherits every parent
         # field unless explicitly overridden — same api_client, same
-        # tool_registry, same canonical profile/boundary, same hook_registry, same
+        # task tools, same canonical profile/boundary, same hook_registry, same
         # skill_store, same cwd, same model, same max_tokens, same
-        # reviewer/execution postures. Only the
+        # reviewer/execution postures. Persistence and mutable permission
+        # lifecycle are explicitly isolated: this Agent is an ephemeral tool
+        # invocation, not an independently resumable user session. Only the
         # Agent depth always changes. System prompt and max_turns change only
         # for an explicitly configured specialized variant; the default Agent
         # inherits the parent's optional circuit breaker (including None).
+        child_permission_runtime = (
+            parent.permission_runtime.fork_for_subagent()
+            if parent.permission_runtime is not None
+            else None
+        )
+        child_registry = ToolRegistry()
+        for tool in parent.tool_registry.list_tools():
+            if tool.root_session_only:
+                continue
+            if self._tool_filter is not None and tool.name not in self._tool_filter:
+                continue
+            child_registry.register(tool)
         sub_context = dataclasses.replace(
             parent,
             system_prompt=self._sub_system_prompt
@@ -158,6 +172,10 @@ class SpawnAgent(BaseTool[SpawnAgentInput]):
             if self._max_turns_override is None
             else self._max_turns_override,
             agent_depth=parent.agent_depth + 1,
+            tool_registry=child_registry,
+            permission_runtime=child_permission_runtime,
+            snapshot_enabled=False,
+            llm_focus_state_enabled=False,
         )
 
         # 4. Sub-agent receives `args.prompt` as its initial user message —

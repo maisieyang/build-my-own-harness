@@ -1072,6 +1072,22 @@ def test_runtime_constructor_and_park_ids_fail_closed() -> None:
         runtime.approve_parked("short")
 
 
+def test_subagent_fork_inherits_policy_without_parent_continuation() -> None:
+    profile = workspace_runtime_profile()
+    boundary = _boundary(profile_fingerprint=profile.fingerprint)
+    runtime = PermissionRuntime(profile=profile, boundary=boundary)
+    runtime.park(_request(), reason="waiting for the user")
+
+    child = runtime.fork_for_subagent()
+
+    assert child is not runtime
+    assert child.profile is runtime.profile
+    assert child.boundary is runtime.boundary
+    assert child.reviewer is runtime.reviewer
+    assert runtime.parked_request is not None
+    assert child.parked_request is None
+
+
 @pytest.mark.asyncio
 async def test_missing_reviewer_parks_and_request_drift_is_rejected() -> None:
     profile = workspace_runtime_profile()

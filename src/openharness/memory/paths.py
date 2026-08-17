@@ -15,9 +15,10 @@ Three properties hold by construction:
    directory, not the working tree. Even if the user runs
    ``git add .openharness/``, nothing memory-related is in the repo.
 
-The directory is **not** created here; callers create lazily on first
-write so a non-existent dir on read returns an empty store rather than
-mkdir-ing an empty directory the user never asked for.
+Path resolution and storage initialization are deliberately separate:
+:func:`get_project_memory_dir` is pure, while
+:func:`ensure_project_memory_dir` is the harness-owned bootstrap used only
+when durable memory is enabled.
 """
 
 from __future__ import annotations
@@ -48,9 +49,9 @@ def get_project_memory_dir(cwd: str | Path) -> Path:
       ``~/.openharness/memory/-<sha1>/``
 
     This function does NOT call :meth:`Path.mkdir`. The directory may
-    not exist yet — that's expected on first read for a project that
-    hasn't written any memories. The main LLM creates the dir lazily
-    via the Write tool the first time it produces a memory (D36.11).
+    not exist yet. Runtime bootstrap calls
+    :func:`ensure_project_memory_dir` when memory is enabled; keeping this
+    path function pure makes inspection safe.
 
     :func:`Path.home` is evaluated **at call time**, not at module
     import — so tests' ``monkeypatch.setenv("HOME", ...)`` isolation
@@ -64,3 +65,15 @@ def get_project_memory_dir(cwd: str | Path) -> Path:
     # for any realistic project count). Matches HKUDS upstream.
     digest = sha1(str(resolved).encode("utf-8")).hexdigest()[:12]
     return Path.home() / ".openharness" / "memory" / f"{resolved.name}-{digest}"
+
+
+def ensure_project_memory_dir(cwd: str | Path) -> Path:
+    """Create and return the harness-owned durable-memory directory.
+
+    The general ``Write`` tool intentionally requires an existing parent
+    directory.  Creating OpenHarness control-plane storage is therefore a
+    runtime bootstrap responsibility, not a model action.
+    """
+    memory_dir = get_project_memory_dir(cwd)
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    return memory_dir

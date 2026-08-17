@@ -19,7 +19,7 @@ import pytest
 
 from openharness.errors import OpenHarnessError
 from openharness.memory.errors import MemoryParseError, UnknownMemoryError
-from openharness.memory.paths import get_project_memory_dir
+from openharness.memory.paths import ensure_project_memory_dir, get_project_memory_dir
 
 
 class TestGetProjectMemoryDir:
@@ -88,6 +88,27 @@ class TestGetProjectMemoryDir:
         d_rel = get_project_memory_dir("x")
         d_abs = get_project_memory_dir(sub)
         assert d_rel == d_abs
+
+
+class TestEnsureProjectMemoryDir:
+    def test_creates_harness_owned_directory_for_fresh_project(self, tmp_path: Path) -> None:
+        project = tmp_path / "fresh-project"
+        project.mkdir()
+
+        memory_dir = ensure_project_memory_dir(project)
+
+        assert memory_dir == get_project_memory_dir(project)
+        assert memory_dir.is_dir()
+
+    def test_is_idempotent(self, tmp_path: Path) -> None:
+        project = tmp_path / "project"
+        project.mkdir()
+
+        first = ensure_project_memory_dir(project)
+        second = ensure_project_memory_dir(project)
+
+        assert first == second
+        assert first.is_dir()
 
 
 class TestUnknownMemoryError:
