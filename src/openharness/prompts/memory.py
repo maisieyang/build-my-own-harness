@@ -1,30 +1,9 @@
-"""CC-style memory write rules for the system prompt — P16-T1 (D36.10).
+"""Typed project-memory rules injected into the system prompt.
 
-This module provides the **memory write rules section** that tells the
-LLM (a) what kinds of facts deserve durable memory, (b) when NOT to
-save, and (c) the two-step write contract (Write the ``.md`` body THEN
-Edit MEMORY.md index). The section is injected by
-:func:`openharness.prompts.system.build_system_prompt` when the caller
-opts in via the ``memory_dir`` kwarg.
-
-The rules section is **separate** from :mod:`prompts.memory_inject`,
-which renders the actual MEMORY.md content as the ``## Memory``
-section. This split matches CC's mental model: rules tell the LLM
-*how to use* memory; the index tells the LLM *what exists*. Different
-audiences, different sections.
-
-Per boundary D36.10:
-
-- No project-specific names (no "OpenHarness" / "oh" / service names).
-  The section needs to be reusable across projects.
-- The ``<memory_dir>`` path is interpolated at format-time so the LLM
-  sees the actual filesystem location.
-- The two-step contract ("Write the file, then Edit MEMORY.md") is
-  emphasized as the canonical write pattern.
-- ``[[slug]]`` syntax is documented as a prompt-level convention; the
-  harness does NOT parse links (D36.14).
-- The 200-line MEMORY.md cap (D36.8) is mentioned so the LLM keeps
-  index entries terse.
+The model owns semantic decisions: what deserves durable memory, which
+category fits, and when an existing fact is stale. Typed Memory tools own
+storage paths, validation, atomic persistence, and the generated discovery
+index. The private control-plane directory is never exposed in the prompt.
 """
 
 from __future__ import annotations
@@ -37,9 +16,9 @@ if TYPE_CHECKING:
 _MEMORY_RULES_TEMPLATE = """\
 ## Memory
 
-You have a persistent, file-based memory system at `{memory_dir}/`.
-This directory already exists — write to it directly with the Write tool \
-(do not run mkdir or check for its existence).
+You have a persistent project memory system managed through typed Memory tools.
+Storage paths, file creation, deduplication, and index maintenance belong to the
+runtime. Do not use general filesystem tools to create or modify memory records.
 
 You should build up this memory system over time so that future \
 conversations can have a complete picture of who the user is, how they'd \
@@ -86,47 +65,21 @@ These exclusions apply even when the user explicitly asks you to save. \
 If they ask you to save a PR list or activity summary, ask what was \
 *surprising* or *non-obvious* about it — that is the part worth keeping.
 
-### How to save memories (two-step)
+### Memory tools
 
-**Step 1** — write the memory to its own file (e.g., \
-`{memory_dir}/user_role.md`) using this frontmatter format:
+- Use `MemoryList` to inspect the complete catalog when the injected index is
+  insufficient.
+- Use `MemoryShow` to load the full body of a relevant memory.
+- Use `MemoryUpsert` to create a new memory or replace an existing memory with
+  the same stable name. The root session owns memory mutation.
+- Use `MemoryDelete` when the user asks you to forget something or when a
+  stored fact is demonstrably stale. The root session owns deletion.
 
-```markdown
----
-name: short-kebab-case-slug
-description: one-line summary — used to decide relevance in future conversations, so be specific
-metadata:
-  type: user | feedback | project | reference
----
-
-<memory content — for feedback/project types, structure as: rule/fact, \
-then **Why:** and **How to apply:** lines. Link related memories with \
-[[their-name]].>
-```
-
-**Step 2** — add a pointer to that file in `{memory_dir}/MEMORY.md`. \
-MEMORY.md is an index, not a memory — each entry should be one line, \
-under ~150 characters: `- [Title](file.md) — one-line hook`. It has no \
-frontmatter. Never write memory content directly into MEMORY.md.
-
-Use `Edit` on MEMORY.md to append the new entry — do NOT `Write` over \
-MEMORY.md (that would overwrite existing entries). The only time `Write` \
-is appropriate for MEMORY.md is when the file does not exist yet.
-
-In the memory body, link to related memories with `[[name]]`, where \
-`name` is the other memory's `name:` slug. Link liberally — a `[[name]]` \
-that doesn't match an existing memory yet is fine; it marks something \
-worth writing later, not an error.
-
-- `MEMORY.md` is loaded into your context at the start of every \
-conversation (see the `## Memory Index` section below). Lines after 200 \
-will be truncated, so keep the index concise.
-- Keep the name, description, and type fields in memory files up-to-date \
-with the content.
-- Organize memory semantically by topic, not chronologically.
-- Update or remove memories that turn out to be wrong or outdated.
-- Do not write duplicate memories. First check if there is an existing \
-memory you can update (look at the index) before writing a new one.
+The `Memory Index` below is a generated discovery view, not a file for you to
+maintain. At most 200 entries are injected; use `MemoryList` for the full
+catalog. Keep names stable, descriptions concise, and organize memories by
+topic rather than chronology. Check for an existing memory before creating a
+new one.
 
 ### When to access memories
 
@@ -144,14 +97,14 @@ memory rather than acting on it."""
 
 
 def format_memory_rules_section(memory_dir: Path) -> str:
-    """Render the memory write rules section with the given memory_dir.
+    """Render the typed memory rules section.
 
     The returned string is a single ``## Memory`` Markdown section
     suitable for direct inclusion in :func:`build_system_prompt`'s
     section assembly.
 
-    ``memory_dir`` is interpolated as the literal path the LLM should
-    write to. Caller is responsible for resolving to an absolute path
-    (typically via :func:`openharness.memory.paths.get_project_memory_dir`).
+    ``memory_dir`` remains an enablement marker for the existing prompt API;
+    the private control-plane path is deliberately not exposed to the model.
     """
-    return _MEMORY_RULES_TEMPLATE.format(memory_dir=memory_dir)
+    del memory_dir
+    return _MEMORY_RULES_TEMPLATE

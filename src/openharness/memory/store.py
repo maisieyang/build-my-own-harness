@@ -36,6 +36,13 @@ from openharness.markdown_store import EmptyMarkdownStore, FilesystemMarkdownSto
 from openharness.memory.model import Memory, MemoryScope, parse_memory
 
 
+def _parse_memory_document(path: Path) -> Memory | None:
+    """Parse durable records while excluding the generated index view."""
+    if path.name == "MEMORY.md":
+        return None
+    return parse_memory(path)
+
+
 class MemoryStore(Protocol):
     """Discovery + lookup contract the rest of the harness consumes.
 
@@ -114,10 +121,71 @@ class FilesystemMemoryStore(FilesystemMarkdownStore[Memory]):
         super().__init__(
             global_dir=None,
             project_dir=project_dir,
-            parser=parse_memory,
+            parser=_parse_memory_document,
             log_event_prefix="memory",
         )
         self._memory_project_dir = project_dir
+
+    @property
+    def project_dir(self) -> Path:
+        """Harness-owned directory backing this project memory store."""
+        return self._memory_project_dir
+
+    def upsert_memory(self, memory: Memory) -> Path:
+        """Create or replace one named memory and refresh the generated index.
+
+        Unlike the legacy signature-dedup writer, the model-facing operation is
+        a true upsert by stable ``name``.  A changed body therefore replaces the
+        same record instead of creating a suffixed duplicate.
+        """
+        target_dir = self._target_dir_for_scope(memory.scope)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        existing = self._find_by_name(memory.name, target_dir)
+        target_path = existing or target_dir / f"{memory.name}.md"
+        _atomic_write(target_path, _render_memory_markdown(memory))
+        self._cache = None
+        self._refresh_generated_index()
+        return target_path
+
+    def delete_memory(self, name: str) -> bool:
+        """Delete a named memory and refresh the generated index."""
+        self._cache = None
+        memory = self.discover().get(name)
+        if memory is None:
+            return False
+        try:
+            memory.source_path.resolve().relative_to(self._memory_project_dir.resolve())
+        except ValueError:
+            raise ValueError("memory source escaped the project memory directory") from None
+        memory.source_path.unlink()
+        self._cache = None
+        self._refresh_generated_index()
+        return True
+
+    def render_index(self, *, max_entries: int | None = None) -> str:
+        """Render the authoritative one-line catalog injected into prompts."""
+        entries: list[str] = []
+        memories = sorted(self.discover().values(), key=lambda item: item.name)
+        if max_entries is not None:
+            memories = memories[:max_entries]
+        for memory in memories:
+            description = " ".join(memory.description.split())
+            relative = memory.source_path.relative_to(self._memory_project_dir)
+            entries.append(f"- [{memory.name}]({relative.as_posix()}) — {description}")
+        return "\n".join(entries)
+
+    def _find_by_name(self, name: str, target_dir: Path) -> Path | None:
+        if not target_dir.is_dir():
+            return None
+        for path in sorted(target_dir.glob("*.md")):
+            memory = _parse_memory_document(path)
+            if memory is not None and memory.name == name:
+                return path
+        return None
+
+    def _refresh_generated_index(self) -> None:
+        self._memory_project_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_write(self._memory_project_dir / "MEMORY.md", self.render_index())
 
     def add_or_update(self, memory: Memory) -> Path:
         """Write ``memory`` to disk via signature dedup — P11-T4.4a.

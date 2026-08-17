@@ -2,36 +2,28 @@
   "case_id": "M5-warm-preference",
   "model": "qwen3.7-max",
   "kind": "memory_decision_infer",
-  "recorded_at": "2026-06-05T10:10:57.488441+00:00",
+  "recorded_at": "2026-08-17T04:42:43.790460+00:00",
   "request_summary": "[warm-start] I prefer code reviews that quote the exact diff instead of summarizing it. ",
   "response": {
     "tool_uses": [
       {
-        "name": "Read",
-        "id": "call_6d7dc049036d4fb282246a80",
+        "name": "MemoryUpsert",
+        "id": "call_8ed852f4329448c883c79502",
         "input": {
-          "file_path": "/tmp/oh_eval_memory_decision/M5-warm-preference/MEMORY.md"
-        }
-      },
-      {
-        "name": "Write",
-        "id": "call_620b1485adf64c7a91cf6598",
-        "input": {
-          "file_path": "/tmp/oh_eval_memory_decision/M5-warm-preference/feedback_code_review_exact_diff.md",
-          "content": "---\nname: code-review-exact-diff\ndescription: When reviewing code, quote the exact diff lines instead of summarizing changes\nmetadata:\n  type: feedback\n---\n\nWhen performing code reviews, always quote the exact diff (the relevant `+`/`-` lines from the changeset) inline with comments, rather than paraphrasing or summarizing what changed.\n\n**Why:** The user prefers to see the precise code being discussed so they don't have to cross-reference the original diff. It makes feedback concrete and unambiguous.\n\n**How to apply:** In any code review, paste the specific lines from the diff next to each comment or suggestion. Avoid vague references like \"the change to the auth function\" — instead, show the exact added/removed lines.\n"
-        }
-      },
-      {
-        "name": "Edit",
-        "id": "call_06595bf15ac54859afefd7d6",
-        "input": {
-          "file_path": "/tmp/oh_eval_memory_decision/M5-warm-preference/MEMORY.md",
-          "old_string": "- [Build dir Linear project](linear-build-tracking.md) — infra bugs in Linear project BUILD",
-          "new_string": "- [Code review exact diff](feedback_code_review_exact_diff.md) — quote exact diff lines in reviews, don't summarize"
+          "name": "code-review-style",
+          "description": "User prefers code reviews that quote exact diff lines rather than summarizing changes",
+          "type": "feedback",
+          "body": "When performing code reviews, always quote the exact diff lines being discussed instead of paraphrasing or summarizing the changes. This gives precise context and avoids ambiguity about what is being reviewed."
         }
       }
     ],
-    "text": "Got it — I'll make sure to quote the exact diff lines inline when reviewing code, so you can see precisely what's being discussed without having to cross-reference. Saved this for future sessions.",
-    "turn_count": 4
+    "text": "Got it. I'll quote the exact diff lines in code reviews going forward instead of summarizing them.",
+    "turn_count": 2,
+    "persisted_names": [
+      "code-review-style",
+      "code-style-line-width",
+      "linear-build-tracking",
+      "test-runner-command"
+    ]
   }
 }

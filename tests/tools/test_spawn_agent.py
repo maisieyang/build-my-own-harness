@@ -26,9 +26,15 @@ import pytest
 from engine.conftest import _StubApiClient
 from openharness.engine.context import QueryContext
 from openharness.execution import BoundaryVerification, EnforcedBoundary, ExecutionEffect
+from openharness.memory import FilesystemMemoryStore
 from openharness.permissions import PermissionRuntime, workspace_runtime_profile
 from openharness.protocols import ApiMessageCompleteEvent
-from openharness.tools import SpawnAgent, SpawnAgentInput, ToolRegistry
+from openharness.tools import (
+    SpawnAgent,
+    SpawnAgentInput,
+    ToolRegistry,
+    register_memory_tools,
+)
 from openharness.tools.base import ToolExecutionContext
 
 if TYPE_CHECKING:
@@ -277,12 +283,44 @@ class TestSpawnAgentHappyPath:
 
         assert captured[0].max_turns == 73
 
-    async def test_g0_sub_agent_inherits_verified_permission_runtime(
+    async def test_sub_agent_memory_surface_is_read_only(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Pin the delegated-runtime coverage path before G7 tightens it."""
+        parent_ctx = _make_parent_context(events_per_turn=[], tmp_path=tmp_path)
+        registry = ToolRegistry()
+        register_memory_tools(registry, FilesystemMemoryStore(project_dir=tmp_path / "memory"))
+        parent_ctx = dataclasses.replace(parent_ctx, tool_registry=registry)
+        captured: list[QueryContext] = []
+
+        async def _capture_context(
+            messages: list[ConversationMessage],
+            context: QueryContext,
+        ) -> AsyncIterator[ApiStreamEvent]:
+            del messages
+            captured.append(context)
+            yield _end_turn_with_text("ok")
+
+        monkeypatch.setattr("openharness.tools.spawn_agent.run_query", _capture_context)
+
+        result = await SpawnAgent().execute(
+            SpawnAgentInput(description="inspect memory", prompt="inspect memory"),
+            ToolExecutionContext(cwd=tmp_path, parent_query=parent_ctx),
+        )
+
+        assert result.is_error is False
+        assert [tool.name for tool in captured[0].tool_registry.list_tools()] == [
+            "MemoryList",
+            "MemoryShow",
+        ]
+
+    async def test_sub_agent_inherits_permission_policy_but_not_mutable_runtime(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A child shares policy/boundary, never the parent's mutable ledger."""
         profile = workspace_runtime_profile()
         boundary = EnforcedBoundary(
             profile_fingerprint=profile.fingerprint,
@@ -307,6 +345,7 @@ class TestSpawnAgentHappyPath:
             runtime_permission_profile=profile,
             enforced_boundary=boundary,
             permission_runtime=runtime,
+            snapshot_enabled=True,
         )
         captured: list[QueryContext] = []
 
@@ -328,11 +367,18 @@ class TestSpawnAgentHappyPath:
         assert result.is_error is False
         assert len(captured) == 1
         child = captured[0]
-        assert child.tool_registry is parent_ctx.tool_registry
+        assert child.tool_registry is not parent_ctx.tool_registry
+        assert child.tool_registry.list_tools() == parent_ctx.tool_registry.list_tools()
         assert child.sandbox_session is sandbox_session
         assert child.runtime_permission_profile is profile
         assert child.enforced_boundary is boundary
-        assert child.permission_runtime is runtime
+        assert child.permission_runtime is not runtime
+        assert child.permission_runtime is not None
+        assert child.permission_runtime.profile is runtime.profile
+        assert child.permission_runtime.boundary is runtime.boundary
+        assert child.permission_runtime.reviewer is runtime.reviewer
+        assert child.permission_runtime.parked_request is None
+        assert child.snapshot_enabled is False
 
     async def test_sub_agent_system_prompt_override(self, tmp_path: Path) -> None:
         parent_ctx = _make_parent_context(

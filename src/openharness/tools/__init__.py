@@ -32,6 +32,17 @@ from openharness.tools.bash import Bash
 from openharness.tools.edit import Edit
 from openharness.tools.grep import Grep
 from openharness.tools.load_skill import LoadSkillInput, LoadSkillTool
+from openharness.tools.memory import (
+    MemoryDeleteInput,
+    MemoryDeleteTool,
+    MemoryListInput,
+    MemoryListTool,
+    MemoryShowInput,
+    MemoryShowTool,
+    MemoryUpsertInput,
+    MemoryUpsertTool,
+    register_memory_tools,
+)
 from openharness.tools.read import Read
 from openharness.tools.spawn_agent import SpawnAgent, SpawnAgentInput
 from openharness.tools.write import Write
@@ -71,6 +82,14 @@ __all__ = [
     "Grep",
     "LoadSkillInput",
     "LoadSkillTool",
+    "MemoryDeleteInput",
+    "MemoryDeleteTool",
+    "MemoryListInput",
+    "MemoryListTool",
+    "MemoryShowInput",
+    "MemoryShowTool",
+    "MemoryUpsertInput",
+    "MemoryUpsertTool",
     "Read",
     "SpawnAgent",
     "SpawnAgentInput",
@@ -80,4 +99,5 @@ __all__ = [
     "TrustedControlSurface",
     "Write",
     "create_default_tool_registry",
+    "register_memory_tools",
 ]

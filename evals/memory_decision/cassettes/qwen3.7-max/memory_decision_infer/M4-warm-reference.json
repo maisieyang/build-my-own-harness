@@ -2,43 +2,28 @@
   "case_id": "M4-warm-reference",
   "model": "qwen3.7-max",
   "kind": "memory_decision_infer",
-  "recorded_at": "2026-06-05T10:10:40.894278+00:00",
+  "recorded_at": "2026-08-17T04:42:39.878635+00:00",
   "request_summary": "[warm-start] Pipeline bugs go in the Linear project INGEST. ",
   "response": {
     "tool_uses": [
       {
-        "name": "Read",
-        "id": "call_1a16148731a6490cac0afc0f",
+        "name": "MemoryUpsert",
+        "id": "call_8eb4aa7d9aba487a92e268a7",
         "input": {
-          "file_path": "/tmp/oh_eval_memory_decision/M4-warm-reference/linear-build-tracking.md"
-        }
-      },
-      {
-        "name": "Read",
-        "id": "call_4f39acf1e4514b93910168b7",
-        "input": {
-          "file_path": "/tmp/oh_eval_memory_decision/M4-warm-reference/MEMORY.md"
-        }
-      },
-      {
-        "name": "Write",
-        "id": "call_004f58176d994c8e983b7fcb",
-        "input": {
-          "file_path": "/tmp/oh_eval_memory_decision/M4-warm-reference/pipeline-bugs-linear.md",
-          "content": "---\nname: pipeline-bugs-linear\ndescription: Pipeline bugs tracked in Linear project INGEST\nmetadata:\n  type: reference\n---\n\nPipeline bugs go in Linear project INGEST.\n"
-        }
-      },
-      {
-        "name": "Edit",
-        "id": "call_72a1fd080f1548bc8a088897",
-        "input": {
-          "file_path": "/tmp/oh_eval_memory_decision/M4-warm-reference/MEMORY.md",
-          "old_string": "- [Build dir Linear project](linear-build-tracking.md) — infra bugs in Linear project BUILD",
-          "new_string": "- [Build dir Linear project](linear-build-tracking.md) — infra bugs in Linear project BUILD\n- [Pipeline bugs Linear](pipeline-bugs-linear.md) — pipeline bugs in Linear project INGEST"
+          "name": "linear-pipeline-bugs",
+          "description": "Pipeline bugs are tracked in Linear project INGEST",
+          "type": "reference",
+          "body": "Pipeline-related bugs should be filed in the Linear project INGEST. This is distinct from infra bugs, which go in BUILD."
         }
       }
     ],
-    "text": "Saved. Pipeline bugs will be tracked in Linear project INGEST.",
-    "turn_count": 4
+    "text": "Got it. I've saved that pipeline bugs should be tracked in the Linear project INGEST.",
+    "turn_count": 2,
+    "persisted_names": [
+      "code-style-line-width",
+      "linear-build-tracking",
+      "linear-pipeline-bugs",
+      "test-runner-command"
+    ]
   }
 }

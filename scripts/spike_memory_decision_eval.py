@@ -1,4 +1,4 @@
-"""memory_decision eval — Phase 16 T3 entry script (D35.5 P0 gating eval).
+"""Legacy script entry for the typed memory_decision eval.
 
 Drives the memory_decision substrate (Sample loader, infer call,
 scorers, runner) over ``evals/memory_decision/dataset.yaml`` against
@@ -31,11 +31,10 @@ from openharness.eval.cassette import CassetteMode, CassetteStore
 from openharness.eval.manual import resolve_manual_case_id, resolve_manual_cassette_mode
 from openharness.eval.memory_decision import run_memory_decision_eval
 from openharness.eval.memory_decision_scorers import (
-    FrontmatterValidScorer,
-    IndexUpdateScorer,
     JudgmentScorer,
     MemoryTypeLLMJudgeScorer,
-    NoDestructiveOverwriteScorer,
+    PayloadValidScorer,
+    PersistenceIntegrityScorer,
 )
 
 
@@ -62,9 +61,8 @@ async def main() -> None:
 
     scorers = [
         JudgmentScorer(),
-        FrontmatterValidScorer(),
-        IndexUpdateScorer(),
-        NoDestructiveOverwriteScorer(),
+        PayloadValidScorer(),
+        PersistenceIntegrityScorer(),
         MemoryTypeLLMJudgeScorer(
             api_client=client,
             model=model,
@@ -73,7 +71,7 @@ async def main() -> None:
         ),
     ]
 
-    print("# memory_decision eval — Phase 16 T3 (D35.5 P0 gating eval)")
+    print("# memory_decision eval — typed durable-memory contract")
     print(f"# model:         {model}")
     print(f"# dataset:       {dataset_path.relative_to(project_root)}")
     print(f"# cassettes:     {cassette_root.relative_to(project_root)}")

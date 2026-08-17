@@ -2,7 +2,7 @@
   "case_id": "M5-warm-preference",
   "model": "qwen3.7-max",
   "kind": "judge_M-judge-preference",
-  "recorded_at": "2026-06-05T10:11:01.834632+00:00",
+  "recorded_at": "2026-08-17T04:42:45.007227+00:00",
   "request_summary": "User message:\nI prefer code reviews that quote the exact diff instead of summarizing it.\n\n\nExpected baseline type: 'feedback'\nModel's chosen type: 'feedback'\n\nApply the rubric. Output the JSON object.",
-  "response": "{\"reason\": \"The user message expresses a clear preference for how code reviews should be conducted, which qualifies as guidance about behavior and is correctly classified as 'feedback'.\", \"score\": 1}"
+  "response": "{\"reason\": \"The message expresses a preference about how code reviews should be conducted, which is guidance on the model's behavior and thus correctly classified as feedback.\", \"score\": 1}"
 }

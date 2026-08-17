@@ -1,4 +1,4 @@
-"""Memory subsystem — Phase 10 (read path only).
+"""Typed durable project-memory subsystem.
 
 Per ``decisions/25-phase-10-boundary.md``:
 
@@ -14,8 +14,9 @@ Per ``decisions/25-phase-10-boundary.md``:
 - D28.9: Phase 10 had **no agent write path** — memories were
   created by manual filesystem edits. Phase 11 added the
   ``extract_memories_from_turn`` secondary LLM pass; Phase 16
-  D36.10/D36.11 made the main LLM the writer via Write + Edit
-  tools; Phase 17 D37.3 retired the Phase 11 secondary pass.
+  D36.10/D36.11 made the main LLM the semantic writer. The current
+  implementation exposes narrow typed operations while the harness owns
+  persistence and the generated discovery index.
 
 Phase 10 tasks:
 
@@ -51,7 +52,7 @@ from openharness.memory.model import (
     compute_memory_signature,
     parse_memory,
 )
-from openharness.memory.paths import get_project_memory_dir
+from openharness.memory.paths import ensure_project_memory_dir, get_project_memory_dir
 from openharness.memory.store import (
     EmptyMemoryStore,
     FilesystemMemoryStore,
@@ -76,6 +77,7 @@ __all__ = [
     "MemoryType",
     "UnknownMemoryError",
     "compute_memory_signature",
+    "ensure_project_memory_dir",
     "get_project_memory_dir",
     "parse_memory",
 ]

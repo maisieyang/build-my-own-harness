@@ -241,6 +241,7 @@ def _memory_decision_case_result_to_dict(
                 {"name": t.name, "input": dict(t.input)} for t in result.output.tool_uses
             ],
             "text": result.output.text,
+            "persisted_names": list(result.output.persisted_names),
         },
         "scores": [_score_to_dict(s) for s in result.scores],
     }

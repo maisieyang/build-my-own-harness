@@ -2,7 +2,7 @@
   "case_id": "M2-cold-project-state",
   "model": "qwen3.7-max",
   "kind": "judge_M-judge-project",
-  "recorded_at": "2026-06-05T10:10:00.237250+00:00",
+  "recorded_at": "2026-08-17T04:42:33.518509+00:00",
   "request_summary": "User message:\nWe're freezing all non-critical merges after 2026-06-11 (next Thursday) — mobile team is cutting a release branch.\n\n\nExpected baseline type: 'project'\nModel's chosen type: 'project'\n\nApp",
-  "response": "{\"reason\": \"The message clearly conveys project state regarding a merge freeze and release branch, making 'project' the correct and defensible type.\", \"score\": 1}"
+  "response": "{\"reason\": \"The message conveys a project deadline and release branch decision, which correctly falls under the 'project' type.\", \"score\": 1}"
 }

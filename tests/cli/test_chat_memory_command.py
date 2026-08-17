@@ -96,6 +96,7 @@ class TestMemoryBuiltinEmpty:
         assert "(memory dir:" in result.stdout
         assert str(_project_memory_dir()) in result.stdout
         assert "(no memories yet)" in result.stdout
+        assert _project_memory_dir().is_dir()
 
     def test_memory_subsystem_disabled_message(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # --no-enable-memory flips the memory_store wiring off → /memory

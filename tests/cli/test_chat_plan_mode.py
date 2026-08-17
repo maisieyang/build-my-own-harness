@@ -135,7 +135,12 @@ class TestEnterPlanMode:
         assert len(contexts) == 1
         ctx = contexts[0]
         # The model-facing registry is capability-shaped, not permission-overlaid.
-        assert [tool.name for tool in ctx.tool_registry.list_tools()] == ["Read", "Grep"]
+        assert [tool.name for tool in ctx.tool_registry.list_tools()] == [
+            "Read",
+            "Grep",
+            "MemoryList",
+            "MemoryShow",
+        ]
         assert ctx.dispatch_tool_registry is not None
         assert {tool.name for tool in ctx.dispatch_tool_registry.list_tools()} >= {
             "Write",
@@ -176,7 +181,12 @@ class TestEnterPlanMode:
         assert result.exit_code == 0
         assert "plan mode" in result.stdout
         assert len(contexts) == 1
-        assert [tool.name for tool in contexts[0].tool_registry.list_tools()] == ["Read", "Grep"]
+        assert [tool.name for tool in contexts[0].tool_registry.list_tools()] == [
+            "Read",
+            "Grep",
+            "MemoryList",
+            "MemoryShow",
+        ]
         text = "".join(b.text for b in messages[0][-1].content if isinstance(b, TextBlock))
         assert text == "explore the approval behavior"
         assert "plan mode" in contexts[0].system_prompt.lower()

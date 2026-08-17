@@ -1,11 +1,7 @@
-"""End-to-end integration for the memory subsystem — P10-T6.6b.
+"""End-to-end integration for typed durable project memory.
 
-Hand-write a memory file → run ``oh ask`` with a query that matches
-the memory → assert the system prompt contains the injected memory
-sections AND that ``use_count`` is incremented atomically on disk.
-
-This closes the loop on Phase 10's contract: read path + relevance
-scoring + atomic usage tracking + prompt injection all wire together.
+Seed a typed record → run the private non-interactive entry → assert the
+runtime-generated catalog and typed Memory tools reach the query context.
 
 The test stubs out the LLM client (so no API calls) and intercepts
 ``run_query`` so we can inspect the ``QueryContext.system_prompt``
@@ -127,29 +123,9 @@ class TestMemoryE2E:
     def test_query_match_injects_memory_into_system_prompt(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Phase 16 (D36.11) supersedes Phase 10's body auto-injection.
-
-        New contract: ``oh ask`` injects the ``## Memory`` rules block
-        plus the ``### Memory Index`` from MEMORY.md. The LLM is then
-        expected to issue a ``Read`` tool call for the memory file
-        whose hook matches the query (rather than the harness pre-
-        loading the body). This test now seeds **both** the memory
-        ``.md`` file and a MEMORY.md index pointing at it, then verifies
-        the new section flow.
-        """
-        from pathlib import Path
-
+        """The generated catalog exposes hooks, not full memory bodies."""
         captured = _seed_env_and_stub(monkeypatch)
         _seed_stripe_memory()
-        # P16-T1: seed the MEMORY.md index so it gets injected (without
-        # an index, the new path emits the empty-placeholder).
-        memory_dir = get_project_memory_dir(Path.cwd())
-        (memory_dir / "MEMORY.md").write_text(
-            "# Memory index\n\n"
-            "- [Stripe SDK version](stripe-sdk-version.md) — pin 8.x + "
-            "legacy refund API\n",
-            encoding="utf-8",
-        )
 
         runner = CliRunner()
         result = runner.invoke(cli_module.headless_app, ["run", "how do I issue a stripe refund"])
@@ -160,9 +136,10 @@ class TestMemoryE2E:
         # New ## Memory section with rules block present
         assert "## Memory" in prompt
         assert "You have a persistent" in prompt
-        # ### Memory Index section with the seeded entry
+        # The index is derived from typed records; no hand-maintained
+        # MEMORY.md is required.
         assert "### Memory Index" in prompt
-        assert "[Stripe SDK version](stripe-sdk-version.md)" in prompt
+        assert "[stripe-sdk-version](stripe-sdk-version.md)" in prompt
         # Memory body is NOT auto-injected anymore — LLM expected to
         # Read it on demand. Verify the legacy ## Relevant Memories
         # section is gone.
@@ -209,22 +186,24 @@ class TestMemoryE2E:
         assert reparsed is not None
         assert reparsed.use_count == 0
 
-    def test_memory_md_entrypoint_injected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_handwritten_index_does_not_override_generated_catalog(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from pathlib import Path
 
         captured = _seed_env_and_stub(monkeypatch)
+        _seed_stripe_memory()
         memory_dir = get_project_memory_dir(Path.cwd())
-        memory_dir.mkdir(parents=True, exist_ok=True)
-        (memory_dir / "MEMORY.md").write_text("- [stripe-sdk-version](stripe-sdk-version.md)\n")
+        (memory_dir / "MEMORY.md").write_text("- [stale](missing.md)\n")
 
         runner = CliRunner()
         result = runner.invoke(cli_module.headless_app, ["run", "anything"])
 
         assert result.exit_code == 0
         prompt = captured.context.system_prompt  # type: ignore[attr-defined]
-        # MEMORY.md content gets its own ## Memory section
         assert "## Memory" in prompt
         assert "- [stripe-sdk-version]" in prompt
+        assert "- [stale]" not in prompt
 
     def test_claude_md_cascade_injected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from pathlib import Path

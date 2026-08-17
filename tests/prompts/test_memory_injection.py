@@ -55,9 +55,9 @@ class TestMemoryRulesSection:
         rules = format_memory_rules_section(Path("/tmp/m"))
         assert rules.startswith("## Memory")
 
-    def test_memory_dir_path_interpolated(self) -> None:
+    def test_private_storage_path_is_not_exposed(self) -> None:
         rules = format_memory_rules_section(Path("/Users/alice/.oh/memory/proj-abc"))
-        assert "/Users/alice/.oh/memory/proj-abc" in rules
+        assert "/Users/alice/.oh/memory/proj-abc" not in rules
 
     def test_no_project_specific_names(self) -> None:
         """D36.10 invariant: section must be reusable across projects.
@@ -73,17 +73,16 @@ class TestMemoryRulesSection:
         for kind in ("user", "feedback", "project", "reference"):
             assert f"**{kind}**" in rules, f"type {kind!r} missing"
 
-    def test_two_step_save_contract(self) -> None:
+    def test_typed_memory_tool_contract(self) -> None:
         rules = format_memory_rules_section(Path("/tmp/m"))
-        assert "Step 1" in rules
-        assert "Step 2" in rules
-        # MEMORY.md uses Edit, not Write — explicit per D36.10
-        assert "Edit" in rules
-        assert "do NOT `Write` over MEMORY.md" in rules
+        for tool in ("MemoryList", "MemoryShow", "MemoryUpsert", "MemoryDelete"):
+            assert tool in rules
+        assert "Write tool" not in rules
+        assert "Edit MEMORY.md" not in rules
 
-    def test_slug_syntax_documented(self) -> None:
+    def test_root_session_owns_memory_mutation(self) -> None:
         rules = format_memory_rules_section(Path("/tmp/m"))
-        assert "[[name]]" in rules
+        assert "root session" in rules
 
     def test_two_hundred_line_cap_mentioned(self) -> None:
         rules = format_memory_rules_section(Path("/tmp/m"))

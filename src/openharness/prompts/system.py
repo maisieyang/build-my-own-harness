@@ -148,16 +148,13 @@ def build_system_prompt(
       substitution when external info is requested but web tools
       are not registered).
 
-    **P16-T1 (D36.10/D36.11)** adds two more kwargs for the Claude-Code-
-    style memory architecture pivot:
+    The durable-memory path adds two more kwargs:
 
     - ``memory_dir``: when set, emit a ``## Memory`` section containing
-      the CC-style write rules (from :mod:`prompts.memory`) followed by
-      a ``### Memory Index`` subsection with the MEMORY.md content (or
-      empty placeholder).
-    - ``memory_index_content``: the MEMORY.md text (already truncated
-      to first 200 lines by caller per D36.8). ``None`` or empty →
-      placeholder text "MEMORY.md is empty — no memories yet".
+      typed Memory rules (from :mod:`prompts.memory`) followed by a
+      ``### Memory Index`` discovery view.
+    - ``memory_index_content``: the runtime-generated index text, capped
+      by the caller. ``None`` or empty emits an explicit placeholder.
 
     ``memory_dir`` and the legacy ``memory_manifest`` are **mutually
     exclusive section sources** for the ``## Memory`` slot: when
@@ -289,13 +286,11 @@ def _format_web_disabled_section() -> str:
 
 
 def _format_combined_memory_section(memory_dir: Path, memory_index_content: str | None) -> str:
-    """Render the CC-style ``## Memory`` section — rules + index — per D36.10.
+    """Render the typed ``## Memory`` section: rules plus discovery index.
 
     The rules section (from :func:`prompts.memory.format_memory_rules_section`)
-    starts with ``## Memory`` and contains the write contract / type
-    definitions / "DO save when" + "DO NOT save" / `[[slug]]` syntax /
-    200-line cap notes. The MEMORY.md index content is appended as a
-    ``### Memory Index`` subsection at the end of the section.
+    starts with ``## Memory`` and contains the semantic policy plus typed
+    tool contract. The generated index is appended as a discovery view.
 
     Empty / None ``memory_index_content`` → render
     :data:`_EMPTY_INDEX_PLACEHOLDER` so the LLM sees that the index

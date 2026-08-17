@@ -1,13 +1,11 @@
 # memory_decision eval dataset — decision surface #4 (inline decision)
 #
-# 6 capability-anchored samples probing the LLM's ability to do the
-# Claude-Code-style memory write pattern as a single inline tool-call
+# 6 capability-anchored samples probing the LLM's typed durable-memory
 # decision:
 #
-#   user msg → (system prompt = CC memory rules + MEMORY.md index)
-#            → model emits Write(.md frontmatter) + Edit(MEMORY.md)
-#              tool_use blocks inline, OR correctly skips when input
-#              is not memory-worthy.
+#   user msg → (production typed-memory rules + generated index)
+#            → model emits MemoryUpsert, OR correctly skips when
+#              input is not memory-worthy.
 #
 # See dataset_card.md for the three-claim header (D35.3) + per-shape
 # fixture rationale + per-rubric coverage.
@@ -35,11 +33,9 @@ samples:
     expected_memory_type: feedback
     pre_populated_files: {}
     notes: |
-      Stable user preference, cold-start. Model should Write a new .md
-      with valid frontmatter + Write the empty MEMORY.md with one
-      pointer line (cold-start: Write OK; Edit on non-existent file
-      would fail). Type defensible as ``user`` OR ``feedback`` per
-      rubric (taxonomy overlap region).
+      Stable user preference, cold-start. Model should call
+      MemoryUpsert with a complete typed payload. Type is defensible as
+      ``user`` OR ``feedback`` per rubric (taxonomy overlap region).
 
   # ===== M2 — Cold-start: project state =====
   - case_id: M2-cold-project-state
@@ -61,7 +57,7 @@ samples:
       instead of writing, which made the result unattributable
       between dataset bug and model failure).
 
-  # ===== M3 — Warm-start: correction (Edit MEMORY.md required) =====
+  # ===== M3 — Warm-start: correction =====
   - case_id: M3-warm-correction
     capability: M-judge-correction
     shape: warm-start
@@ -70,12 +66,6 @@ samples:
     expect_write: true
     expected_memory_type: feedback
     pre_populated_files:
-      MEMORY.md: |
-        # Memory index
-
-        - [Code style 80 chars](code-style-line-width.md) — wrap code at 80 chars max
-        - [Test runner command](test-runner-command.md) — tests run via `uv run pytest -q`
-        - [Build dir Linear project](linear-build-tracking.md) — infra bugs in Linear project BUILD
       code-style-line-width.md: |
         ---
         name: code-style-line-width
@@ -104,13 +94,11 @@ samples:
 
         Infra bugs go in Linear project BUILD.
     notes: |
-      Warm-start: 3 entries already in MEMORY.md. Canonical "Edit
-      MEMORY.md to append" scenario. If model Writes MEMORY.md without
-      preserving the 3 anchors, NoDestructiveOverwriteScorer catches
-      it. If model writes the .md but skips MEMORY.md entirely,
-      IndexUpdateScorer catches the drift.
+      Warm-start with three existing records. The typed operation must
+      add the correction without dropping any seed; the harness owns
+      index regeneration.
 
-  # ===== M4 — Warm-start: reference (Edit MEMORY.md required) =====
+  # ===== M4 — Warm-start: reference =====
   - case_id: M4-warm-reference
     capability: M-judge-reference
     shape: warm-start
@@ -119,12 +107,6 @@ samples:
     expect_write: true
     expected_memory_type: reference
     pre_populated_files:
-      MEMORY.md: |
-        # Memory index
-
-        - [Code style 80 chars](code-style-line-width.md) — wrap code at 80 chars max
-        - [Test runner command](test-runner-command.md) — tests run via `uv run pytest -q`
-        - [Build dir Linear project](linear-build-tracking.md) — infra bugs in Linear project BUILD
       code-style-line-width.md: |
         ---
         name: code-style-line-width
@@ -158,7 +140,7 @@ samples:
       recognize the difference (INGEST ≠ BUILD) and add a new entry
       rather than incorrectly assuming the existing one covers it.
 
-  # ===== M5 — Warm-start: preference (Edit MEMORY.md required) =====
+  # ===== M5 — Warm-start: preference =====
   - case_id: M5-warm-preference
     capability: M-judge-preference
     shape: warm-start
@@ -167,12 +149,6 @@ samples:
     expect_write: true
     expected_memory_type: feedback
     pre_populated_files:
-      MEMORY.md: |
-        # Memory index
-
-        - [Code style 80 chars](code-style-line-width.md) — wrap code at 80 chars max
-        - [Test runner command](test-runner-command.md) — tests run via `uv run pytest -q`
-        - [Build dir Linear project](linear-build-tracking.md) — infra bugs in Linear project BUILD
       code-style-line-width.md: |
         ---
         name: code-style-line-width
@@ -202,10 +178,7 @@ samples:
         Infra bugs go in Linear project BUILD.
     notes: |
       Warm-start preference. Cross-checks M1's cold-start preference
-      against the same shape under warm conditions. Phase 11/Phase 10
-      use_count would have differentiated these; the new contract
-      doesn't track use_count, so the test is purely about whether
-      the model handles the index-update step under warm conditions.
+      against the same semantic decision with existing records.
 
   # ===== M6 — Trivial skip (no write expected) =====
   - case_id: M6-trivial-skip
@@ -216,12 +189,6 @@ samples:
     expect_write: false
     expected_memory_type: null
     pre_populated_files:
-      MEMORY.md: |
-        # Memory index
-
-        - [Code style 80 chars](code-style-line-width.md) — wrap code at 80 chars max
-        - [Test runner command](test-runner-command.md) — tests run via `uv run pytest -q`
-        - [Build dir Linear project](linear-build-tracking.md) — infra bugs in Linear project BUILD
       code-style-line-width.md: |
         ---
         name: code-style-line-width
@@ -232,8 +199,6 @@ samples:
 
         Wrap code at 80 characters max.
     notes: |
-      Trivial ephemeral question — should NOT trigger any Write/Edit.
-      Probes the "DO NOT save" discipline. Warm fixture (MEMORY.md
-      present) so the model could plausibly Edit it if confused; the
-      correct behavior is to answer the user's question (or decline
-      politely) without touching memory at all.
+      Trivial ephemeral question — should NOT trigger MemoryUpsert.
+      The warm fixture makes the catalog available, but the correct
+      behavior is to answer without changing durable memory.

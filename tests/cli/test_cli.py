@@ -733,6 +733,9 @@ class TestSkillsBootstrap:
         # LoadSkill NOT registered when no skills found.
         names = [t.name for t in ctx.tool_registry.list_tools()]  # type: ignore[attr-defined]
         assert "LoadSkill" not in names
+        assert {"MemoryList", "MemoryShow", "MemoryUpsert", "MemoryDelete"} <= set(names)
+        assert "/.openharness/memory/" not in ctx.system_prompt  # type: ignore[attr-defined]
+        assert "MemoryUpsert" in ctx.system_prompt  # type: ignore[attr-defined]
         # System prompt has no skills section.
         assert "Available Skills" not in ctx.system_prompt  # type: ignore[attr-defined]
 

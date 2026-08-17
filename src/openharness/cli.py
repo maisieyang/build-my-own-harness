@@ -116,7 +116,7 @@ from openharness.mcp import McpClientPool
 from openharness.memory import (
     FilesystemMemoryStore,
     MemoryStore,
-    get_project_memory_dir,
+    ensure_project_memory_dir,
 )
 from openharness.observability import configure_logging, new_run_id
 
@@ -156,7 +156,7 @@ from openharness.services.goal_judge import GoalJudgeVerdict, judge_goal_complet
 from openharness.services.permission_reviewer import LlmPermissionReviewer
 from openharness.services.run_session import RunSession, open_run_session
 from openharness.skills.store import EmptySkillStore, FilesystemSkillStore, SkillStore
-from openharness.tools import LoadSkillTool, create_default_tool_registry
+from openharness.tools import LoadSkillTool, create_default_tool_registry, register_memory_tools
 from openharness.tools.web_fetch import WebFetch
 from openharness.tools.web_search import TavilySearchProvider, WebSearch
 
@@ -912,6 +912,17 @@ async def _run_ask(
         if skill_store.discover():
             registry.register(LoadSkillTool(skill_store))
 
+        # Durable project memory is a typed trusted-control surface. The
+        # runtime owns its private storage directory and index; model-visible
+        # tools operate on semantic records rather than filesystem paths.
+        memory_dir: Path | None = None
+        memory_store: FilesystemMemoryStore | None = None
+        if enable_memory:
+            memory_dir = ensure_project_memory_dir(env.cwd)
+            memory_store = FilesystemMemoryStore(project_dir=memory_dir)
+            memory_store.discover()
+            register_memory_tools(registry, memory_store)
+
         # P4-T4.4b:Layer 1 default registration. When ``auto_truncate`` is on
         # AND the cap is positive, the framework auto-registers
         # ``TruncateToolResultHook`` so users get sensible compaction without
@@ -955,14 +966,6 @@ async def _run_ask(
             else None
         )
 
-        # Durable memory assembly is independent from project instructions.
-        memory_dir: Path | None = None
-        memory_store: MemoryStore | None = None
-        if enable_memory:
-            memory_dir = get_project_memory_dir(env.cwd)
-            memory_store = FilesystemMemoryStore(project_dir=memory_dir)
-            memory_store.discover()  # warm cache for relevance pass
-
         # System prompt is built AFTER MCP tools + LoadSkill register so
         # the LLM's tool catalog includes them. Skill catalog is injected
         # by ``build_system_prompt`` itself via the ``skill_store`` kwarg.
@@ -982,7 +985,7 @@ async def _run_ask(
                 # computation production needs is reading MEMORY.md for
                 # injection. Phase 10's relevance ranking + use_count
                 # bookkeeping was retired alongside extraction (D36.9).
-                memory_index_content = _load_memory_index_for_injection(memory_dir)
+                memory_index_content = memory_store.render_index(max_entries=200)
             system_prompt = build_system_prompt(
                 effective_registry.to_api_schema(),
                 env,
@@ -1495,6 +1498,14 @@ async def _run_chat(
         if skill_store.discover():
             registry.register(LoadSkillTool(skill_store))
 
+        memory_dir: Path | None = None
+        memory_store: FilesystemMemoryStore | None = None
+        if enable_memory:
+            memory_dir = ensure_project_memory_dir(env.cwd)
+            memory_store = FilesystemMemoryStore(project_dir=memory_dir)
+            memory_store.discover()
+            register_memory_tools(registry, memory_store)
+
         hook_registry = HookRegistry()
         if auto_truncate and tool_result_cap > 0:
             hook_registry.register(
@@ -1551,14 +1562,6 @@ async def _run_chat(
             if settings.enable_project_instructions
             else None
         )
-
-        # Durable memory is assembled once per chat session.
-        memory_dir: Path | None = None
-        memory_store: MemoryStore | None = None
-        if enable_memory:
-            memory_dir = get_project_memory_dir(env.cwd)
-            memory_store = FilesystemMemoryStore(project_dir=memory_dir)
-            memory_store.discover()  # warm cache for per-turn relevance pass
 
         # Bundle resolves on FIRST turn only (per D24.4). Tracked
         # outside the loop so subsequent turns reuse the same context.
@@ -2191,7 +2194,7 @@ async def _run_chat(
                 # use_count bookkeeping was retired alongside extraction
                 # (D36.9) — the LLM picks what to Read from the index.
                 memory_index_content = (
-                    _load_memory_index_for_injection(memory_dir)
+                    memory_store.render_index(max_entries=200)
                     if memory_store is not None and memory_dir is not None
                     else None
                 )
@@ -4474,17 +4477,13 @@ def eval_memory_decision(  # pragma: no cover — experimental eval surface (exc
         help="Run exactly one dataset case by case_id.",
     ),
 ) -> None:
-    """Run the memory_decision gating eval (Phase 16 T3).
+    """Run the typed durable-memory decision eval.
 
-    Tests decision surface #4 (inline decision) per
-    ``decisions/35-eval-coverage-map.md`` §D35.5 P0. The eval drives
-    the LLM through the Claude-Code-style memory write contract
-    (judge → Write ``.md`` → Edit ``MEMORY.md``) with real tool
-    execution against a per-sample fixture under
-    ``/tmp/oh_eval_memory_decision/``. Scorers observe the aggregate
-    multi-turn tool_use sequence; pass-bar is warm-start PASS ≥ 80%.
-
-    Self-preference accepted (judge_model = main model, D32.5).
+    The eval drives the production ``MemoryList`` / ``MemoryShow`` /
+    ``MemoryUpsert`` / ``MemoryDelete`` tools against an isolated store.
+    It checks whether the model persists only durable facts, supplies a
+    valid typed payload, preserves existing records, and chooses a
+    defensible memory category. The warm-start pass bar is 80%.
     """
     import asyncio
     from typing import cast
@@ -4500,11 +4499,10 @@ def eval_memory_decision(  # pragma: no cover — experimental eval surface (exc
         run_memory_decision_eval,
     )
     from openharness.eval.memory_decision_scorers import (
-        FrontmatterValidScorer,
-        IndexUpdateScorer,
         JudgmentScorer,
         MemoryTypeLLMJudgeScorer,
-        NoDestructiveOverwriteScorer,
+        PayloadValidScorer,
+        PersistenceIntegrityScorer,
     )
     from openharness.eval.results import (
         RunMetadata,
@@ -4541,9 +4539,8 @@ def eval_memory_decision(  # pragma: no cover — experimental eval surface (exc
 
     scorers = [
         JudgmentScorer(),
-        FrontmatterValidScorer(),
-        IndexUpdateScorer(),
-        NoDestructiveOverwriteScorer(),
+        PayloadValidScorer(),
+        PersistenceIntegrityScorer(),
         MemoryTypeLLMJudgeScorer(
             api_client=client,
             model=effective_model,
@@ -4565,7 +4562,7 @@ def eval_memory_decision(  # pragma: no cover — experimental eval surface (exc
     # placeholder — actual per-case prompts interpolate sample dirs,
     # but the *template* is what we hash for D34.3 reproducibility.
     eval_prompt_template = _build_eval_system_prompt(
-        _MEMORY_DIR_PLACEHOLDER, "<MEMORY.md content interpolated per case>"
+        _MEMORY_DIR_PLACEHOLDER, "<generated memory index interpolated per case>"
     )
     # Subset of CAPABILITY_RUBRICS that this eval actually uses, so
     # the rubric_hashes stamp reflects what was applied (not

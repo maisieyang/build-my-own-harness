@@ -211,12 +211,21 @@ class TestCliBootstrapWithMcp:
         result = runner.invoke(cli_module.headless_app, ["run", "hi"])
         assert result.exit_code == 0
 
-        # Only the default built-ins, no MCP-namespaced tools.
-        # P6-T5: ``Agent`` joins the default lineup as the sub-agent
-        # primitive — no MCP-namespaced tools still means no servers.
+        # Core + typed Memory tools are present, but no MCP-namespaced tools.
         assert stub.last_request is not None
         tool_names = {t.name for t in (stub.last_request.tools or [])}
-        assert tool_names == {"Read", "Write", "Edit", "Bash", "Grep", "Agent"}
+        assert tool_names == {
+            "Read",
+            "Write",
+            "Edit",
+            "Bash",
+            "Grep",
+            "Agent",
+            "MemoryList",
+            "MemoryShow",
+            "MemoryUpsert",
+            "MemoryDelete",
+        }
 
 
 # --------------------------------------------------------------------------- #

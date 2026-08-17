@@ -27,16 +27,16 @@ def print_case(result: MemoryDecisionCaseResult) -> None:
     print(f"  turns:        {result.output.turn_count}")
     print(f"  tool_uses:    {len(result.output.tool_uses)} block(s)")
     for t in result.output.tool_uses:
-        file_path = t.input.get("file_path", "?")
-        if t.name == "Write":
-            preview = (t.input.get("content") or "")[:80].replace("\n", "\\n")
-            print(f"    [Write] {file_path}  content={preview!r}...")
-        elif t.name == "Edit":
-            old_p = (t.input.get("old_string") or "")[:40].replace("\n", "\\n")
-            new_p = (t.input.get("new_string") or "")[:40].replace("\n", "\\n")
-            print(f"    [Edit] {file_path}  old={old_p!r}  new={new_p!r}")
+        if t.name == "MemoryUpsert":
+            body = (t.input.get("body") or "")[:80].replace("\n", "\\n")
+            print(
+                f"    [MemoryUpsert] name={t.input.get('name')!r} "
+                f"type={t.input.get('type')!r} body={body!r}..."
+            )
+        elif t.name in {"MemoryShow", "MemoryDelete"}:
+            print(f"    [{t.name}] name={t.input.get('name')!r}")
         else:
-            print(f"    [{t.name}] {file_path}")
+            print(f"    [{t.name}]")
     if result.output.text:
         print(f"  text:         {result.output.text[:200]!r}")
     print()
@@ -67,11 +67,6 @@ def print_summary(results: list[MemoryDecisionCaseResult]) -> None:
                     notes.append(f"{sc.dim}=ERROR")
                 continue
             v = float(sc.value)
-            if v < 1.0 and sc.dim == "memory_decision_index_update" and v == 0.5:
-                # Warm-start Write-on-MEMORY.md without Edit pairs
-                # with the overwrite scorer's verdict — don't
-                # double-count.
-                continue
             if v < 1.0:
                 all_pass = False
                 notes.append(f"{sc.dim}={v:.1f}")
@@ -107,14 +102,6 @@ def print_summary(results: list[MemoryDecisionCaseResult]) -> None:
     if warm_total == 0:
         print("  (no warm-start samples — pass bar inapplicable; check dataset)")
     elif warm_ratio >= pass_bar_ratio:
-        print("  ✓ Pass bar met. Contract reached the assumed threshold; Phase 16")
-        print("    GA path opens.")
+        print("  ✓ Pass bar met. Typed memory contract reached the reference threshold.")
     else:
-        print("  ✗ Pass bar NOT met. Per D35.8 / Phase 16 plan T3:")
-        print("    Fallback 1 — re-run against Claude Sonnet (or another")
-        print("    frontier instruction-following model). If Sonnet ≥ 80% →")
-        print("    document the model gap in learnings/phase-16.md; Phase 16")
-        print("    GA still passes (contract sound, current model below")
-        print("    threshold per [[feedback-design-for-strong-model]]).")
-        print("    Fallback 2 — both fail → return to memory-first-principles.md")
-        print("    for re-derivation. Phase 16 does NOT pass.")
+        print("  ✗ Pass bar NOT met. Inspect failing decision dimensions before recording.")
