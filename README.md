@@ -5,7 +5,7 @@
   <a href="README.zh-CN.md"><strong>简体中文</strong></a>
 </p>
 
-[![CI](https://github.com/maisieyang/build-my-own-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/maisieyang/build-my-own-harness/actions/workflows/ci.yml)
+[![CI](https://github.com/maisieyang/open-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/maisieyang/open-harness/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
@@ -26,7 +26,7 @@ much from these control-plane decisions as from the model itself.
 ## Evidence snapshot
 
 The figures below are anchored to the CLI-stable baseline at commit
-[`9b4375e`](https://github.com/maisieyang/build-my-own-harness/commit/9b4375e)
+[`9b4375e`](https://github.com/maisieyang/open-harness/commit/9b4375e)
 (2026-08-02), rather than presented as permanently current counters.
 
 | Signal | Current evidence |
@@ -286,8 +286,8 @@ Completions endpoint.
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Clone OpenHarness and install its dependencies.
-git clone https://github.com/maisieyang/build-my-own-harness.git
-cd build-my-own-harness
+git clone https://github.com/maisieyang/open-harness.git
+cd open-harness
 uv sync
 
 # Create the local configuration.

@@ -5,7 +5,7 @@
   <a href="README.zh-CN.md"><strong>简体中文</strong></a>
 </p>
 
-[![CI](https://github.com/maisieyang/build-my-own-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/maisieyang/build-my-own-harness/actions/workflows/ci.yml)
+[![CI](https://github.com/maisieyang/open-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/maisieyang/open-harness/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
@@ -24,7 +24,7 @@
 ## 证据快照
 
 以下数字锚定在 2026-08-02 的 CLI 稳定基线 commit
-[`9b4375e`](https://github.com/maisieyang/build-my-own-harness/commit/9b4375e)，
+[`9b4375e`](https://github.com/maisieyang/open-harness/commit/9b4375e)，
 而不是把会持续变化的计数写成永久“当前值”。
 
 | 信号 | 当前证据 |
@@ -253,8 +253,8 @@ endpoint。
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # 克隆 OpenHarness 并安装依赖
-git clone https://github.com/maisieyang/build-my-own-harness.git
-cd build-my-own-harness
+git clone https://github.com/maisieyang/open-harness.git
+cd open-harness
 uv sync
 
 # 创建本地配置

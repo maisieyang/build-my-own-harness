@@ -97,12 +97,12 @@ dependencies = [
 oh = "openharness.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/maisieyang/build-my-own-harness"
-Repository = "https://github.com/maisieyang/build-my-own-harness"
-Documentation = "https://github.com/maisieyang/build-my-own-harness/blob/main/README.md"
-Changelog = "https://github.com/maisieyang/build-my-own-harness/blob/main/CHANGELOG.md"
-Issues = "https://github.com/maisieyang/build-my-own-harness/issues"
-"Development log" = "https://github.com/maisieyang/build-my-own-harness/blob/main/docs/development-log.md"
+Homepage = "https://github.com/maisieyang/open-harness"
+Repository = "https://github.com/maisieyang/open-harness"
+Documentation = "https://github.com/maisieyang/open-harness/blob/main/README.md"
+Changelog = "https://github.com/maisieyang/open-harness/blob/main/CHANGELOG.md"
+Issues = "https://github.com/maisieyang/open-harness/issues"
+"Development log" = "https://github.com/maisieyang/open-harness/blob/main/docs/development-log.md"
 
 # PEP 735 dependency groups — recognized by uv natively
 [dependency-groups]
