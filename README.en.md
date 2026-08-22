@@ -11,32 +11,41 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 ![Type checked: mypy](https://img.shields.io/badge/type%20checked-mypy%20strict-1f5082)
 
-> **A local-first Coding Agent Harness built from scratch in Python.**
+> **A local-first Coding Agent Harness, independently built in Python.**
 
-OpenHarness is a local-first Coding Agent Harness that I built from scratch in Python and continue
-to dogfood. It manages what the model sees next, what its actions can actually affect, when
-long-running tasks continue or stop, and how probabilistic behavior can be validated repeatedly.
-The model supplies intelligence; OpenHarness takes responsibility for the consequences of action.
+OpenHarness currently exposes a CLI, while its engineering focus is the Agent Runtime: managing
+what the model sees next, how tasks continue or stop, what model actions can actually affect, and
+how key model-mediated decisions can be validated repeatedly.
 
 The project asks three questions:
 
 1. What should the model see next?
-2. How can an Agent keep working within controlled boundaries?
+2. How can an Agent keep working within explicit boundaries?
 3. Once model decisions shape system behavior, how should a Coding Agent be validated?
 
-## One-Minute Tour
+**Engineering evidence:** 2,791 stable tests, 95.06% stable-core coverage; 9 Eval contracts,
+6 / 6 replay gates; SWE-bench Lite 170 / 300.
+[See the validation methods and evidence boundaries →](#engineering-evidence-baseline)
+
+## Quick Start
+
+The setup below currently targets macOS. It requires Python 3.10+,
+[uv](https://docs.astral.sh/uv/), and an LLM endpoint with an OpenAI-compatible API.
+
+```bash
+git clone https://github.com/maisieyang/open-harness.git
+cd open-harness
+cp .env.example .env  # Add your API key, base URL, and model name
+uv run oh              # Add --auto to auto-approve exact permission requests
+```
+
+Once launched, OpenHarness enters the REPL. Depending on the task, you can work directly, plan
+before acting, or let Goal manage continuous execution:
 
 ```text
-$ uv run oh
-
->>> Fix the failing tests and run verification
-Default → read / edit / execute → return the result
-
->>> /plan Inspect the implementation and create a verification plan
-Plan → read-only exploration → approve the plan → return to Default
-
->>> /goal Complete the approved plan; done means tests, mypy, and ruff all pass
-Goal → keep working → independent Judge checks the completion condition → continue / complete / pause
+Default  Explore, edit, and verify; return control after one turn
+/plan    Explore read-only and produce a plan for approval; return to Default after approval
+/goal    Work toward a goal across turns; independent Judge decides whether to continue / complete / pause
 ```
 
 ## The Three Problems I Am Working On
@@ -55,7 +64,7 @@ compiles for the model's next turn. It must manage three kinds of content:
 | Evidence | What has already been learned or verified? | Conversation, Tool Results, Memory, Snapshots |
 | Capabilities | What actions are currently available? | Tools, Skills, Plugins, Permissions, Plan |
 
-Within a Session, OpenHarness continuously assembles the System Prompt, Tool catalog, and
+Within a Session, OpenHarness continuously assembles the System Prompt, tool catalog, and
 Conversation. It loads Skills, Plugins, and Memory through progressive disclosure; limits the growth
 of individual Tool Results; clears older results; and semantically compacts older history when
 needed. Across Sessions, Project Memory preserves reusable knowledge, Snapshots preserve session
@@ -67,11 +76,11 @@ trustworthy, current, and appropriate for the next action.
 
 Read the full article (Chinese): [Content Management: Managing Limited Attention for Coding Agents](https://maisieyang.github.io/writing/content-management.html)
 
-### 2. Goal, Permission, and Sandbox: Let the Agent Keep Working While the Human Steps Away Without Losing Control
+### 2. Goal, Permission, and Sandbox: Keeping the Agent Working While the Human Steps Away—Without Losing Control
 
-I implemented `/goal` so that a human no longer has to hand the task back after every turn. The user
-defines the goal and completion conditions once, the system keeps working, and an independent Judge
-decides from execution evidence whether the task is complete.
+I implemented `/goal` so that a human no longer has to advance the task one turn at a time. The user
+defines the goal and completion conditions once, OpenHarness keeps it moving, and an independent
+Judge decides from execution evidence whether the task is complete.
 
 But Goal only answers why the task should continue and when it should stop. It does not decide what
 the Agent may do, who decides when it crosses a boundary, or how much impact an action can have.
@@ -80,7 +89,7 @@ the Agent may do, who decides when it crosses a boundary, or how much impact an 
 |---|---|---|
 | Should the task continue, and when is it complete? | Goal Controller + independent Judge | Does not grant new capabilities |
 | Has a specific boundary exception been authorized? | Permission | Does not enforce the local execution boundary |
-| What can a local action actually affect at most? | Sandbox | Does not decide whether an action matches human intent |
+| What is the maximum impact a local action can have? | Sandbox | Does not decide whether an action matches human intent |
 
 After `/goal` sets the completion conditions, work begins immediately. At the end of every clean
 Worker turn, a tool-disabled independent Judge examines only the execution evidence produced after
@@ -88,7 +97,8 @@ the Goal was set. If the conditions are met, it stops. If evidence is missing, i
 the next turn. If it cannot decide, it preserves the state and pauses.
 
 Permission and Sandbox guard the action boundary. The Permission Profile expresses the base
-authorization intent. The Sandbox compiles its local portion into a verifiable execution boundary.
+authorization intent. The Sandbox compiles the local portion of that profile into a verifiable
+execution boundary.
 An out-of-bounds action can receive only a precise, one-time exception. If a new authorization
 requires a human decision, the system parks the current continuation instead of letting Goal spin
 around the same capability gap.
@@ -96,7 +106,7 @@ around the same capability gap.
 Together, these mechanisms change where human attention is required:
 
 ```text
-Watch the Agent turn by turn
+Supervise every Agent turn
         ↓
 Define the goal, completion conditions, and base boundaries in advance
         ↓
@@ -107,7 +117,7 @@ Read the full article (Chinese): [I Implemented `/goal`, but the Human Still Can
 
 ### 3. Eval: How Should a Coding Agent Be Validated?
 
-After actually building Evals, I no longer see them as special machinery outside software
+After building and running Evals, I no longer see them as special machinery outside software
 engineering. They extend software testing into behavior shaped by a model—where a single
 deterministic assertion can no longer cover the outcome.
 
@@ -121,51 +131,37 @@ OpenHarness uses four kinds of evidence to answer different questions:
 | Validation method | Question | Cadence |
 |---|---|---|
 | Mechanism tests (TDD) | Are state machines, permission rules, tool execution, persistence, and failure paths correct? | Daily development |
-| Decision-surface Eval | Does system behavior determined by an LLM output satisfy the capability contract for that decision surface? | Daily development |
-| Dogfood | Does the complete product work in practice, and which problems remain outside existing tests? | Daily use |
-| Public Benchmark | Where does the system stand on shared tasks and external judgments? | Periodically |
+| Decision-surface Eval | Does behavior determined by an LLM output satisfy the capability contract for that decision surface? | Daily development |
+| Dogfood and real use | Does the complete product solve real tasks and remain worth using? Which problems are not yet captured by tests? | Continuous use |
+| Public Benchmark | Can the core coding loop complete public tasks end to end under external evaluation? | Periodic runs |
 
-These are not four parallel testing layers. TDD, decision-surface Evals, and Dogfood form the daily
-development loop. Public Benchmarks become an external coordinate once the system has taken shape.
+TDD, decision-surface Evals, Dogfood, and real use form a continuous development loop. A public
+benchmark adds a bounded external coordinate for the core coding loop; its score belongs to the
+composite system of the model, Harness, tools, run budget, and execution environment.
 
-For the same request, the model may choose different tools, construct different arguments, or react
-to failure by correcting itself or repeating the same action. It must also decide what is worth
-remembering, when to load additional capabilities, which facts must survive compaction, and whether
-the task is actually complete. A behavior becomes a candidate for Eval when a model participates in
-the decision, the behavior varies, and the impact on the product is significant.
-
-Every Eval begins by defining its capability claim, inputs, judgment method, and reference policy.
-When a tool name, required field, trajectory invariant, or final state can answer the question,
-OpenHarness prefers those hard oracles over an LLM Judge. A soft Judge is introduced only when
-deterministic checks cannot express the semantic judgment. A probabilistic system also needs more
-than a single passing run: `live` observes current model behavior, `record` preserves an accepted
-response, and `replay` verifies the dataset, scorer, and recorded behavior without revalidating the
-current model.
-
-Eval ultimately tests more than the model. It also tests the person writing the Eval: which behavior
-actually matters, which path is merely preferred, and what evidence is enough to believe the result
-is better. It turns the Dogfood judgment that “something feels wrong here” into a reproducible trace,
-an explicit capability claim, cases, an oracle, and a pass bar.
-
-**Eval turns human judgment and taste into a durable engineering asset.**
+**Eval turns human taste into an engineering asset.**
 
 Read the full article (Chinese): [How Should a Coding Agent Be Validated?](https://maisieyang.github.io/writing/agent-eval-demystified.html)
 
-## Quick Start
+## Engineering Evidence Baseline
 
-The setup below currently targets macOS. It requires Python 3.10+,
-[uv](https://docs.astral.sh/uv/), and an LLM provider with an OpenAI-compatible API.
+As of 2026-08-22:
 
-```bash
-git clone https://github.com/maisieyang/open-harness.git
-cd open-harness
-cp .env.example .env  # Add your API key, base URL, and model name
-uv run oh
-```
+- **Software mechanisms:** 2,791 stable tests pass, with 95.06% stable-core coverage.
+  `mypy --strict`, Ruff, and the format check all pass; the [CI](./.github/workflows/ci.yml)
+  matrix covers Python 3.10 and 3.11.
+- **Agent decisions:** 9 capability Eval contracts; 6 have completed live-model ratification,
+  with replay gates currently at 6 / 6. See the [Eval Guide](./evals/README.md).
+- **Public tasks:** OpenHarness 0.4.0 paired with qwen3.7-max solved 170 / 300 tasks on
+  [SWE-bench Lite](./benchmarks/swebench/TAXONOMY.md), for a 56.7% resolved rate.
+
+Replay only guards regressions in recorded behavior. A benchmark measures the composite system of
+the model, Harness, tools, run budget, and execution environment. Neither substitutes for Dogfood
+or feedback from real users.
 
 ## Development and Validation
 
-Run before submitting a change:
+The day-to-day CI and contributor gates are:
 
 ```bash
 uv run pytest -m "not integration and not eval" -q
@@ -174,20 +170,23 @@ uv run ruff check
 uv run ruff format --check
 ```
 
-For changes that affect model decisions, run the relevant capability evals as described in the
+For changes that affect model decisions, also run the relevant capability Evals described in the
 [Eval Guide](./evals/README.md).
 
-## Dogfood and Extensions
+## Plugins and Extensions
 
-[finance-skills](https://github.com/maisieyang/finance-skills) validates OpenHarness Skills and
-Plugins against real domain workflows.
+[finance-skills](https://github.com/maisieyang/finance-skills) is a vertical finance capability
+package built on the Harness foundation. It reuses the OpenHarness Runtime and loads domain
+knowledge and workflows through Skills and Plugins.
 
-More essays are available at [Writing](https://maisieyang.github.io/writing/).
+More essays are available on my blog,
+[Maisie’s World｜梅茜的世界](https://maisieyang.github.io/writing/).
 
 ## Acknowledgments
 
-The name and initial module vocabulary come from [HKUDS/OpenHarness](https://github.com/HKUDS/OpenHarness)
-(MIT). This repository is an independent implementation built from scratch.
+The name and initial module vocabulary come from
+[HKUDS/OpenHarness](https://github.com/HKUDS/OpenHarness) (MIT). This repository is an independent
+implementation built from scratch.
 
 ## License
 

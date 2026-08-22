@@ -11,9 +11,10 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 ![Type checked: mypy](https://img.shields.io/badge/type%20checked-mypy%20strict-1f5082)
 
-> **一个用 Python 从零构建的 local-first Coding Agent Harness。**
+> **一个用 Python 独立构建的 local-first Coding Agent Harness。**
 
-OpenHarness 是我用 Python 从零实现并持续 Dogfood 的 local-first Coding Agent Harness。它管理模型下一次看见什么、动作实际能够影响什么、长任务何时继续或停止，以及概率性行为如何被重复验证。模型提供智能，OpenHarness 对行动的后果负责。
+OpenHarness 当前以 CLI 为交互入口，核心工程是 Agent Runtime：管理模型下一次看见什么、
+任务如何持续推进、动作实际能够影响什么，以及模型参与的关键决策如何被重复验证。
 
 这个项目主要回答三个问题：
 
@@ -21,19 +22,29 @@ OpenHarness 是我用 Python 从零实现并持续 Dogfood 的 local-first Codin
 2. Agent 如何在可控边界内持续工作？
 3. 当模型参与决策，一个 Coding Agent 到底应该怎么验证？
 
-## 一分钟体验
+**工程证据：** 2,791 个稳定测试、95.06% stable-core coverage；9 份 Eval contract、
+6 / 6 replay gates；SWE-bench Lite 170 / 300。
+[查看验证方法与证据边界 →](#工程证据基线)
+
+## 快速开始
+
+以下启动方式适用于 macOS。需要 Python 3.10+、[uv](https://docs.astral.sh/uv/)，以及
+一个兼容 OpenAI API 的模型服务。
+
+```bash
+git clone https://github.com/maisieyang/open-harness.git
+cd open-harness
+cp .env.example .env  # 填写 API Key、API 地址和模型名
+uv run oh              # 加 --auto 自动审批精确权限请求
+```
+
+启动后进入 OpenHarness REPL。根据任务所需的控制方式，可以直接工作、先规划，或交给
+Goal 持续推进：
 
 ```text
-$ uv run oh
-
->>> 修复当前失败的测试并运行验证
-Default → 读取 / 修改 / 执行 → 返回结果
-
->>> /plan 检查实现并制定验证计划
-Plan → 只读探索 → 批准计划 → 返回 Default
-
->>> /goal 完成已批准的计划；测试、mypy 和 ruff 全部通过时才算完成
-Goal → 持续执行 → independent Judge 检查完成条件 → 继续 / 完成 / 暂停
+Default  直接探索、修改和验证，完成一轮后把控制权交还给人
+/plan    只读探索并形成可批准的计划；批准后返回 Default
+/goal    根据目标和完成条件持续接续 turn；独立 Judge 判断继续、完成或暂停
 ```
 
 ## 我在解决的三个问题
@@ -113,46 +124,37 @@ OpenHarness 用四种证据回答不同的问题：
 |---|---|---|
 | 机制测试（TDD） | 状态机、权限规则、工具执行、持久化和失败路径是否正确 | 日常开发 |
 | 决策面 Eval | 由 LLM 输出决定的系统行为，是否满足该决策面的能力契约 | 日常开发 |
-| Dogfood | 完整产品是否好用，还有哪些问题尚未被测试描述 | 日常使用 |
-| 公共 Benchmark | 系统在公共任务和外部判定下处于什么位置 | 阶段性运行 |
+| Dogfood 与真实使用 | 完整产品是否解决真实任务、值得持续使用，还有哪些问题尚未被测试描述 | 持续使用 |
+| 公共 Benchmark | 核心 coding loop 能否在公共任务和外部判定下完成端到端工作 | 阶段性运行 |
 
-这四者不是四个并列的测试层。TDD、决策面 Eval 与 Dogfood 构成日常开发闭环；公共
-Benchmark 是系统基本成形后使用的外部坐标。
-
-同一句请求，模型可能选择不同工具、构造不同参数，也可能在失败后修正或重复。它还要
-判断什么值得记住、何时加载额外能力、压缩后保留哪些事实，以及任务是否真正完成。
-当一个行为由模型参与、会发生波动，并且会显著影响产品时，它才成为值得建立 Eval 的
-决策面。
-
-每个 Eval 都先写清 capability claim、输入、判定方式和 reference policy。能用工具名、
-必需字段、轨迹不变量或最终状态判断时，就不用 LLM Judge；只有硬标准无法表达语义判断
-时，才引入软 Judge。概率系统也不能靠一次通过建立信心：`live` 观察当前模型行为，
-`record` 固化已经接受的响应，`replay` 验证 dataset、scorer 与已录制行为，但不替代新的
-live 验证。
-
-Eval 最终测试的不只是模型，也测试写 Eval 的人：什么行为真正重要，哪条路径只是偏好，
-什么证据足以说明结果更好。它把 Dogfood 中“这里感觉不对”的判断，逐步变成可复现的
-trace、明确的能力主张、case、oracle 和 pass bar。
+TDD、决策面 Eval、Dogfood 与真实使用构成持续开发闭环；公共 Benchmark 为核心
+coding loop 补充一份有边界的外部坐标，其分数属于模型、Harness、工具、运行预算与
+执行环境共同组成的系统。
 
 **Eval 是把人的品味变成工程资产。**
 
 阅读全文：[一个 Coding Agent，到底应该怎么验证？](https://maisieyang.github.io/writing/agent-eval-demystified.html)
 
-## 快速开始
+## 工程证据基线
 
-以下启动方式适用于 macOS。需要 Python 3.10+、[uv](https://docs.astral.sh/uv/)，以及
-一个兼容 OpenAI API 的模型服务。
+截至 2026-08-22：
 
-```bash
-git clone https://github.com/maisieyang/open-harness.git
-cd open-harness
-cp .env.example .env  # 填写 API Key、API 地址和模型名
-uv run oh
-```
+- **软件机制**：2,791 个稳定测试通过，stable-core coverage 为 95.06%；
+  mypy strict、Ruff 与 format check 全部通过，[CI](./.github/workflows/ci.yml)
+  覆盖 Python 3.10 与 3.11。
+- **Agent 决策**：9 份 capability eval contract；其中 6 项完成真实模型
+  live ratification，当前 replay gates 为 6 / 6。
+  详见 [Eval 手册](./evals/README.zh-CN.md)。
+- **公共任务**：OpenHarness 0.4.0 与 qwen3.7-max 在
+  [SWE-bench Lite](./benchmarks/swebench/TAXONOMY.md) 中解决
+  170 / 300 个任务，resolved rate 为 56.7%。
+
+Replay 只验证已录制行为的回归；Benchmark 反映模型、Harness、工具、预算与运行环境
+组成的系统。这些证据不能替代 Dogfood 与真实用户反馈。
 
 ## 开发与验证
 
-提交前运行：
+日常 CI 与贡献者门禁包括：
 
 ```bash
 uv run pytest -m "not integration and not eval" -q
@@ -161,15 +163,15 @@ uv run ruff check
 uv run ruff format --check
 ```
 
-涉及模型决策的改动，请按 [Eval 手册](./evals/README.zh-CN.md) 运行对应的
-capability eval。
+涉及模型决策的改动，还应在以上确定性门禁之外运行对应的 capability eval，详见
+[Eval 手册](./evals/README.zh-CN.md)。
 
-## Dogfood 与延伸
+## Plugin 与延伸
 
-[finance-skills](https://github.com/maisieyang/finance-skills) — 用真实领域任务验证
-OpenHarness 的 Skills 与 Plugins。
+[finance-skills](https://github.com/maisieyang/finance-skills) — Harness 基座上的垂直行业
+能力包：复用 OpenHarness Runtime，通过 Skills 与 Plugins 加载金融知识和工作流。
 
-更多文章见 [Writing](https://maisieyang.github.io/writing/)。
+更多文章见我的博客 [梅茜的世界｜Maisie’s World](https://maisieyang.github.io/writing/)。
 
 ## 致谢
 
