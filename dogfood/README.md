@@ -4,15 +4,16 @@
 当前配置的模型、真实 REPL 和真实工具，由开发者手动触发；它不是单元测试、CI 门禁
 或模型 eval。
 
-## 一份契约，两条执行线
+## 手动优先，按需自动化
 
-每个 case 都通过两条路径执行：
+Dogfood 的第一责任是让人亲自使用产品、记录体感和作出判断。成熟且需要频繁回归的
+独立 case 可以再增加 PTY 自动重放，但自动化不是 Dogfood 的默认完成条件。
 
-1. 人按照 runbook 手动操作，并记录真实使用体感。
-2. 终端自动化脚本发送相同输入，并检查相同的外部证据。
+当前有两种形态：
 
-两条路径必须共享 fixture、初始状态、启动命令、输入文本和验收标准。自动化可以收集
-证据、重置 fixture 和断言结果，但不能用 mock 替代真实模型或产品 runtime。
+1. `repl_runner` 的既有核心/controller case 同时提供手动 runbook 与真实 PTY 重放。
+2. 完整 workflow journey 保持 manual-only：Runner 只准备环境和记录证据，不发送输入，
+   不根据工具名、固定 Memory schema 或 transcript marker 自动判定结果。
 
 ## 自动化 Runner
 
@@ -37,8 +38,21 @@ uv run python -m dogfood.repl_runner --suite depth
 uv run python -m dogfood.repl_runner --suite all
 ```
 
-单次等待默认最多 900 秒，可使用 `--timeout` 显式调整。Runner 会实时转发 REPL
-输出，并把 transcript、fixture hash、验证输出和结构化结果写入 `.dogfood/artifacts/`。
+要连续体验并记录 `Default → Plan → Goal → Compact → Snapshot → Resume → Memory`，使用
+manual-only workflow journey：
+
+```bash
+# 亲自输入和判断；runner 只记录 fresh + resume 两个真实 REPL transcript
+uv run python -m dogfood.workflow_journey manual \
+  --run-id 20260819-workflow-manual-01
+```
+
+`prepare` 可以只生成并检查 fixture、runbook 和初始 checkpoint；完整交互仍由
+`manual` 入口串联 fresh 与 resume。每个阶段都带可选 `capture` 命令。完整说明见
+[`workflow-journey.md`](./cases/workflow-journey.md)。
+
+Runner 会实时转发 REPL 输出，并把 transcript、fixture hash、Snapshot/Memory checkpoint
+和供运行者填写的 `notes.md` 写入 `.dogfood/artifacts/`。
 
 ## 证据优先级
 
@@ -70,6 +84,8 @@ uv run python -m dogfood.repl_runner --suite all
 - [`repl-controller-depth.md`](./cases/repl-controller-depth.md)：Plan 分支与 Goal 自动续跑。
 - [`context-management-lifecycle.md`](./cases/context-management-lifecycle.md)：Context 的来源、
   Tool Result、Skills、Compact、Snapshot/Resume、Plugins 与 Agent 隔离。
+- [`workflow-journey.md`](./cases/workflow-journey.md)：贯穿 Default、Plan、Goal、Compact、
+  Snapshot、Resume 与 Memory 的单条 manual-only journey。
 
 Context suite 使用一个不会调用模型的只读 inspector 收集阶段证据：
 
