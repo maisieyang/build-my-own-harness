@@ -54,7 +54,7 @@ class RateLimitFailure(OpenHarnessApiError):
 
     ``retry_after`` carries the Provider's suggested wait time in seconds,
     when available (from the ``Retry-After`` header). Retry logic should
-    prefer this hint over its own backoff if present.
+    prefer this hint over its own backoff if present, subject to its policy cap.
     """
 
     def __init__(
@@ -65,6 +65,14 @@ class RateLimitFailure(OpenHarnessApiError):
     ) -> None:
         super().__init__(message, status_code)
         self.retry_after = retry_after
+
+
+class QuotaExceededFailure(RateLimitFailure):
+    """Provider quota is exhausted until an external reset or purchase.
+
+    Providers commonly deliver this as HTTP 429, but unlike short-lived rate
+    limiting it cannot be repaired by retrying the same request.
+    """
 
 
 class RequestFailure(OpenHarnessApiError):

@@ -12,6 +12,8 @@ with ``test_client.py``).
 
 from __future__ import annotations
 
+import asyncio
+
 import openai
 import pytest
 
@@ -28,6 +30,7 @@ from openharness.api import (
     AuthenticationFailure,
     OpenAICompatibleApiClient,
     PromptTooLongFailure,
+    QuotaExceededFailure,
     RateLimitFailure,
     RequestFailure,
 )
@@ -92,6 +95,58 @@ class TestErrorTranslation:
         assert len(text_events) == 2
         assert len(complete_events) == 1
         assert sdk.chat_completions.call_count == 2
+
+    async def test_retry_event_is_yielded_before_the_next_attempt(self) -> None:
+        rate_err = _make_status_error(openai.RateLimitError, 429)
+
+        class _BlockedSecondAttempt:
+            def __init__(self) -> None:
+                self.call_count = 0
+                self.release = asyncio.Event()
+
+            async def create(self, **_kwargs: object) -> object:
+                self.call_count += 1
+                if self.call_count == 1:
+                    raise rate_err
+                await self.release.wait()
+                raise AssertionError("second attempt should still be blocked")
+
+        completions = _BlockedSecondAttempt()
+        sdk = _FakeAsyncOpenAI(chat_completions=completions)  # type: ignore[arg-type]
+        client = OpenAICompatibleApiClient(sdk=sdk, retry_policy=_FAST_POLICY)  # type: ignore[arg-type]
+        events = client.stream_message(_simple_request())
+
+        event = await asyncio.wait_for(anext(events), timeout=0.1)
+
+        assert isinstance(event, ApiRetryEvent)
+        assert completions.call_count == 1
+        await events.aclose()
+
+    async def test_insufficient_quota_fails_immediately_without_retry(self) -> None:
+        import httpx as _httpx
+
+        request = _httpx.Request("POST", "https://api.test/v1/chat/completions")
+        response = _httpx.Response(
+            429,
+            headers={"retry-after": "332617"},
+            request=request,
+        )
+        quota_error = openai.RateLimitError(
+            message="weekly quota exhausted",
+            response=response,
+            body={"type": "insufficient_quota", "code": "insufficient_quota"},
+        )
+        sdk = _FakeAsyncOpenAI(
+            chat_completions=_FakeChatCompletions(responses=[quota_error]),
+        )
+        client = OpenAICompatibleApiClient(sdk=sdk, retry_policy=_FAST_POLICY)  # type: ignore[arg-type]
+
+        with pytest.raises(QuotaExceededFailure) as exc_info:
+            async for _ in client.stream_message(_simple_request()):
+                pass
+
+        assert exc_info.value.retry_after == 332_617.0
+        assert sdk.chat_completions.call_count == 1
 
     async def test_persistent_rate_limit_exhausts_retries(self) -> None:
         rate_err = _make_status_error(openai.RateLimitError, 429)

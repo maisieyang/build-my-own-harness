@@ -240,6 +240,28 @@ class TestWithRetryDelaySources:
         assert len(slept) == 1
         assert 0.75 <= slept[0] <= 1.0
 
+    async def test_retry_after_is_capped_at_the_policy_max_delay(self) -> None:
+        attempts = 0
+
+        async def call() -> str:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RateLimitFailure(
+                    "long provider cooldown",
+                    status_code=429,
+                    retry_after=332_617.0,
+                )
+            return "done"
+
+        slept: list[float] = []
+
+        async def fake_sleep(seconds: float) -> None:
+            slept.append(seconds)
+
+        assert await with_retry(call, sleep=fake_sleep) == "done"
+        assert slept == [DEFAULT_POLICY.max_delay]
+
 
 class TestWithRetryCallback:
     async def test_on_retry_invoked_for_each_retry(self) -> None:

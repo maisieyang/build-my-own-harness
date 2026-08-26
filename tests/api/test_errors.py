@@ -14,6 +14,7 @@ import pytest
 from openharness.api.errors import (
     AuthenticationFailure,
     OpenHarnessApiError,
+    QuotaExceededFailure,
     RateLimitFailure,
     RequestFailure,
 )
@@ -69,6 +70,9 @@ class TestRateLimitFailure:
 
     def test_is_subclass_of_base(self) -> None:
         assert issubclass(RateLimitFailure, OpenHarnessApiError)
+
+    def test_quota_exhaustion_is_a_typed_rate_limit_failure(self) -> None:
+        assert issubclass(QuotaExceededFailure, RateLimitFailure)
 
 
 class TestRequestFailure:

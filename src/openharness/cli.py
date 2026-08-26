@@ -76,6 +76,7 @@ from openharness.api import (
     AuthenticationFailure,
     OpenAICompatibleApiClient,
     OpenHarnessApiError,
+    QuotaExceededFailure,
     RateLimitFailure,
     RequestFailure,
 )
@@ -328,6 +329,9 @@ def _build_client(settings: Settings) -> OpenAICompatibleApiClient:
     sdk = AsyncOpenAI(
         api_key=settings.api_key,
         base_url=settings.base_url,
+        # OpenHarness owns retry classification, delay caps, and user-visible
+        # retry events. A second hidden SDK retry loop would undermine all three.
+        max_retries=0,
     )
     return OpenAICompatibleApiClient(sdk=sdk, extra_body=settings.extra_body)
 
@@ -2348,6 +2352,13 @@ async def _run_chat(
                 typer.echo(f"Loop error: {exc}", err=True)
                 # Don't break — let user issue /clear or retry.
                 continue
+            except QuotaExceededFailure as exc:
+                typer.echo(
+                    f"Quota exhausted (HTTP {exc.status_code}): {exc}\n"
+                    "Switch to a Provider/model with available quota, or wait for its reset.",
+                    err=True,
+                )
+                continue
             except OpenHarnessApiError as exc:
                 typer.echo(f"API error: {exc}", err=True)
                 # REPL must survive provider-side failures (auth blip,
@@ -3016,6 +3027,13 @@ def _run_headless_command(
             err=True,
         )
         raise typer.Exit(code=1) from exc
+    except QuotaExceededFailure as exc:
+        typer.echo(
+            f"Quota exhausted (HTTP {exc.status_code}): {exc}\n"
+            "Hint: switch to a Provider/model with available quota, or wait for its reset.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
     except RateLimitFailure as exc:
         typer.echo(
             f"Rate-limited after retries (HTTP {exc.status_code}): {exc}\n"
@@ -3246,6 +3264,9 @@ def chat(
         )
     except ValidationError as exc:
         typer.echo(f"Configuration error:\n{exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except QuotaExceededFailure as exc:
+        typer.echo(f"Quota exhausted (HTTP {exc.status_code}): {exc}", err=True)
         raise typer.Exit(code=1) from exc
     except (AuthenticationFailure, RateLimitFailure, RequestFailure) as exc:
         typer.echo(f"API error: {exc}", err=True)

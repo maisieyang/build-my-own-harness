@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, TypeVar
 
 from openharness.api.errors import (
     AuthenticationFailure,
+    QuotaExceededFailure,
     RateLimitFailure,
     RequestFailure,
 )
@@ -101,11 +102,29 @@ def is_retryable(error: Exception) -> bool:
     """
     if isinstance(error, AuthenticationFailure):
         return False
+    if isinstance(error, QuotaExceededFailure):
+        return False
     if isinstance(error, RateLimitFailure):
         return True
     if isinstance(error, RequestFailure):
         return error.status_code is not None and 500 <= error.status_code < 600
     return False
+
+
+def compute_retry_delay(
+    error: Exception,
+    attempt: int,
+    policy: RetryPolicy,
+) -> float:
+    """Choose a bounded delay for one retry.
+
+    Provider ``Retry-After`` remains authoritative for short cooldowns, but
+    cannot exceed the policy's existing maximum delay. This prevents a 429
+    response from silently parking an interactive process for hours or days.
+    """
+    if isinstance(error, RateLimitFailure) and error.retry_after is not None:
+        return min(max(error.retry_after, 0.0), policy.max_delay)
+    return compute_delay(attempt, policy)
 
 
 async def with_retry(
@@ -121,7 +140,7 @@ async def with_retry(
     attempts:
 
     - If the error is :class:`RateLimitFailure` with ``retry_after``
-      set, that wins (Provider knows best)
+      set, use it up to ``policy.max_delay``
     - Otherwise :func:`compute_delay` calculates the backoff
     - ``on_retry`` callback is invoked (e.g., to emit ``ApiRetryEvent``)
     - ``sleep`` is awaited
@@ -142,10 +161,7 @@ async def with_retry(
             if attempt >= policy.max_attempts:
                 raise
 
-            if isinstance(e, RateLimitFailure) and e.retry_after is not None:
-                delay = e.retry_after
-            else:
-                delay = compute_delay(attempt, policy)
+            delay = compute_retry_delay(e, attempt, policy)
 
             if on_retry is not None:
                 await on_retry(attempt, delay, e)

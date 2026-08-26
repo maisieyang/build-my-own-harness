@@ -23,6 +23,7 @@ class TestBuildClientExtraBody:
         client = cli_module._build_client(Settings())
 
         assert client._extra_body == {"enable_thinking": False}
+        assert client._sdk.max_retries == 0
 
     def test_default_is_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("OPENHARNESS_API_KEY", "sk-test")

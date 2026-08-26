@@ -4,7 +4,7 @@ The orchestrator that combines:
 
 - :func:`to_openai_request` (3c.1) for request translation
 - :class:`_StreamAssembler` (3c.1) for response stream consumption
-- :func:`with_retry` (3b) for retry-on-failure
+- :mod:`openharness.api.retry` (3b) for bounded retry decisions
 - :func:`_translate_openai_error` (this file) for SDK-error → our-error mapping
 
 Targets Qwen via DashScope by default. Works with any OpenAI-compatible
@@ -14,6 +14,7 @@ configuring the ``AsyncOpenAI`` instance with a different ``base_url``.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any, Protocol
 
 import openai
@@ -22,11 +23,18 @@ from openharness.api.errors import (
     AuthenticationFailure,
     OpenHarnessApiError,
     PromptTooLongFailure,
+    QuotaExceededFailure,
     RateLimitFailure,
     RequestFailure,
 )
-from openharness.api.retry import DEFAULT_POLICY, RetryPolicy, with_retry
+from openharness.api.retry import (
+    DEFAULT_POLICY,
+    RetryPolicy,
+    compute_retry_delay,
+    is_retryable,
+)
 from openharness.api.translation import _StreamAssembler, to_openai_request
+from openharness.observability import get_logger
 from openharness.protocols.stream_events import ApiRetryEvent
 
 if TYPE_CHECKING:
@@ -36,6 +44,9 @@ if TYPE_CHECKING:
 
     from openharness.protocols.requests import ApiMessageRequest
     from openharness.protocols.stream_events import ApiStreamEvent
+
+
+logger = get_logger("api")
 
 
 def _parse_retry_after(exc: openai.RateLimitError) -> float | None:
@@ -51,6 +62,23 @@ def _parse_retry_after(exc: openai.RateLimitError) -> float | None:
         return float(retry_after)
     except (AttributeError, ValueError):
         return None
+
+
+def _is_insufficient_quota(exc: openai.RateLimitError) -> bool:
+    """Recognize non-transient quota exhaustion in common provider bodies."""
+    body = exc.body
+    if not isinstance(body, dict):
+        return False
+    nested = body.get("error")
+    candidates = [body]
+    if isinstance(nested, dict):
+        candidates.append(nested)
+    return any(
+        value == "insufficient_quota"
+        for candidate in candidates
+        for key in ("type", "code")
+        if isinstance((value := candidate.get(key)), str)
+    )
 
 
 # P4-T3.3a: provider-specific phrasings of "your input is too long".
@@ -89,6 +117,12 @@ def _translate_openai_error(exc: Exception) -> OpenHarnessApiError:
     if isinstance(exc, openai.PermissionDeniedError):
         return AuthenticationFailure(str(exc), status_code=403)
     if isinstance(exc, openai.RateLimitError):
+        if _is_insufficient_quota(exc):
+            return QuotaExceededFailure(
+                str(exc),
+                status_code=429,
+                retry_after=_parse_retry_after(exc),
+            )
         return RateLimitFailure(
             str(exc),
             status_code=429,
@@ -181,17 +215,6 @@ class OpenAICompatibleApiClient:
         if self._extra_body is not None:
             openai_kwargs["extra_body"] = dict(self._extra_body)
 
-        retry_events: list[ApiRetryEvent] = []
-
-        async def on_retry(attempt: int, delay: float, error: Exception) -> None:
-            retry_events.append(
-                ApiRetryEvent(
-                    attempt=attempt,
-                    delay_seconds=delay,
-                    error=str(error),
-                ),
-            )
-
         async def _establish_stream() -> Any:
             try:
                 return await self._sdk.chat.completions.create(**openai_kwargs)
@@ -202,16 +225,32 @@ class OpenAICompatibleApiClient:
                 # via isinstance(error, RateLimitFailure / RequestFailure / ...)
                 raise _translate_openai_error(exc) from exc
 
-        stream = await with_retry(
-            _establish_stream,
-            policy=self._retry_policy,
-            on_retry=on_retry,
-        )
+        stream: Any | None = None
+        for attempt in range(1, self._retry_policy.max_attempts + 1):
+            try:
+                stream = await _establish_stream()
+                break
+            except Exception as error:
+                if not is_retryable(error) or attempt >= self._retry_policy.max_attempts:
+                    raise
+                delay = compute_retry_delay(error, attempt, self._retry_policy)
+                logger.info(
+                    "retry",
+                    attempt=attempt,
+                    delay_seconds=delay,
+                    error=type(error).__name__,
+                )
+                # Surface the retry before sleeping so interactive callers
+                # never appear frozen during provider-requested backoff.
+                yield ApiRetryEvent(
+                    attempt=attempt,
+                    delay_seconds=delay,
+                    error=str(error),
+                )
+                await asyncio.sleep(delay)
 
-        # Retries (if any) happened before stream establishment -- yield those
-        # events first so consumers see them before the actual response.
-        for retry_event in retry_events:
-            yield retry_event
+        if stream is None:  # pragma: no cover - the loop either assigns or raises
+            raise RuntimeError("retry loop ended without a stream")
 
         assembler = _StreamAssembler()
         try:

@@ -33,6 +33,7 @@ from openharness.api.errors import (
     MalformedToolCallFailure,
     OpenHarnessApiError,
     PromptTooLongFailure,
+    QuotaExceededFailure,
     RateLimitFailure,
     RequestFailure,
 )
@@ -45,6 +46,7 @@ __all__ = [
     "OpenAICompatibleApiClient",
     "OpenHarnessApiError",
     "PromptTooLongFailure",
+    "QuotaExceededFailure",
     "RateLimitFailure",
     "RequestFailure",
     "RetryPolicy",

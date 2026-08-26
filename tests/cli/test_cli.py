@@ -26,6 +26,7 @@ from typer.testing import CliRunner
 import openharness.cli as cli_module
 from openharness.api.errors import (
     AuthenticationFailure,
+    QuotaExceededFailure,
     RateLimitFailure,
     RequestFailure,
 )
@@ -243,6 +244,20 @@ class TestErrorUX:
         assert result.exit_code == 1
         assert "Rate-limited" in result.stderr
         assert "429" in result.stderr
+
+    def test_quota_exhaustion_does_not_claim_retries_ran(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        stub = _RaisingStubClient(QuotaExceededFailure("weekly quota exhausted", status_code=429))
+        monkeypatch.setattr(cli_module, "_build_client", lambda _settings: stub)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_module.headless_app, ["run", "hi"])
+
+        assert result.exit_code == 1
+        assert "Quota exhausted" in result.stderr
+        assert "after retries" not in result.stderr
 
     def test_request_failure_shows_status(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_minimum_env(monkeypatch)
